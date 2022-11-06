@@ -1,6 +1,8 @@
-use ash::vk;
+use std::sync::Arc;
 
-use crate::PhysicalDevice;
+use super::Queue;
+use crate::{Device, PhysicalDevice};
+use ash::vk;
 
 #[derive(Clone, Copy, Debug)]
 pub enum QueueType {
@@ -20,6 +22,57 @@ impl QueueType {
         ][*self as usize]
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct QueueIndex(pub(crate) usize);
+
+/// A collection of QueueDispatcher. It creates manages a number of QueueDispatcher based on the device-specific queue flags.
+/// On submission, it routes the submission to the queue with the minimal number of declared capabilities.
+///
+/// The current implementation creates at most one queue for each queue family.
+pub struct Queues {
+    queues: Vec<Queue>,
+    queue_type_to_dispatcher: [u32; 4],
+}
+
+impl Queues {
+    pub fn of_type(&self, ty: QueueType) -> &Queue {
+        self.of_index(self.index_of_type(ty))
+    }
+    pub fn of_index(&self, index: QueueIndex) -> &Queue {
+        &self.queues[index.0]
+    }
+    pub fn index_of_type(&self, ty: QueueType) -> QueueIndex {
+        let i = self.queue_type_to_dispatcher[ty as usize];
+        QueueIndex(i as usize)
+    }
+}
+
+impl Queues {
+    // Safety: Can only be called once for each device.
+    pub(crate) unsafe fn from_device(device: &Arc<Device>, create_info: &QueuesCreateInfo) -> Self {
+        let queue_dispatchers: Vec<Queue> = create_info
+            .create_infos
+            .iter()
+            .zip(create_info.queue_family_to_types.iter())
+            .enumerate()
+            .map(|(index, (queue_create_info, ty))| {
+                // We always just create at most one queue for each queue family
+                let queue = device.get_device_queue(queue_create_info.queue_family_index, 0);
+                Queue {
+                    device: device.clone(),
+                    queue,
+                    family_index: queue_create_info.queue_family_index,
+                }
+            })
+            .collect();
+        Queues {
+            queues: queue_dispatchers,
+            queue_type_to_dispatcher: create_info.queue_type_to_family,
+        }
+    }
+}
+
 pub struct QueuesCreateInfo {
     pub(crate) create_infos: Vec<vk::DeviceQueueCreateInfo>,
     pub(crate) queue_family_to_types: Vec<Option<QueueType>>,
