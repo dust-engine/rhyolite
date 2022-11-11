@@ -131,21 +131,11 @@ impl<F1: GPUFuture, F2: GPUFuture> GPUFuture for JoinedGPUFuture<F1, F2> {
 mod waker {
     use std::task::{RawWaker, RawWakerVTable, Waker};
 
-    use super::GPUFuture;
-    unsafe fn clone(data: *const ()) -> RawWaker {
-        panic!("Trying to execute a regular Future in a GPU executor");
+    unsafe fn clone_noop(data: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &GPU_VTABLE)
     }
-    unsafe fn wake(data: *const ()) {
-        panic!("Trying to execute a regular Future in a GPU executor");
-    }
-    unsafe fn wake_by_ref(data: *const ()) {
-        panic!("Trying to execute a regular Future in a GPU executor");
-    }
-    unsafe fn drop(data: *const ()) {
-        panic!("Trying to execute a regular Future in a GPU executor: Waker dropped");
-    }
-    pub(super) const GPU_VTABLE: RawWakerVTable =
-        RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+    unsafe fn noop(data: *const ()) {}
+    pub(super) const GPU_VTABLE: RawWakerVTable = RawWakerVTable::new(clone_noop, noop, noop, noop);
 
     pub struct GPUContext {
         pub current_priority: u64,
@@ -205,7 +195,10 @@ impl<F: Future> GPUFutureBlock<F> {
     pub fn new(f: F) -> Self {
         Self {
             f,
-            priority: u64::MAX, // Initial priority is always max. The initial hook would then get triggered.
+            // Initial priority is always max.
+            // This ensures that the initial hook would always get triggered first,
+            // which then sets the priority correctly based on the head future.
+            priority: u64::MAX,
         }
     }
 }
@@ -236,9 +229,9 @@ impl<F: Future> GPUFuture for GPUFutureBlock<F> {
     }
 }
 
-mod tests {
+pub mod tests {
     use super::*;
-    struct MyFuture {
+    pub struct MyFuture {
         str: String,
         executed: bool,
         priority: u64,
@@ -287,19 +280,12 @@ mod tests {
     }
 
     #[test]
-    fn test() {
+    pub fn test() {
         let mut future = gpu! {
             let f1 = gpu! {
-
-                MyFuture::new("Hello".into(), 100).await;
-                MyFuture::new("World".into(), 2).await;
+                MyFuture::new("hello".into(), 12253).await;
             };
-            let f2 = gpu! {
-                MyFuture::new("Hello2".into(), 1000).await;
-                MyFuture::new("World2".into(), 1).await;
-            };
-            JoinedGPUFuture::new(f1, f2).await;
-            MyFuture::new("Now".into(), 1).await;
+            f1.await;
         };
 
         let mut count = 0;
@@ -309,9 +295,8 @@ mod tests {
         };
         let waker = unsafe { gpuctx.waker() };
         let mut ctx = std::task::Context::from_waker(&waker);
-        loop {
+        for i in 0..2 {
             use std::future::Future;
-            count += 1;
             let a = unsafe { Pin::new_unchecked(&mut future) };
             if a.poll(&mut ctx).is_ready() {
                 break;

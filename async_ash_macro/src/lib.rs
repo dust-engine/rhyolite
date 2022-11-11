@@ -154,19 +154,15 @@ pub fn gpu(input: TokenStream) -> TokenStream {
                             base: Box::new(transform_expr(&*field.base)),
                             ..field.clone()
                         }),
-                        Expr::Let(l) => Expr::Let(syn::ExprLet {
+                        Expr::ForLoop(l) => Expr::ForLoop(syn::ExprForLoop {
                             pat: transform_pattern(&l.pat),
                             expr: Box::new(transform_expr(&*l.expr)),
+                            body: transform_block(&l.body),
                             ..l.clone()
                         }),
                         Expr::Group(group) => Expr::Group(syn::ExprGroup {
                             expr: Box::new(transform_expr(&group.expr)),
                             ..group.clone()
-                        }),
-                        Expr::While(while_stmt) => Expr::While(syn::ExprWhile {
-                            cond: Box::new(transform_expr(&while_stmt.cond)),
-                            body: transform_block(&while_stmt.body),
-                            ..while_stmt.clone()
                         }),
                         Expr::If(if_stmt) => Expr::If(syn::ExprIf {
                             cond: Box::new(transform_expr(&if_stmt.cond)),
@@ -176,18 +172,99 @@ pub fn gpu(input: TokenStream) -> TokenStream {
                             }),
                             ..if_stmt.clone()
                         }),
+                        Expr::Index(index_expr) => Expr::Index(syn::ExprIndex {
+                            expr: Box::new(transform_expr(&*index_expr.expr)),
+                            index: Box::new(transform_expr(&*index_expr.index)),
+                            ..index_expr.clone()
+                        }),
+                        Expr::Let(l) => Expr::Let(syn::ExprLet {
+                            pat: transform_pattern(&l.pat),
+                            expr: Box::new(transform_expr(&*l.expr)),
+                            ..l.clone()
+                        }),
                         Expr::Loop(loop_stmt) => Expr::Loop(syn::ExprLoop {
                             body: transform_block(&loop_stmt.body),
                             ..loop_stmt.clone()
                         }),
-                        Expr::Unsafe(unsafe_stmt) => Expr::Unsafe(ExprUnsafe {
-                            block: transform_block(&unsafe_stmt.block),
-                            ..unsafe_stmt.clone()
+                        Expr::Match(match_expr) => Expr::Match(syn::ExprMatch {
+                            expr: Box::new(transform_expr(&*match_expr.expr)),
+                            arms: match_expr
+                                .arms
+                                .iter()
+                                .map(|arm| syn::Arm {
+                                    pat: transform_pattern(&arm.pat),
+                                    guard: arm.guard.as_ref().map(|(guard_token, expr)| {
+                                        (guard_token.clone(), Box::new(transform_expr(&expr)))
+                                    }),
+                                    body: Box::new(transform_expr(&arm.body)),
+                                    ..arm.clone()
+                                })
+                                .collect(),
+                            ..match_expr.clone()
                         }),
                         Expr::MethodCall(call) => Expr::MethodCall(syn::ExprMethodCall {
                             receiver: Box::new(transform_expr(&call.receiver)),
                             args: call.args.iter().map(transform_expr).collect(),
                             ..call.clone()
+                        }),
+                        Expr::Paren(paren) => Expr::Paren(syn::ExprParen {
+                            expr: Box::new(transform_expr(&paren.expr)),
+                            ..paren.clone()
+                        }),
+                        Expr::Range(range) => Expr::Range(syn::ExprRange {
+                            from: range.from.as_ref().map(|f| Box::new(transform_expr(&f))),
+                            to: range.to.as_ref().map(|t| Box::new(transform_expr(&t))),
+                            ..range.clone()
+                        }),
+                        Expr::Reference(reference) => Expr::Reference(syn::ExprReference {
+                            expr: Box::new(transform_expr(&reference.expr)),
+                            ..reference.clone()
+                        }),
+                        Expr::Repeat(repeat) => Expr::Repeat(syn::ExprRepeat {
+                            expr: Box::new(transform_expr(&repeat.expr)),
+                            len: Box::new(transform_expr(&repeat.len)),
+                            ..repeat.clone()
+                        }),
+                        Expr::Return(ret) => Expr::Return(syn::ExprReturn {
+                            expr: ret.expr.as_ref().map(|e| Box::new(transform_expr(&e))),
+                            ..ret.clone()
+                        }),
+                        Expr::Struct(s) => Expr::Struct(syn::ExprStruct {
+                            fields: s
+                                .fields
+                                .iter()
+                                .map(|f| syn::FieldValue {
+                                    member: f.member.clone(),
+                                    expr: transform_expr(&f.expr),
+                                    ..f.clone()
+                                })
+                                .collect(),
+                            ..s.clone()
+                        }),
+                        Expr::Try(s) => Expr::Try(syn::ExprTry {
+                            expr: Box::new(transform_expr(&s.expr)),
+                            ..s.clone()
+                        }),
+                        Expr::Tuple(tuple) => Expr::Tuple(syn::ExprTuple {
+                            elems: tuple.elems.iter().map(transform_expr).collect(),
+                            ..tuple.clone()
+                        }),
+                        Expr::Type(type_expr) => Expr::Type(syn::ExprType {
+                            expr: Box::new(transform_expr(&type_expr.expr)),
+                            ..type_expr.clone()
+                        }),
+                        Expr::Unary(unary) => Expr::Unary(syn::ExprUnary {
+                            expr: Box::new(transform_expr(&unary.expr)),
+                            ..unary.clone()
+                        }),
+                        Expr::Unsafe(unsafe_stmt) => Expr::Unsafe(ExprUnsafe {
+                            block: transform_block(&unsafe_stmt.block),
+                            ..unsafe_stmt.clone()
+                        }),
+                        Expr::While(while_stmt) => Expr::While(syn::ExprWhile {
+                            cond: Box::new(transform_expr(&while_stmt.cond)),
+                            body: transform_block(&while_stmt.body),
+                            ..while_stmt.clone()
                         }),
                         Expr::Await(await_expr) => transform_await_expr(await_expr),
                         _ => expr.clone(),
