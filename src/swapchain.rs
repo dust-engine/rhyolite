@@ -8,7 +8,7 @@ use std::{ops::Deref, pin::Pin};
 
 use crate::{
     future::{GPUContext, GPUFuture},
-    Device, HasImage,
+    Device, ImageLike,
 };
 
 pub struct SwapchainLoader {
@@ -117,7 +117,7 @@ pub struct SwapchainImage {
     suboptimal: bool,
 }
 
-impl HasImage for SwapchainImage {
+impl ImageLike for SwapchainImage {
     fn raw_image(&self) -> vk::Image {
         self.image
     }

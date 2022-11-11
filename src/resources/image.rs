@@ -4,16 +4,16 @@ use std::sync::Arc;
 use super::alloc::{Allocation, AllocationCreateFlags, Allocator, MemoryAllocScenario};
 use crate::{DebugObject, Device, HasDevice};
 
-pub trait HasImage: Send + Sync {
+pub trait ImageLike: Send + Sync {
     fn raw_image(&self) -> vk::Image;
 }
 
-pub trait HasImageView: HasImage {
+pub trait ImageViewLike: ImageLike {
     fn raw_image_view(&self) -> vk::ImageView;
     fn subresource_range(&self) -> vk::ImageSubresourceRange;
 }
 
-impl HasImage for vk::Image {
+impl ImageLike for vk::Image {
     fn raw_image(&self) -> vk::Image {
         *self
     }
@@ -45,13 +45,13 @@ impl Image {
     }
 }
 
-impl HasImage for Image {
+impl ImageLike for Image {
     fn raw_image(&self) -> vk::Image {
         self.image
     }
 }
 
-impl<T: HasImage> HasImage for Arc<T> {
+impl<T: ImageLike> ImageLike for Arc<T> {
     fn raw_image(&self) -> vk::Image {
         let r: &T = self.as_ref();
         r.raw_image()
@@ -73,7 +73,7 @@ pub struct MemImage {
     pub memory_flags: vk::MemoryPropertyFlags,
 }
 
-impl HasImage for MemImage {
+impl ImageLike for MemImage {
     fn raw_image(&self) -> vk::Image {
         self.image
     }
@@ -165,12 +165,12 @@ impl Allocator {
     }
 }
 
-pub struct ImageView<T: HasImage> {
+pub struct ImageView<T: ImageLike> {
     device: Arc<Device>,
     image: T,
     view: vk::ImageView,
 }
-impl<T: HasImage> ImageView<T> {
+impl<T: ImageLike> ImageView<T> {
     pub fn new(
         device: Arc<Device>,
         image: T,
@@ -202,7 +202,7 @@ impl<T: HasImage> ImageView<T> {
         self.view
     }
 }
-impl<T: HasImage> Drop for ImageView<T> {
+impl<T: ImageLike> Drop for ImageView<T> {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_image_view(self.view, None);
