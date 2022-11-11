@@ -13,12 +13,13 @@ unsafe fn noop(_data: *const ()) {}
 pub(super) static GPU_VTABLE: &'static RawWakerVTable =
     &RawWakerVTable::new(clone_noop, noop, noop, noop);
 
-pub struct GPUContext {
+pub struct GPUContext<'a> {
     pub current_priority: u64,
     pub(super) current_queue: Option<u32>,
+    command_pool: &'a mut (),
 }
 
-impl GPUContext {
+impl<'a> GPUContext<'a> {
     pub unsafe fn waker(&mut self) -> Waker {
         let raw_waker = std::task::RawWaker::new(self as *mut _ as *const (), GPU_VTABLE);
         let waker = std::task::Waker::from_raw(raw_waker);
@@ -36,12 +37,12 @@ impl GPUContext {
 }
 
 /// Provides convenient method to retreive GPUContext from `std::task::Context`
-pub trait GPUTaskContext {
-    fn get(&mut self) -> &mut GPUContext;
+pub trait GPUTaskContext<'a> {
+    fn get(&mut self) -> &mut GPUContext<'a>;
 }
 
-impl<'a> GPUTaskContext for std::task::Context<'a> {
-    fn get(&mut self) -> &mut GPUContext {
+impl<'a> GPUTaskContext<'a> for std::task::Context<'a> {
+    fn get(&mut self) -> &mut GPUContext<'a> {
         if self.waker().as_raw().vtable() as *const RawWakerVTable
             != GPU_VTABLE as *const RawWakerVTable
         {
