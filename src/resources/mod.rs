@@ -1,7 +1,7 @@
 mod alloc;
-mod image;
 mod buffer;
+mod image;
 
 pub use alloc::*;
-pub use image::*;
 pub use buffer::*;
+pub use image::*;

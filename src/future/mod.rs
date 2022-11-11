@@ -101,7 +101,7 @@ pub mod tests {
         let mut count = 0;
         let mut gpuctx = GPUContext {
             current_priority: 100,
-            current_queue: 0,
+            current_queue: None,
         };
         let waker = unsafe { gpuctx.waker() };
         let mut ctx = std::task::Context::from_waker(&waker);
@@ -119,7 +119,6 @@ pub mod tests {
         std::mem::forget(waker);
     }
 }
-
 
 /*
 Option 1

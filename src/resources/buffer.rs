@@ -4,7 +4,10 @@ use ash::vk;
 use async_ash_macro::gpu;
 use futures_util::Future;
 
-use crate::{Device, future::{GPUFuture, GPUTaskContext}};
+use crate::{
+    future::{GPUFuture, GPUTaskContext},
+    Device,
+};
 
 pub trait BufferLike {
     fn raw_image(&self) -> vk::Image;
@@ -35,26 +38,23 @@ pub struct BufferSlice<'a, B: BufferLike> {
     size: vk::DeviceSize,
 }
 
-
 trait BufferExt {
     fn copy_buffer<T: BufferLike>(&self, other: &mut T) -> impl GPUFuture<Output = ()> {
-        gpu! {
-            
-        }
+        gpu! {}
     }
 }
 
-impl<T: BufferLike> BufferExt for T {
-}
+impl<T: BufferLike> BufferExt for T {}
 
-
-struct CopyBufferFuture {
-}
+struct CopyBufferFuture {}
 
 impl Future for CopyBufferFuture {
     type Output = ();
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         let cx = cx.get();
         std::task::Poll::Ready(())
     }
