@@ -2,6 +2,7 @@
 #![feature(array_methods)]
 #![feature(waker_getters)]
 #![feature(pin_macro)]
+#![feature(return_position_impl_trait_in_trait)]
 
 extern crate self as async_ash;
 
