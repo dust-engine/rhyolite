@@ -1,141 +1,202 @@
-mod context;
-mod join;
-
-pub use context::*;
-pub use join::*;
-
+use std::{future::Future, pin::Pin, ops::Generator, marker::PhantomData};
+use ash::vk;
 use async_ash_macro::gpu;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::Poll;
 
-pub trait GPUFuture: Future {
-    fn priority(&self) -> u64;
+use crate::{Queue, swapchain::SwapchainImage};
+
+pub enum QueueOperation {
+    Submit,
+    BindSparse,
 }
 
-/// This needs to be awaited before awaiting any GPUFuture.
-/// This provides us an opportunity to grab any initial states from the GPUFuture.
-pub struct GPUFutureHook<'a, F: GPUFuture> {
-    future: &'a F,
-    executed: bool,
+
+pub trait GPUFuture {
+    type Output;
+
+    /// Produce work on the GPU side. Will be executed in one go.
+    fn schedule(&mut self) -> impl Iterator<Item = QueueOperation> + '_;
+
+    /// Execute on the host side. Tasks will be executed as they become available.
+    async fn execute(self) -> Self::Output;
 }
-impl<'a, F: GPUFuture> GPUFutureHook<'a, F> {
-    pub fn new(future: &'a F) -> Self {
-        Self {
-            future,
-            executed: false,
-        }
-    }
+
+pub struct CopyBuffer {
+
 }
-impl<'a, F: GPUFuture> Future for GPUFutureHook<'a, F> {
+
+impl GPUFuture for CopyBuffer {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        if self.executed {
-            return Poll::Ready(());
-        }
-        let gpu_ctx = cx.get();
-        gpu_ctx.current_priority = self.future.priority();
-        self.executed = true;
-        Poll::Pending
+    fn schedule(&mut self) -> impl Iterator<Item = QueueOperation> {
+        vec![QueueOperation::Submit].into_iter()
+    }
+
+    async fn execute(self) -> Self::Output {
+        () // just need to await semaphore
     }
 }
 
-pub mod tests {
-    use super::*;
-    pub struct MyFuture {
-        str: String,
-        executed: bool,
-        priority: u64,
-    }
-    impl MyFuture {
-        fn new(str: String, priority: u64) -> Self {
-            Self {
-                executed: false,
-                str,
-                priority,
-            }
-        }
-    }
-    impl Future for MyFuture {
-        type Output = ();
-        fn poll(
-            mut self: Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Self::Output> {
-            println!("Running {}", self.str);
-            Poll::Ready(())
-        }
-    }
-    impl GPUFuture for MyFuture {
-        fn priority(&self) -> u64 {
-            self.priority
+#[derive(Debug)]
+struct Apple;
+
+fn copy_buffer(src: &Apple, dst: &mut Apple) -> CopyBuffer {
+    CopyBuffer {}
+}
+
+/// Generators cannot implement `for<'a, 'b> Generator<&'a mut Context<'b>>`, so we need to pass
+/// a raw pointer (see https://github.com/rust-lang/rust/issues/68923).
+/// The correct way to write this would be:
+/// ```rs
+/// trait CompositeGPUFutureGenerator<E> = for<'a> Generator<&'a mut E, Return=(), Yield = QueueOperation> + Unpin;
+/// ```
+trait CompositeGPUFutureGenerator<E> = Generator<*mut E, Return=(), Yield = QueueOperation> + Unpin;
+struct CompositeGPUFuture<E, G: CompositeGPUFutureGenerator<E>, F: Future<Output = ()>, C: FnOnce(E) -> F> {
+    i: G,
+    c: C,
+    environment: E
+}
+impl<E, G: CompositeGPUFutureGenerator<E>, F: Future<Output = ()>, C: FnOnce(E) -> F> GPUFuture for CompositeGPUFuture<E, G, F, C> {
+    type Output = F::Output;
+
+    fn schedule(&mut self) -> impl Iterator<Item = QueueOperation> + '_ {
+        CompositeGPUFutureIterator {
+            g: &mut self.i,
+            e: &mut self.environment
         }
     }
 
-    fn traaay() {
-        let future = gpu! {
-            MyFuture::new("myfuture".into(), 12253).await;
-            MyFuture::new("myfuture1".into(), 12254).await;
-            MyFuture::new("myfuture2".into(), 12255).await;
-            MyFuture::new("myfuture1112".into(), 12222255).await
-        };
+    fn execute(self) -> impl Future<Output = Self::Output> {
+        (self.c)(self.environment)
     }
+}
+struct CompositeGPUFutureIterator<'a, E, G: CompositeGPUFutureGenerator<E>> {
+    g: &'a mut G,
+    e: &'a mut E,
+}
 
-    #[test]
-    fn test2() {
-        GPUFutureBlock::new(async {
-            MyFuture::new("myfuture".into(), 12253).await;
-        });
-    }
+impl<'a, E, G: CompositeGPUFutureGenerator<E>> Iterator for CompositeGPUFutureIterator<'a, E, G> {
+    type Item = QueueOperation;
 
-    #[test]
-    pub fn test() {
-        let mut future = gpu! {
-            let f1 = gpu! {
-                MyFuture::new("hello".into(), 12253).await;
-            };
-            f1.await;
-        };
-
-        let mut count = 0;
-        let mut gpuctx = GPUContext {
-            current_priority: 100,
-            current_queue: None,
-        };
-        let waker = unsafe { gpuctx.waker() };
-        let mut ctx = std::task::Context::from_waker(&waker);
-        loop {
-            use std::future::Future;
-            let a = unsafe { Pin::new_unchecked(&mut future) };
-            if a.poll(&mut ctx).is_ready() {
-                break;
-            }
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::ops::GeneratorState;
+        let g: &mut G = self.g;
+        let g = Pin::new(g);
+        match g.resume(self.e) {
+            GeneratorState::Yielded(n) => Some(n),
+            GeneratorState::Complete(()) => None,
         }
-        println!("Pulled {} times", count);
-
-        // Don't drop the waker. It's just a pointer to gpuctx and a pointer to the vtable.
-        // Only regular executors would drop the waker here.
-        std::mem::forget(waker);
     }
 }
 
+/// Helper function to reference a pointer. This is to help Rust with type inference.
+
+fn get_apple() -> Apple {
+    Apple {}
+}
+
+struct TypeHint<T> {
+    _marker: PhantomData<T>
+}
+impl<T> Clone for TypeHint<T> {
+    fn clone(&self) -> Self {
+        Self { _marker: PhantomData }
+    }
+}
+impl<T> Copy for TypeHint<T> {
+}
+impl<T> TypeHint<T> {
+    pub fn new(var: &T) -> Self {
+        Self {
+            _marker: PhantomData
+        }
+    }
+    pub fn pin_ptr_mut(&self, v: *mut T) {
+    }
+    pub fn pin_ref(&self, v: &T) {
+    }
+}
+
+
+fn test() {
+    let mut e1 = get_apple();
+    let mut e2 = get_apple();
+    let future = gpu! {
+        copy_buffer(&e1, &mut e2).await;
+    };
+    // 1. get all the futures, owned
+    // 2. call schedule on all of them, without taking the ownership, before hand.
+    // 3. call execute on all of them, async, taking ownership.
+
+    let mut a1 = get_apple();
+    let mut a2 = get_apple();
+    let mut marker: i32 = 0;
+    let futures = {
+        let f1 = copy_buffer(&a1, &mut a2);
+        let f2 = copy_buffer(&a2, &mut a1); // <- create a let binding for each future awaited.
+        (f1, f2)
+    };
+
+
+    let captures = (&mut marker, futures);
+
+    let type_hint = TypeHint::new(&captures);
+    let i = move |aaa| {
+        type_hint.pin_ptr_mut(aaa);
+        let (marker, futures) = unsafe { &mut *aaa };
+        let (f1, f2) = futures;
+        for i in f1.schedule() {
+            yield i;
+        }
+        for i in f2.schedule() {
+            yield i;
+        }
+    };
+    let c = |aaa| async move {
+        type_hint.pin_ref(&aaa);
+        let (marker, futures) = aaa;
+        let (f1, f2) = futures;
+        f1.execute().await;
+        f2.execute().await;
+    };
+
+    let future = CompositeGPUFuture {
+        i,
+        c,
+        environment: captures
+    };
+}
 /*
-Option 1
-gpu! {
-    common_task().await;
-    separate_task1();
-    separate_task2();
-}
-
-Option 2
-gpu! {
-    common_task().awaitl
-}.shared()
-
-gpu! {
-    swapchain.acquire().await
+async {
+    let image = swapchain.acquire_image().await;
+    copy_stuff_to_image(&mut image);
+    gpu_post_processing(&mut image).await;
+    queue.present(image);
 
 }
+
+converted to
+{
+    waitSemaphore(0); // elided
+    // Do Nothing
+    // GPU is responsible for signalSemaphore(1)
+    waitSemaphore(1);
+    copy_stuff_to_image(&mut image);
+    signalSemaphore(2);
+    // gpu_post_processing; no op on host
+    waitSemaphore(3);
+    signal_semaphore(4);
+    // queue.present();
+    wait_semaphore(5);
+    drop some stuff.
+} to be executed asyncly
+
+and
+{
+swapchain.acquire_image(signal 1)
+gpu_post_processing(&mut image, signal 3).await
+queue.present(image)
+}
+to be executed now
+
 
 */

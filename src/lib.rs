@@ -2,7 +2,12 @@
 #![feature(array_methods)]
 #![feature(waker_getters)]
 #![feature(pin_macro)]
+#![feature(generators, generator_trait, generator_clone)]
 #![feature(return_position_impl_trait_in_trait)]
+#![feature(async_fn_in_trait)]
+#![feature(iter_from_generator)]
+#![feature(async_closure)]
+#![feature(trait_alias)]
 
 extern crate self as async_ash;
 
@@ -14,6 +19,7 @@ mod physical_device;
 mod queue;
 mod resources;
 mod semaphore;
+mod swapchain;
 
 pub use debug::{DebugObject, DebugUtilsMessenger};
 pub use device::{Device, HasDevice};

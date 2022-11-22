@@ -6,8 +6,10 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::{ops::Deref, pin::Pin};
 
+use crate::future::QueueOperation;
+use crate::queue;
 use crate::{
-    future::{GPUContext, GPUFuture},
+    future::{GPUFuture},
     Device, ImageLike,
 };
 
@@ -37,10 +39,26 @@ impl SwapchainLoader {
     }
 }
 
+struct SwapchainInner {
+    loader: Arc<SwapchainLoader>,
+    swapchain: vk::SwapchainKHR,
+}
+impl Drop for SwapchainInner {
+    fn drop(&mut self) {
+        unsafe {
+            self.loader.destroy_swapchain(self.swapchain, None);
+        }
+    }
+}
+
 pub struct Swapchain {
-    pub(crate) loader: Arc<SwapchainLoader>,
-    pub(crate) swapchain: Mutex<vk::SwapchainKHR>,
+    inner: Arc<SwapchainInner>,
+
+    /// swapchain.acquire_next_image requires binary semaphore, and it signals one and only one semaphore.
+    /// Due to these constraints, it make sense for the binary semaphore to be owned by the swapchain.
     images: Vec<vk::Image>,
+
+    generation: u64,
 }
 
 /// Unsafe APIs for Swapchain
@@ -54,9 +72,12 @@ impl Swapchain {
         let swapchain = loader.create_swapchain(info, None)?;
         let images = loader.get_swapchain_images(swapchain)?;
         Ok(Self {
-            loader,
-            swapchain: Mutex::new(swapchain),
+            inner: Arc::new(SwapchainInner {
+                loader,
+                swapchain,
+            }),
             images,
+            generation: 0,
         })
     }
     /// Returns (image_index, suboptimal)
@@ -64,135 +85,49 @@ impl Swapchain {
     /// # Safety
     /// <https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkAcquireNextImageKHR.html>
     unsafe fn acquire_next_image_raw(
-        &self,
+        &mut self,
         timeout_ns: u64,
         semaphore: vk::Semaphore,
         fence: vk::Fence,
     ) -> VkResult<(u32, bool)> {
-        let swapchain = self.swapchain.lock().unwrap();
         // Requires exclusive access to swapchain
-        self.loader
-            .acquire_next_image(*swapchain, timeout_ns, semaphore, fence)
+        self.inner.loader
+            .acquire_next_image(self.inner.swapchain, timeout_ns, semaphore, fence)
     }
 
     // Returns: Suboptimal
     pub unsafe fn queue_present_raw(
-        &self,
+        &mut self,
         queue: vk::Queue,
         wait_semaphores: &[vk::Semaphore],
         image_indice: u32,
     ) -> VkResult<bool> {
-        let swapchain = self.swapchain.lock().unwrap();
-        let swapchain_handle = *swapchain;
-        let suboptimal = self.loader.queue_present(
+        let suboptimal = self.inner.loader.queue_present(
             queue,
             &vk::PresentInfoKHR {
                 wait_semaphore_count: wait_semaphores.len() as u32,
                 p_wait_semaphores: wait_semaphores.as_ptr(),
                 swapchain_count: 1,
-                p_swapchains: &swapchain_handle,
+                p_swapchains: &self.inner.swapchain,
                 p_image_indices: &image_indice,
                 p_results: std::ptr::null_mut(), // Applications that do not need per-swapchain results can use NULL for pResults.
                 ..Default::default()
             },
         );
-        drop(swapchain);
         suboptimal
     }
 }
 
-impl Drop for Swapchain {
-    fn drop(&mut self) {
-        let swapchain = self.swapchain.lock().unwrap();
-        unsafe {
-            self.loader.destroy_swapchain(*swapchain, None);
-        }
-    }
-}
-
 pub struct SwapchainImage {
-    swapchain: Arc<Swapchain>,
+    swapchain: Arc<SwapchainInner>,
     image: vk::Image,
     indice: u32,
     suboptimal: bool,
+    generation: u64,
 }
 
 impl ImageLike for SwapchainImage {
     fn raw_image(&self) -> vk::Image {
         self.image
-    }
-}
-
-struct SwapchainAcquireFuture {
-    swapchain: Arc<Swapchain>,
-    timeout_ns: u64,
-    task: Option<blocking::Task<VkResult<(u32, bool)>>>,
-}
-
-impl Future for SwapchainAcquireFuture {
-    type Output = VkResult<SwapchainImage>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        if self.task.is_none() {
-            let swapchain = self.swapchain.clone();
-            let timeout_ns = self.timeout_ns;
-            self.task = Some(blocking::unblock(move || unsafe {
-                swapchain.acquire_next_image_raw(
-                    timeout_ns,
-                    vk::Semaphore::null(),
-                    vk::Fence::null(),
-                )
-            }));
-        }
-
-        let task = self.task.as_mut().unwrap();
-        let task = Pin::new(task);
-        match task.poll(cx) {
-            std::task::Poll::Ready(result) => {
-                std::task::Poll::Ready(result.map(|(indice, suboptimal)| SwapchainImage {
-                    swapchain: self.swapchain.clone(),
-                    image: self.swapchain.images[indice as usize],
-                    indice,
-                    suboptimal,
-                }))
-            }
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-}
-impl GPUFuture for SwapchainAcquireFuture {
-    fn schedule(&self, cx: &mut GPUContext) {
-
-
-        
-
-    }
-}
-
-impl Swapchain {
-    pub fn acquire_next_image(
-        self: &Arc<Self>,
-        timeout_ns: u64,
-    ) -> impl GPUFuture<Output = VkResult<SwapchainImage>> {
-        SwapchainAcquireFuture {
-            swapchain: self.clone(),
-            timeout_ns,
-            task: None,
-        }
-    }
-}
-
-impl crate::Queue {
-    /// Takes a future of SwapchainImage
-    pub fn present(&mut self, image: SwapchainImage) -> VkResult<bool> {
-        let suboptimal = unsafe {
-            image
-                .swapchain
-                .queue_present_raw(self.queue, todo!(), image.indice)?
-        };
-        Ok(suboptimal)
     }
 }
