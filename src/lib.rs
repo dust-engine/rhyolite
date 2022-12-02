@@ -19,7 +19,6 @@ mod physical_device;
 mod queue;
 mod resources;
 mod semaphore;
-mod swapchain;
 
 pub use debug::{DebugObject, DebugUtilsMessenger};
 pub use device::{Device, HasDevice};

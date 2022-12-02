@@ -1,202 +1,241 @@
-use std::{future::Future, pin::Pin, ops::Generator, marker::PhantomData};
+use std::marker::PhantomPinned;
+use std::ops::GeneratorState;
+use std::{ops::Generator, sync::Arc};
 use ash::vk;
-use async_ash_macro::gpu;
+use std::pin::Pin;
+use std::task::Poll;
 
-use crate::{Queue, swapchain::SwapchainImage};
+use crate::Device;
 
-pub enum QueueOperation {
-    Submit,
-    BindSparse,
-}
-
-
-pub trait GPUFuture {
+pub trait GPUCommandFuture {
     type Output;
-
-    /// Produce work on the GPU side. Will be executed in one go.
-    fn schedule(&mut self) -> impl Iterator<Item = QueueOperation> + '_;
-
-    /// Execute on the host side. Tasks will be executed as they become available.
-    async fn execute(self) -> Self::Output;
+    fn record(self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<Self::Output>;
 }
 
-pub struct CopyBuffer {
-
-}
-
-impl GPUFuture for CopyBuffer {
-    type Output = ();
-
-    fn schedule(&mut self) -> impl Iterator<Item = QueueOperation> {
-        vec![QueueOperation::Submit].into_iter()
-    }
-
-    async fn execute(self) -> Self::Output {
-        () // just need to await semaphore
-    }
-}
-
-#[derive(Debug)]
-struct Apple;
-
-fn copy_buffer(src: &Apple, dst: &mut Apple) -> CopyBuffer {
-    CopyBuffer {}
-}
-
-/// Generators cannot implement `for<'a, 'b> Generator<&'a mut Context<'b>>`, so we need to pass
-/// a raw pointer (see https://github.com/rust-lang/rust/issues/68923).
-/// The correct way to write this would be:
-/// ```rs
-/// trait CompositeGPUFutureGenerator<E> = for<'a> Generator<&'a mut E, Return=(), Yield = QueueOperation> + Unpin;
-/// ```
-trait CompositeGPUFutureGenerator<E> = Generator<*mut E, Return=(), Yield = QueueOperation> + Unpin;
-struct CompositeGPUFuture<E, G: CompositeGPUFutureGenerator<E>, F: Future<Output = ()>, C: FnOnce(E) -> F> {
-    i: G,
-    c: C,
-    environment: E
-}
-impl<E, G: CompositeGPUFutureGenerator<E>, F: Future<Output = ()>, C: FnOnce(E) -> F> GPUFuture for CompositeGPUFuture<E, G, F, C> {
-    type Output = F::Output;
-
-    fn schedule(&mut self) -> impl Iterator<Item = QueueOperation> + '_ {
-        CompositeGPUFutureIterator {
-            g: &mut self.i,
-            e: &mut self.environment
+pub trait GPUCommandFutureExt: GPUCommandFuture + Sized {
+    fn join<G: GPUCommandFuture>(self, other: G) -> GPUCommandJoin<Self, G> {
+        GPUCommandJoin {
+            inner1: GPUCommandJoinState::Pending(self),
+            inner2: GPUCommandJoinState::Pending(other),
         }
     }
-
-    fn execute(self) -> impl Future<Output = Self::Output> {
-        (self.c)(self.environment)
-    }
-}
-struct CompositeGPUFutureIterator<'a, E, G: CompositeGPUFutureGenerator<E>> {
-    g: &'a mut G,
-    e: &'a mut E,
-}
-
-impl<'a, E, G: CompositeGPUFutureGenerator<E>> Iterator for CompositeGPUFutureIterator<'a, E, G> {
-    type Item = QueueOperation;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        use std::ops::GeneratorState;
-        let g: &mut G = self.g;
-        let g = Pin::new(g);
-        match g.resume(self.e) {
-            GeneratorState::Yielded(n) => Some(n),
-            GeneratorState::Complete(()) => None,
+    fn map<R, F: FnOnce(Self::Output) -> R>(self, mapper: F) -> GPUCommandMap<Self, F> {
+        GPUCommandMap {
+            inner: self,
+            mapper: Some(mapper),
         }
     }
 }
 
-/// Helper function to reference a pointer. This is to help Rust with type inference.
+impl<T: GPUCommandFuture> GPUCommandFutureExt for T {}
 
-fn get_apple() -> Apple {
-    Apple {}
-}
+pub trait GPUCommandGenerator = Generator<vk::CommandBuffer, Yield = ()>;
 
-struct TypeHint<T> {
-    _marker: PhantomData<T>
+pub struct GPUCommandBlock<G: GPUCommandGenerator> {
+    inner: G,
 }
-impl<T> Clone for TypeHint<T> {
-    fn clone(&self) -> Self {
-        Self { _marker: PhantomData }
-    }
-}
-impl<T> Copy for TypeHint<T> {
-}
-impl<T> TypeHint<T> {
-    pub fn new(var: &T) -> Self {
-        Self {
-            _marker: PhantomData
+impl<G: GPUCommandGenerator> GPUCommandBlock<G> {
+    fn into_inner(self: Pin<&mut Self>) -> Pin<&mut G> {
+        unsafe {
+            self.map_unchecked_mut(|a| &mut a.inner)
         }
     }
-    pub fn pin_ptr_mut(&self, v: *mut T) {
-    }
-    pub fn pin_ref(&self, v: &T) {
+}
+impl<G: GPUCommandGenerator> GPUCommandFuture for GPUCommandBlock<G> {
+    type Output = G::Return;
+    fn record(self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<G::Return> {
+        let generator = self.into_inner();
+        match generator.resume(command_buffer) {
+            GeneratorState::Yielded(()) => Poll::Pending,
+            GeneratorState::Complete(r) => Poll::Ready(r),
+        }
     }
 }
 
+enum GPUCommandJoinState<G: GPUCommandFuture> {
+    Pending(G),
+    Ready(G::Output),
+    Taken
+}
+pub struct GPUCommandJoin<G1, G2>
+where G1: GPUCommandFuture,
+    G2: GPUCommandFuture {
+    inner1: GPUCommandJoinState<G1>,
+    inner2: GPUCommandJoinState<G2>,
+}
 
+impl<G1, G2> GPUCommandFuture for GPUCommandJoin<G1, G2>
+where G1: GPUCommandFuture,
+    G2: GPUCommandFuture {
+    type Output = (G1::Output, G2::Output);
+    fn record(self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<Self::Output> {
+        unsafe {
+            let this = self.get_unchecked_mut();
+            match &mut this.inner1 {
+                GPUCommandJoinState::Pending(g) => {
+                    let g = Pin::new_unchecked(g);
+                    match g.record(command_buffer) {
+                        Poll::Pending => (),
+                        Poll::Ready(r) => {
+                            this.inner1 = GPUCommandJoinState::Ready(r);
+                        }
+                    }
+                },
+                _ => {}
+            }
+            match &mut this.inner2 {
+                GPUCommandJoinState::Pending(g) => {
+                    let g = Pin::new_unchecked(g);
+                    match g.record(command_buffer) {
+                        Poll::Pending => (),
+                        Poll::Ready(r) => {
+                            this.inner2 = GPUCommandJoinState::Ready(r);
+                        }
+                    }
+                },
+                _ => {}
+            }
+            match (&mut this.inner1, &mut this.inner2) {
+                (GPUCommandJoinState::Ready(r1), GPUCommandJoinState::Ready(r2)) => {
+                    match (
+                        std::mem::replace(&mut this.inner1, GPUCommandJoinState::Taken), 
+                        std::mem::replace(&mut this.inner2, GPUCommandJoinState::Taken)
+                    ) {
+                        (GPUCommandJoinState::Ready(r1), GPUCommandJoinState::Ready(r2)) => {
+                            Poll::Ready((r1, r2))
+                        },
+                        _ => unreachable!()
+                    }
+                },
+                (GPUCommandJoinState::Taken, GPUCommandJoinState::Taken) => panic!("Attempted to poll GPUCommandJoin after completion"),
+                _ => Poll::Pending,
+            }
+        }
+    }
+}
+
+pub struct GPUCommandMap<G, F> {
+    mapper: Option<F>,
+    inner: G,
+}
+
+impl<G, R, F> GPUCommandFuture for GPUCommandMap<G, F>
+    where G: GPUCommandFuture,
+        F: FnOnce(G::Output) -> R {
+    type Output = R;
+    fn record(mut self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<Self::Output> {
+        let inner = unsafe {
+            self.as_mut().map_unchecked_mut(|a| &mut a.inner)
+        };
+        match inner.record(command_buffer) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(r) => {
+                let mapper = unsafe {
+                    self.get_unchecked_mut().mapper.take().expect("Attempted to poll GPUCommandMap after completion")
+                };
+                Poll::Ready((mapper)(r))
+            }
+        }
+    }
+}
+
+#[test]
 fn test() {
-    let mut e1 = get_apple();
-    let mut e2 = get_apple();
-    let future = gpu! {
-        copy_buffer(&e1, &mut e2).await;
-    };
-    // 1. get all the futures, owned
-    // 2. call schedule on all of them, without taking the ownership, before hand.
-    // 3. call execute on all of them, async, taking ownership.
-
-    let mut a1 = get_apple();
-    let mut a2 = get_apple();
-    let mut marker: i32 = 0;
-    let futures = {
-        let f1 = copy_buffer(&a1, &mut a2);
-        let f2 = copy_buffer(&a2, &mut a1); // <- create a let binding for each future awaited.
-        (f1, f2)
+    let block1 = async_ash_macro::commands! {
+        let fut1 = CopyBufferFuture{ str: "prev1"};
+        fut1.await;
+        let fut1 = CopyBufferFuture{ str: "prev2"};
+        fut1.await;
+        1_u32
     };
 
+    let block2 = async_ash_macro::commands! {
+        let fut1 = CopyBufferFuture{ str: "A"};
+        fut1.await;
+        let fut1 = CopyBufferFuture{ str: "B"};
+        fut1.await;
+        2_u64
+    };
+    let block3 =  CopyBufferFuture{ str: "special"};
+    let block = async_ash_macro::commands! {
+        let (a, b, c) = async_ash_macro::join!(block1, block2, block3).await;
+        println!("a: {:?}, b: {:?}, c: {:?}", a, b, c);
+    };
 
-    let captures = (&mut marker, futures);
-
-    let type_hint = TypeHint::new(&captures);
-    let i = move |aaa| {
-        type_hint.pin_ptr_mut(aaa);
-        let (marker, futures) = unsafe { &mut *aaa };
-        let (f1, f2) = futures;
-        for i in f1.schedule() {
-            yield i;
+    let mut block = std::pin::pin!(block);
+    for i in 0..4 {
+        match block.as_mut().record(vk::CommandBuffer::null()) {
+            Poll::Ready(()) =>  {
+                println!("Ready");
+            }
+            Poll::Pending => {
+                println!("Pending");
+            }
         }
-        for i in f2.schedule() {
-            yield i;
-        }
-    };
-    let c = |aaa| async move {
-        type_hint.pin_ref(&aaa);
-        let (marker, futures) = aaa;
-        let (f1, f2) = futures;
-        f1.execute().await;
-        f2.execute().await;
-    };
-
-    let future = CompositeGPUFuture {
-        i,
-        c,
-        environment: captures
-    };
+    }
 }
+
+struct CopyBufferFuture {
+    str: &'static str,
+}
+impl GPUCommandFuture for CopyBufferFuture {
+    type Output = ();
+    fn record(self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<Self::Output> {
+        println!("{}", self.str);
+        Poll::Ready(())
+    }
+}
+
 /*
-async {
-    let image = swapchain.acquire_image().await;
-    copy_stuff_to_image(&mut image);
-    gpu_post_processing(&mut image).await;
-    queue.present(image);
 
+let branch1 = commands! {
+    A.await;
+    B.await;
+    (C, D, E).join().await;
+    F.await;
+}
+let branch2 = commands! {
+    (X, Y).join().await;
+    Z.await;
+}
+let fianl = commands! {
+    (branch1, branch2).join().await;
+    G.await;
 }
 
-converted to
-{
-    waitSemaphore(0); // elided
-    // Do Nothing
-    // GPU is responsible for signalSemaphore(1)
-    waitSemaphore(1);
-    copy_stuff_to_image(&mut image);
-    signalSemaphore(2);
-    // gpu_post_processing; no op on host
-    waitSemaphore(3);
-    signal_semaphore(4);
-    // queue.present();
-    wait_semaphore(5);
-    drop some stuff.
-} to be executed asyncly
+Result should be:
+A, X, Y
+barrier
+B, Z
+barrier
+C, D, E
+barrier
+F
+barrier
+G
 
-and
-{
-swapchain.acquire_image(signal 1)
-gpu_post_processing(&mut image, signal 3).await
-queue.present(image)
-}
-to be executed now
 
+alternatively
+A
+barrier
+B X Y
+barrier
+C D E Z
+barrier
+F
+barrier
+G
+
+alternatively
+
+A
+barrier
+B
+barrier
+C D E X Y
+barrier
+F Z
+barrier
+G
 
 */

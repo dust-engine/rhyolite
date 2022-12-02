@@ -3,7 +3,7 @@ use quote::ToTokens;
 use syn::{
     parse::{Parse, ParseStream},
     spanned::Spanned,
-    ExprUnsafe,
+    ExprUnsafe, token,
 };
 
 struct ExprGpuAsync {
@@ -326,13 +326,137 @@ fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     .into()
 }
 
-mod tests {
-    #[test]
-    fn test_basic() {
-        let quote = quote::quote! {
-            let aaa = copy_buffer().await;
-        };
-        let parsed = super::proc_macro_gpu(quote);
-        println!("{:?}", parsed.to_string());
+
+#[proc_macro]
+pub fn commands(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    proc_macro_commands(input.into()).into()
+}
+
+fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let input = match syn::parse2::<ExprGpuAsync>(input) {
+        Ok(input) => input,
+        Err(err) => return err.to_compile_error(),
+    };
+
+    // Count the total number of awaits in the input
+    let mut await_count: usize = 0;
+    input.stmts.iter().for_each(|stmt| {
+        transform_stmt_asyncs(stmt, &mut |a| {
+            await_count += 1;
+            syn::Expr::Verbatim(Default::default()) // We don't care about the return value, so just return a dummy
+        });
+    });
+
+
+    let mut current_await_index: usize = 0;
+    let inner_closure = syn::Block {
+        brace_token: Default::default(),
+        stmts: input.stmts.iter().map(|stmt| {
+            transform_stmt_asyncs(stmt, &mut |a| {
+                current_await_index += 1;
+
+                // Do not yield after the last await
+                let should_yield = if current_await_index == await_count {
+                    None
+                } else {
+                    Some(syn::ExprYield {
+                        attrs: Vec::new(),
+                        yield_token: Default::default(),
+                        expr: None,
+                    })
+                };
+
+                let base = a.base.clone();
+                let tokens = quote::quote! {
+                    {
+                        let mut __fut_pinned = std::pin::pin!(#base);
+                        let __fut_result = loop {
+                            match __fut_pinned.as_mut().record(ctx) {
+                                std::task::Poll::Ready(v) => break v,
+                                std::task::Poll::Pending => yield,
+                            };
+                        };
+                        #should_yield;
+                        __fut_result
+                    }
+                };
+                syn::parse2(tokens).unwrap()
+            })
+        }).collect(),
+    }.into_token_stream();
+    quote::quote! {
+        async_ash::future::GPUCommandBlock {
+            inner: static |ctx| #inner_closure
+        }
     }
+}
+
+
+
+
+struct MacroJoin {
+    pub exprs: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
+}
+impl Parse for MacroJoin {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(MacroJoin {
+            exprs: syn::punctuated::Punctuated::parse_separated_nonempty(input)?,
+        })
+    }
+}
+
+
+#[proc_macro]
+pub fn join(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    proc_macro_join(input.into()).into()
+}
+
+fn proc_macro_join(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let input = match syn::parse2::<MacroJoin>(input) {
+        Ok(input) => input,
+        Err(err) => return err.to_compile_error(),
+    };
+    if input.exprs.len() == 0 {
+        return syn::Error::new(proc_macro2::Span::call_site(), "Expects at least one argument").to_compile_error();
+    }
+    if input.exprs.len() == 1 {
+        return input.exprs[0].clone().into_token_stream();
+    }
+
+    let mut token_stream = proc_macro2::TokenStream::new();
+    token_stream.extend(input.exprs[0].clone().into_token_stream());
+
+    // a.join(b).join(c)...
+    for item in input.exprs.iter().skip(1) {
+        token_stream.extend(quote::quote!{.join(#item)}.into_iter());
+    }
+
+    let num_expressions = input.exprs.len();
+
+    // __join_0, __join_1, __join_2, ...
+    let output_expression = (0..num_expressions).map(|i|quote::format_ident!("__join_{}", i));
+
+    let input_expression = {
+        use proc_macro2::{TokenTree, TokenStream, Ident, Punct, Span, Spacing, Group, Delimiter};
+        let mut t = Some(TokenTree::Group(Group::new(Delimiter::Parenthesis, {
+            let mut t = TokenStream::new();
+            t.extend(Some(TokenTree::Ident(Ident::new("__join_0", Span::call_site()))));
+            t.extend(Some(TokenTree::Punct(Punct::new(',', Spacing::Alone))));
+            t.extend(Some(TokenTree::Ident(Ident::new("__join_1", Span::call_site()))));
+            t
+        })));
+        (2..num_expressions).for_each(|i| {
+            let prev = t.take().unwrap().into_token_stream();
+            t = Some(TokenTree::Group(Group::new(Delimiter::Parenthesis, {
+                let mut a = TokenStream::new();
+                a.extend(Some(prev));
+                a.extend(Some(TokenTree::Punct(Punct::new(',', Spacing::Alone))));
+                a.extend(Some(TokenTree::Ident(quote::format_ident!("__join_{}", i))));
+                a
+            })));
+        });
+        t
+    };
+    token_stream.extend(quote::quote!{.map(|#input_expression| (#(#output_expression),*))}.into_iter());
+    token_stream
 }
