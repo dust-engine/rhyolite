@@ -46,6 +46,7 @@ where
     G2: GPUCommandFuture,
 {
     type Output = (G1::Output, G2::Output);
+    #[inline]
     fn record(self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<Self::Output> {
         let mut this = self.project();
         if let GPUCommandJoinStateProj::Pending(g) = this.inner1.as_mut().project() {
@@ -131,6 +132,7 @@ where
     F: FnOnce(G::Output) -> R,
 {
     type Output = R;
+    #[inline]
     fn record(self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<Self::Output> {
         let this = self.project();
         match this.inner.record(command_buffer) {
