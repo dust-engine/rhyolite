@@ -12,6 +12,7 @@ futures-util = "0.3"
 async_ash_macro = { path = "./async_ash_macro" }
 vk-mem = { git = "https://github.com/dust-engine/vk-mem-rs" }
 blocking = "1.2"
+pin-project = "1.0"
 
 [workspace]
 members = [
