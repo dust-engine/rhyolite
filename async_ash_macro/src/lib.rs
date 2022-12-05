@@ -17,68 +17,74 @@ impl Parse for ExprGpuAsync {
     }
 }
 
+
+struct TransformContext<'a, A: FnMut(&syn::ExprAwait) -> syn::Expr, M: FnMut(&syn::ExprMacro) -> syn::Expr> {
+    async_transform: &'a mut A,
+    macro_transform: &'a mut M,
+}
+
 fn transform_stmt_asyncs(
     stmt: &syn::Stmt,
-    async_transform: &mut impl FnMut(&syn::ExprAwait) -> syn::Expr,
+    transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
 ) -> syn::Stmt {
     use syn::{Block, Expr, Pat, Stmt};
     fn transform_block(
         block: &Block,
-        async_transform: &mut impl FnMut(&syn::ExprAwait) -> syn::Expr,
+        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
     ) -> Block {
         Block {
             brace_token: block.brace_token.clone(),
             stmts: block
                 .stmts
                 .iter()
-                .map(|stmt| transform_stmt(stmt, async_transform))
+                .map(move |stmt| transform_stmt(stmt, transform_context))
                 .collect(),
         }
     }
     fn transform_pattern(
         pat: &Pat,
-        async_transform: &mut impl FnMut(&syn::ExprAwait) -> syn::Expr,
+        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
     ) -> Pat {
         match pat {
             Pat::Box(pat) => Pat::Box(syn::PatBox {
-                pat: Box::new(transform_pattern(&pat.pat, async_transform)),
+                pat: Box::new(transform_pattern(&pat.pat, transform_context)),
                 ..pat.clone()
             }),
             Pat::Ident(ident) => Pat::Ident(syn::PatIdent {
                 subpat: ident.subpat.as_ref().map(|(at, subpat)| {
                     (
                         at.clone(),
-                        Box::new(transform_pattern(subpat, async_transform)),
+                        Box::new(transform_pattern(subpat, transform_context)),
                     )
                 }),
                 ..ident.clone()
             }),
             Pat::Lit(lit) => Pat::Lit(syn::PatLit {
-                expr: Box::new(transform_expr(&lit.expr, async_transform)),
+                expr: Box::new(transform_expr(&lit.expr, transform_context)),
                 ..lit.clone()
             }),
             Pat::Or(clause) => Pat::Or(syn::PatOr {
                 cases: clause
                     .cases
                     .iter()
-                    .map(|pat| transform_pattern(pat, async_transform))
+                    .map(|pat| transform_pattern(pat, transform_context))
                     .collect(),
                 ..clause.clone()
             }),
             Pat::Range(range) => Pat::Range(syn::PatRange {
-                lo: Box::new(transform_expr(&range.lo, async_transform)),
-                hi: Box::new(transform_expr(&range.hi, async_transform)),
+                lo: Box::new(transform_expr(&range.lo, transform_context)),
+                hi: Box::new(transform_expr(&range.hi, transform_context)),
                 ..range.clone()
             }),
             Pat::Reference(r) => Pat::Reference(syn::PatReference {
-                pat: Box::new(transform_pattern(&r.pat, async_transform)),
+                pat: Box::new(transform_pattern(&r.pat, transform_context)),
                 ..r.clone()
             }),
             Pat::Slice(slice) => Pat::Slice(syn::PatSlice {
                 elems: slice
                     .elems
                     .iter()
-                    .map(|pat| transform_pattern(pat, async_transform))
+                    .map(|pat| transform_pattern(pat, transform_context))
                     .collect(),
                 ..slice.clone()
             }),
@@ -87,7 +93,7 @@ fn transform_stmt_asyncs(
                     .fields
                     .iter()
                     .map(|f| syn::FieldPat {
-                        pat: Box::new(transform_pattern(&f.pat, async_transform)),
+                        pat: Box::new(transform_pattern(&f.pat, transform_context)),
                         ..f.clone()
                     })
                     .collect(),
@@ -97,7 +103,7 @@ fn transform_stmt_asyncs(
                 elems: tuple
                     .elems
                     .iter()
-                    .map(|pat| transform_pattern(pat, async_transform))
+                    .map(|pat| transform_pattern(pat, transform_context))
                     .collect(),
                 ..tuple.clone()
             }),
@@ -107,14 +113,14 @@ fn transform_stmt_asyncs(
                         .pat
                         .elems
                         .iter()
-                        .map(|pat| transform_pattern(pat, async_transform))
+                        .map(|pat| transform_pattern(pat, transform_context))
                         .collect(),
                     ..tuple.pat.clone()
                 },
                 ..tuple.clone()
             }),
             Pat::Type(ty) => Pat::Type(syn::PatType {
-                pat: Box::new(transform_pattern(&ty.pat, async_transform)),
+                pat: Box::new(transform_pattern(&ty.pat, transform_context)),
                 ..ty.clone()
             }),
             _ => pat.clone(),
@@ -122,145 +128,146 @@ fn transform_stmt_asyncs(
     }
     fn transform_expr(
         expr: &Expr,
-        async_transform: &mut impl FnMut(&syn::ExprAwait) -> syn::Expr,
+        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
     ) -> Expr {
         match expr {
             Expr::Array(arr) => Expr::Array(syn::ExprArray {
                 elems: arr
                     .elems
                     .iter()
-                    .map(|expr| transform_expr(expr, async_transform))
+                    .map(|expr| transform_expr(expr, transform_context))
                     .collect(),
                 ..arr.clone()
             }),
             Expr::Assign(assign) => Expr::Assign(syn::ExprAssign {
-                left: Box::new(transform_expr(&*assign.left, async_transform)),
-                right: Box::new(transform_expr(&*assign.right, async_transform)),
+                left: Box::new(transform_expr(&*assign.left, transform_context)),
+                right: Box::new(transform_expr(&*assign.right, transform_context)),
                 ..assign.clone()
             }),
             Expr::AssignOp(assign) => Expr::AssignOp(syn::ExprAssignOp {
-                left: Box::new(transform_expr(&*assign.left, async_transform)),
-                right: Box::new(transform_expr(&*assign.right, async_transform)),
+                left: Box::new(transform_expr(&*assign.left, transform_context)),
+                right: Box::new(transform_expr(&*assign.right, transform_context)),
                 ..assign.clone()
             }),
             Expr::Binary(binary) => Expr::Binary(syn::ExprBinary {
-                left: Box::new(transform_expr(&*binary.left, async_transform)),
-                right: Box::new(transform_expr(&*binary.right, async_transform)),
+                left: Box::new(transform_expr(&*binary.left, transform_context)),
+                right: Box::new(transform_expr(&*binary.right, transform_context)),
                 ..binary.clone()
             }),
             Expr::Block(block) => Expr::Block(syn::ExprBlock {
-                block: transform_block(&block.block, async_transform),
+                block: transform_block(&block.block, transform_context),
                 ..block.clone()
             }),
             Expr::Call(call) => Expr::Call(syn::ExprCall {
-                func: Box::new(transform_expr(&*call.func, async_transform)),
+                func: Box::new(transform_expr(&*call.func, transform_context)),
                 args: call
                     .args
                     .iter()
-                    .map(|expr| transform_expr(expr, async_transform))
+                    .map(|expr| transform_expr(expr, transform_context))
                     .collect(),
                 ..call.clone()
             }),
             Expr::Cast(cast) => Expr::Cast(syn::ExprCast {
-                expr: Box::new(transform_expr(&*cast.expr, async_transform)),
+                expr: Box::new(transform_expr(&*cast.expr, transform_context)),
                 ..cast.clone()
             }),
             Expr::Field(field) => Expr::Field(syn::ExprField {
-                base: Box::new(transform_expr(&*field.base, async_transform)),
+                base: Box::new(transform_expr(&*field.base, transform_context)),
                 ..field.clone()
             }),
             Expr::ForLoop(l) => Expr::ForLoop(syn::ExprForLoop {
-                pat: transform_pattern(&l.pat, async_transform),
-                expr: Box::new(transform_expr(&*l.expr, async_transform)),
-                body: transform_block(&l.body, async_transform),
+                pat: transform_pattern(&l.pat, transform_context),
+                expr: Box::new(transform_expr(&*l.expr, transform_context)),
+                body: transform_block(&l.body, transform_context),
                 ..l.clone()
             }),
             Expr::Group(group) => Expr::Group(syn::ExprGroup {
-                expr: Box::new(transform_expr(&group.expr, async_transform)),
+                expr: Box::new(transform_expr(&group.expr, transform_context)),
                 ..group.clone()
             }),
             Expr::If(if_stmt) => Expr::If(syn::ExprIf {
-                cond: Box::new(transform_expr(&if_stmt.cond, async_transform)),
-                then_branch: transform_block(&if_stmt.then_branch, async_transform),
+                cond: Box::new(transform_expr(&if_stmt.cond, transform_context)),
+                then_branch: transform_block(&if_stmt.then_branch, transform_context),
                 else_branch: if_stmt.else_branch.as_ref().map(|(else_token, expr)| {
                     (
                         else_token.clone(),
-                        Box::new(transform_expr(&expr, async_transform)),
+                        Box::new(transform_expr(&expr, transform_context)),
                     )
                 }),
                 ..if_stmt.clone()
             }),
             Expr::Index(index_expr) => Expr::Index(syn::ExprIndex {
-                expr: Box::new(transform_expr(&*index_expr.expr, async_transform)),
-                index: Box::new(transform_expr(&*index_expr.index, async_transform)),
+                expr: Box::new(transform_expr(&*index_expr.expr, transform_context)),
+                index: Box::new(transform_expr(&*index_expr.index, transform_context)),
                 ..index_expr.clone()
             }),
             Expr::Let(l) => Expr::Let(syn::ExprLet {
-                pat: transform_pattern(&l.pat, async_transform),
-                expr: Box::new(transform_expr(&*l.expr, async_transform)),
+                pat: transform_pattern(&l.pat, transform_context),
+                expr: Box::new(transform_expr(&*l.expr, transform_context)),
                 ..l.clone()
             }),
             Expr::Loop(loop_stmt) => Expr::Loop(syn::ExprLoop {
-                body: transform_block(&loop_stmt.body, async_transform),
+                body: transform_block(&loop_stmt.body, transform_context),
                 ..loop_stmt.clone()
             }),
+            Expr::Macro(m) => (transform_context.macro_transform)(m),
             Expr::Match(match_expr) => Expr::Match(syn::ExprMatch {
-                expr: Box::new(transform_expr(&*match_expr.expr, async_transform)),
+                expr: Box::new(transform_expr(&*match_expr.expr, transform_context)),
                 arms: match_expr
                     .arms
                     .iter()
                     .map(|arm| syn::Arm {
-                        pat: transform_pattern(&arm.pat, async_transform),
+                        pat: transform_pattern(&arm.pat, transform_context),
                         guard: arm.guard.as_ref().map(|(guard_token, expr)| {
                             (
                                 guard_token.clone(),
-                                Box::new(transform_expr(&expr, async_transform)),
+                                Box::new(transform_expr(&expr, transform_context)),
                             )
                         }),
-                        body: Box::new(transform_expr(&arm.body, async_transform)),
+                        body: Box::new(transform_expr(&arm.body, transform_context)),
                         ..arm.clone()
                     })
                     .collect(),
                 ..match_expr.clone()
             }),
             Expr::MethodCall(call) => Expr::MethodCall(syn::ExprMethodCall {
-                receiver: Box::new(transform_expr(&call.receiver, async_transform)),
+                receiver: Box::new(transform_expr(&call.receiver, transform_context)),
                 args: call
                     .args
                     .iter()
-                    .map(|expr| transform_expr(expr, async_transform))
+                    .map(|expr| transform_expr(expr, transform_context))
                     .collect(),
                 ..call.clone()
             }),
             Expr::Paren(paren) => Expr::Paren(syn::ExprParen {
-                expr: Box::new(transform_expr(&paren.expr, async_transform)),
+                expr: Box::new(transform_expr(&paren.expr, transform_context)),
                 ..paren.clone()
             }),
             Expr::Range(range) => Expr::Range(syn::ExprRange {
                 from: range
                     .from
                     .as_ref()
-                    .map(|f| Box::new(transform_expr(&f, async_transform))),
+                    .map(|f| Box::new(transform_expr(&f, transform_context))),
                 to: range
                     .to
                     .as_ref()
-                    .map(|t| Box::new(transform_expr(&t, async_transform))),
+                    .map(|t| Box::new(transform_expr(&t, transform_context))),
                 ..range.clone()
             }),
             Expr::Reference(reference) => Expr::Reference(syn::ExprReference {
-                expr: Box::new(transform_expr(&reference.expr, async_transform)),
+                expr: Box::new(transform_expr(&reference.expr, transform_context)),
                 ..reference.clone()
             }),
             Expr::Repeat(repeat) => Expr::Repeat(syn::ExprRepeat {
-                expr: Box::new(transform_expr(&repeat.expr, async_transform)),
-                len: Box::new(transform_expr(&repeat.len, async_transform)),
+                expr: Box::new(transform_expr(&repeat.expr, transform_context)),
+                len: Box::new(transform_expr(&repeat.len, transform_context)),
                 ..repeat.clone()
             }),
             Expr::Return(ret) => Expr::Return(syn::ExprReturn {
                 expr: ret
                     .expr
                     .as_ref()
-                    .map(|e| Box::new(transform_expr(&e, async_transform))),
+                    .map(|e| Box::new(transform_expr(&e, transform_context))),
                 ..ret.clone()
             }),
             Expr::Struct(s) => Expr::Struct(syn::ExprStruct {
@@ -269,142 +276,68 @@ fn transform_stmt_asyncs(
                     .iter()
                     .map(|f| syn::FieldValue {
                         member: f.member.clone(),
-                        expr: transform_expr(&f.expr, async_transform),
+                        expr: transform_expr(&f.expr, transform_context),
                         ..f.clone()
                     })
                     .collect(),
                 ..s.clone()
             }),
             Expr::Try(s) => Expr::Try(syn::ExprTry {
-                expr: Box::new(transform_expr(&s.expr, async_transform)),
+                expr: Box::new(transform_expr(&s.expr, transform_context)),
                 ..s.clone()
             }),
             Expr::Tuple(tuple) => Expr::Tuple(syn::ExprTuple {
                 elems: tuple
                     .elems
                     .iter()
-                    .map(|expr| transform_expr(expr, async_transform))
+                    .map(|expr| transform_expr(expr, transform_context))
                     .collect(),
                 ..tuple.clone()
             }),
             Expr::Type(type_expr) => Expr::Type(syn::ExprType {
-                expr: Box::new(transform_expr(&type_expr.expr, async_transform)),
+                expr: Box::new(transform_expr(&type_expr.expr, transform_context)),
                 ..type_expr.clone()
             }),
             Expr::Unary(unary) => Expr::Unary(syn::ExprUnary {
-                expr: Box::new(transform_expr(&unary.expr, async_transform)),
+                expr: Box::new(transform_expr(&unary.expr, transform_context)),
                 ..unary.clone()
             }),
             Expr::Unsafe(unsafe_stmt) => Expr::Unsafe(ExprUnsafe {
-                block: transform_block(&unsafe_stmt.block, async_transform),
+                block: transform_block(&unsafe_stmt.block, transform_context),
                 ..unsafe_stmt.clone()
             }),
             Expr::While(while_stmt) => Expr::While(syn::ExprWhile {
-                cond: Box::new(transform_expr(&while_stmt.cond, async_transform)),
-                body: transform_block(&while_stmt.body, async_transform),
+                cond: Box::new(transform_expr(&while_stmt.cond, transform_context)),
+                body: transform_block(&while_stmt.body, transform_context),
                 ..while_stmt.clone()
             }),
-            Expr::Await(await_expr) => (async_transform)(await_expr),
+            Expr::Await(await_expr) => (transform_context.async_transform)(await_expr),
             _ => expr.clone(),
         }
     }
     fn transform_stmt(
         stmt: &Stmt,
-        async_transform: &mut impl FnMut(&syn::ExprAwait) -> Expr,
+        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
     ) -> Stmt {
         match stmt {
             Stmt::Local(local) => Stmt::Local(syn::Local {
-                pat: transform_pattern(&local.pat, async_transform),
+                pat: transform_pattern(&local.pat, transform_context),
                 init: local.init.as_ref().map(|(eq_token, expr)| {
                     (
                         eq_token.clone(),
-                        Box::new(transform_expr(&expr, async_transform)),
+                        Box::new(transform_expr(&expr, transform_context)),
                     )
                 }),
                 ..local.clone()
             }),
-            Stmt::Expr(expr) => Stmt::Expr(transform_expr(expr, async_transform)),
+            Stmt::Expr(expr) => Stmt::Expr(transform_expr(expr, transform_context)),
             Stmt::Semi(expr, semi) => {
-                Stmt::Semi(transform_expr(expr, async_transform), semi.clone())
+                Stmt::Semi(transform_expr(expr, transform_context), semi.clone())
             }
             _ => stmt.clone(),
         }
     }
-    transform_stmt(stmt, async_transform)
-}
-
-#[proc_macro]
-pub fn gpu(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    proc_macro_gpu(input.into()).into()
-}
-
-fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    let input = match syn::parse2::<ExprGpuAsync>(input) {
-        Ok(input) => input,
-        Err(err) => return err.to_compile_error(),
-    };
-
-    let mut future_count: u32 = 0;
-    let mut collect_futures_block_stmts = Vec::with_capacity(input.stmts.len() + 1);
-    collect_futures_block_stmts.extend(input.stmts.iter().map(|stmt| {
-        transform_stmt_asyncs(stmt, &mut |expr: &syn::ExprAwait| {
-            let future_ident = syn::Ident::new(
-                &format!("__future_{}", future_count),
-                proc_macro2::Span::call_site(),
-            );
-            future_count += 1;
-            syn::Expr::Assign(syn::ExprAssign {
-                attrs: Vec::new(),
-                left: Box::new(syn::Expr::Path(syn::ExprPath {
-                    attrs: Vec::new(),
-                    qself: None,
-                    path: syn::Path {
-                        leading_colon: None,
-                        segments: std::iter::once(syn::PathSegment {
-                            ident: future_ident.clone(),
-                            arguments: syn::PathArguments::None,
-                        })
-                        .collect(),
-                    },
-                })),
-                eq_token: Default::default(),
-                right: expr.base.clone(),
-            })
-        })
-    }));
-    collect_futures_block_stmts.push(syn::Stmt::Expr(syn::Expr::Tuple(syn::ExprTuple {
-        elems: (0..future_count)
-            .map(|i| {
-                syn::Expr::Path(syn::ExprPath {
-                    attrs: vec![],
-                    qself: None,
-                    path: syn::Path {
-                        leading_colon: None,
-                        segments: std::iter::once(syn::PathSegment {
-                            ident: syn::Ident::new(
-                                &format!("__future_{}", i),
-                                proc_macro2::Span::call_site(),
-                            ),
-                            arguments: syn::PathArguments::None,
-                        })
-                        .collect(),
-                    },
-                })
-            })
-            .collect(),
-        attrs: Vec::new(),
-        paren_token: Default::default(),
-    })));
-
-    let collect_futures_block = syn::Block {
-        brace_token: Default::default(),
-        stmts: collect_futures_block_stmts,
-    };
-
-    quote::quote! {
-        #collect_futures_block
-    }
-    .into()
+    transform_stmt(stmt, transform_context)
 }
 
 #[proc_macro]
@@ -419,13 +352,6 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     };
 
     // Count the total number of awaits in the input
-    let mut await_count: usize = 0;
-    input.stmts.iter().for_each(|stmt| {
-        transform_stmt_asyncs(stmt, &mut |a| {
-            await_count += 1;
-            syn::Expr::Verbatim(Default::default()) // We don't care about the return value, so just return a dummy
-        });
-    });
 
     let mut current_await_index: usize = 0;
     let inner_closure = syn::Block {
@@ -434,41 +360,64 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
             .stmts
             .iter()
             .map(|stmt| {
-                transform_stmt_asyncs(stmt, &mut |a| {
-                    current_await_index += 1;
-
-                    let base = a.base.clone();
-
-                    // For each future, we first call init on it. This is a no-op for most futures, but for
-                    // (nested) block futures, this is going to move the future to its first yield point.
-                    // At that point it should yield the context of the first future.
-                    let tokens = quote::quote! {
-                        {
-                            let mut fut_pinned = std::pin::pin!(#base);
-                            fut_pinned.as_mut().init();
-                            let mut ctx = Default::default();
-                            fut_pinned.as_mut().context(&mut ctx);
-                            yield ctx;
-                            loop {
-                                match fut_pinned.as_mut().record(__fut_ctx) {
-                                    std::task::Poll::Ready(v) => break v,
-                                    std::task::Poll::Pending => {
-                                        let mut ctx = Default::default();
-                                        fut_pinned.as_mut().context(&mut ctx);
-                                        yield ctx;
-                                    },
-                                };
+                transform_stmt_asyncs(stmt, &mut TransformContext {
+                    async_transform: &mut |a| {
+                        current_await_index += 1;
+    
+                        let base = a.base.clone();
+    
+                        // For each future, we first call init on it. This is a no-op for most futures, but for
+                        // (nested) block futures, this is going to move the future to its first yield point.
+                        // At that point it should yield the context of the first future.
+                        let tokens = quote::quote! {
+                            {
+                                let mut fut_pinned = std::pin::pin!(#base);
+                                fut_pinned.as_mut().init();
+                                let mut ctx = Default::default();
+                                fut_pinned.as_mut().context(&mut ctx);
+                                yield ctx;
+                                loop {
+                                    match fut_pinned.as_mut().record(__fut_ctx) {
+                                        std::task::Poll::Ready(v) => break v,
+                                        std::task::Poll::Pending => {
+                                            let mut ctx = Default::default();
+                                            fut_pinned.as_mut().context(&mut ctx);
+                                            yield ctx;
+                                        },
+                                    };
+                                }
                             }
+                        };
+                        syn::parse2(tokens).unwrap()
+                    },
+                    macro_transform: &mut |mac| {
+                        let path = &mac.mac.path;
+                        if path.segments.len() != 1 {
+                            return syn::Expr::Macro(mac.clone());
                         }
-                    };
-                    syn::parse2(tokens).unwrap()
+                        match path.segments[0].ident.to_string().as_str() {
+                            "import" => proc_macro_import_expr(&mac.mac.tokens),
+                            _ => syn::Expr::Macro(mac.clone())
+                        }
+                    }
                 })
             })
             .collect(),
     }
     .into_token_stream();
     quote::quote! {
-        async_ash::future::GPUCommandBlock::new(static |__fut_ctx| #inner_closure)
+        async_ash::future::GPUCommandBlock::new(static |_aa| {
+            let inner = static |__fut_ctx| #inner_closure;
+            let mut inner_pinned = std::pin::pin!(inner);
+            loop { 
+                match inner_pinned.as_mut().resume(_aa) {
+                    std::ops::GeneratorState::Complete(v) => break v,
+                    std::ops::GeneratorState::Yielded(v) => {
+                        yield v;
+                    },
+                };
+            }
+        })
     }
 }
 
@@ -547,4 +496,9 @@ fn proc_macro_join(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
     token_stream
         .extend(quote::quote! {.map(|#input_expression| (#(#output_expression),*))}.into_iter());
     token_stream
+}
+
+
+fn proc_macro_import_expr(input: &proc_macro2::TokenStream) -> syn::Expr {
+    todo!()
 }
