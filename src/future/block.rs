@@ -11,13 +11,13 @@ pub trait GPUCommandGenerator = Generator<vk::CommandBuffer, Yield = GPUCommandF
 pub struct GPUCommandBlock<G: GPUCommandGenerator> {
     #[pin]
     inner: G,
-    next_ctx: GPUCommandFutureContext,
+    next_ctx: Option<GPUCommandFutureContext>,
 }
 impl<G: GPUCommandGenerator> GPUCommandBlock<G> {
     pub fn new(inner: G) -> Self {
         Self {
             inner,
-            next_ctx: GPUCommandFutureContext::default(),
+            next_ctx: None,
         }
     }
 }
@@ -27,16 +27,18 @@ impl<G: GPUCommandGenerator> GPUCommandFuture for GPUCommandBlock<G> {
         let this = self.project();
         match this.inner.resume(command_buffer) {
             GeneratorState::Yielded(ctx) => {
-                *this.next_ctx = ctx;
+                *this.next_ctx = Some(ctx);
                 Poll::Pending
             }
             GeneratorState::Complete(r) => Poll::Ready(r),
         }
     }
-    fn context(&self) -> GPUCommandFutureContext {
-        self.next_ctx.clone()
+    fn context(self: Pin<&mut Self>, ctx: &mut GPUCommandFutureContext) {
+        let next_ctx = self.project().next_ctx.take().expect("Attempted to take the context multiple times");
+        ctx.merge(next_ctx);
     }
     fn init(mut self: Pin<&mut Self>) {
+        // Reach the first yield point to get the context of the first awaited future.
         if let Poll::Pending = self.as_mut().record(vk::CommandBuffer::null()) {
         } else {
             unreachable!()

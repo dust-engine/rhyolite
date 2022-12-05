@@ -437,20 +437,6 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
                 transform_stmt_asyncs(stmt, &mut |a| {
                     current_await_index += 1;
 
-                    // Do not yield after the last await
-                    let should_yield = if current_await_index == await_count {
-                        None
-                    } else {
-                        Some(syn::ExprYield {
-                            attrs: Vec::new(),
-                            yield_token: Default::default(),
-                            expr: Some(Box::new(
-                                syn::parse2::<syn::Expr>(quote::quote! { Default::default() })
-                                    .unwrap(),
-                            )),
-                        })
-                    };
-
                     let base = a.base.clone();
 
                     // For each future, we first call init on it. This is a no-op for most futures, but for
@@ -458,16 +444,21 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
                     // At that point it should yield the context of the first future.
                     let tokens = quote::quote! {
                         {
-                            let mut __fut_pinned = std::pin::pin!(#base);
-                            __fut_pinned.as_mut().init();
-                            yield __fut_pinned.context();
-                            let __fut_result = loop {
-                                match __fut_pinned.as_mut().record(ctx) {
+                            let mut fut_pinned = std::pin::pin!(#base);
+                            fut_pinned.as_mut().init();
+                            let mut ctx = Default::default();
+                            fut_pinned.as_mut().context(&mut ctx);
+                            yield ctx;
+                            loop {
+                                match fut_pinned.as_mut().record(__fut_ctx) {
                                     std::task::Poll::Ready(v) => break v,
-                                    std::task::Poll::Pending => yield __fut_pinned.context(),
+                                    std::task::Poll::Pending => {
+                                        let mut ctx = Default::default();
+                                        fut_pinned.as_mut().context(&mut ctx);
+                                        yield ctx;
+                                    },
                                 };
-                            };
-                            __fut_result
+                            }
                         }
                     };
                     syn::parse2(tokens).unwrap()
@@ -477,7 +468,7 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     }
     .into_token_stream();
     quote::quote! {
-        async_ash::future::GPUCommandBlock::new(static |ctx| #inner_closure)
+        async_ash::future::GPUCommandBlock::new(static |__fut_ctx| #inner_closure)
     }
 }
 

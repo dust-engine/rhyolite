@@ -97,15 +97,14 @@ where
         }
     }
 
-    fn context(&self) -> GPUCommandFutureContext {
-        let mut ctx = GPUCommandFutureContext::default();
-        if let GPUCommandJoinState::Pending(g) = &self.inner1 {
-            ctx = ctx.merge(&g.context());
+    fn context(self: Pin<&mut Self>, ctx: &mut GPUCommandFutureContext) {
+        let this = self.project();
+        if let GPUCommandJoinStateProj::Pending(g) = this.inner1.project() {
+            g.context(ctx);
         }
-        if let GPUCommandJoinState::Pending(g) = &self.inner2 {
-            ctx = ctx.merge(&g.context());
+        if let GPUCommandJoinStateProj::Pending(g) = this.inner2.project() {
+            g.context(ctx);
         }
-        ctx
     }
 
     fn init(self: Pin<&mut Self>) {
@@ -146,8 +145,8 @@ where
             }
         }
     }
-    fn context(&self) -> GPUCommandFutureContext {
-        self.inner.context()
+    fn context(self: Pin<&mut Self>, ctx: &mut GPUCommandFutureContext) {
+        self.project().inner.context(ctx);
     }
     fn init(self: Pin<&mut Self>) {
         let this = self.project();

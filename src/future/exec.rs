@@ -1,59 +1,55 @@
 use ash::vk;
-use std::task::Poll;
+use std::{task::Poll, collections::{HashMap, BTreeMap}};
 use crate::Device;
 
 use super::GPUCommandFuture;
 
-pub struct GPUCommandFutureContext {
-    write_stages: vk::PipelineStageFlags2,
-    write_accesses: vk::AccessFlags2,
-    read_stages: vk::PipelineStageFlags2,
-    read_accesses: vk::AccessFlags2,
+pub struct Res<T> {
+    id: u32,
+    inner: T
 }
 
-impl Default for GPUCommandFutureContext {
-    #[inline]
-    fn default() -> Self {
-        GPUCommandFutureContext {
-            write_stages: vk::PipelineStageFlags2::empty(),
-            write_accesses: vk::AccessFlags2::empty(),
-            read_stages: vk::PipelineStageFlags2::empty(),
-            read_accesses: vk::AccessFlags2::empty()
-        }
-    }
+pub struct Access {
+    read_stages: vk::PipelineStageFlags2,
+    read_access: vk::AccessFlags2,
+    write_stages: vk::PipelineStageFlags2,
+    write_access: vk::AccessFlags2,
 }
-impl Clone for GPUCommandFutureContext {
-    #[inline]
-    fn clone(&self) -> Self {
-        GPUCommandFutureContext {
-            write_stages: self.write_stages,
-            write_accesses: self.write_accesses,
-            read_stages: self.read_stages,
-            read_accesses: self.read_accesses
-        }
-    }
+
+#[derive(Default)]
+pub struct GPUCommandFutureContext {
+    accesses: BTreeMap<u32, Access>,
 }
+
 impl GPUCommandFutureContext {
     /// Declare a global memory write
     #[inline]
-    pub fn write(&mut self, stages: vk::PipelineStageFlags2, accesses: vk::AccessFlags2) {
-        self.write_stages |= stages;
-        self.write_accesses |= accesses;
+    pub fn write<T>(&mut self, res: &Res<T>, stages: vk::PipelineStageFlags2, accesses: vk::AccessFlags2) {
+        let entry = self.accesses.entry(res.id).or_insert(Access {
+            read_stages: vk::PipelineStageFlags2::NONE,
+            read_access: vk::AccessFlags2::NONE,
+            write_stages: vk::PipelineStageFlags2::NONE,
+            write_access: vk::AccessFlags2::NONE,
+        });
+        entry.write_stages |= stages;
+        entry.write_access |= accesses;
     }
     /// Declare a global memory read
     #[inline]
-    pub fn read(&mut self, stages: vk::PipelineStageFlags2, accesses: vk::AccessFlags2) {
-        self.read_stages |= stages;
-        self.read_accesses |= accesses;
+    pub fn read<T>(&mut self, res: &Res<T>, stages: vk::PipelineStageFlags2, accesses: vk::AccessFlags2) {
+        let entry = self.accesses.entry(res.id).or_insert(Access {
+            read_stages: vk::PipelineStageFlags2::NONE,
+            read_access: vk::AccessFlags2::NONE,
+            write_stages: vk::PipelineStageFlags2::NONE,
+            write_access: vk::AccessFlags2::NONE,
+        });
+        entry.read_stages |= stages;
+        entry.read_access |= accesses;
     }
-    #[inline]
-    pub fn merge(&self, other: &Self) -> Self {
-        Self {
-            write_stages: self.write_stages | other.write_stages,
-            write_accesses: self.write_accesses | other.write_accesses,
-            read_stages: self.read_stages | other.read_stages,
-            read_accesses: self.read_accesses | other.read_accesses,
-        }
+
+    pub fn merge(&mut self, mut other: Self) {
+        // TODO: merge accesses. Do we actually need to merge access within each resource?
+        self.accesses.append(&mut other.accesses);
     }
 }
 
@@ -63,15 +59,10 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
     fn record_all(self, command_buffer: vk::CommandBuffer) -> Self::Output {
         let mut this = std::pin::pin!(self);
         this.as_mut().init();
-        let mut current_context = this.as_mut().context();
         let result = loop {
             if let Poll::Ready(result) = this.as_mut().record(command_buffer) {
                 break result;
             }
-            // Now, record the pipeline barrier.
-            let next_context = this.as_ref().context();
-
-            current_context = next_context;
         };
         result
     }
