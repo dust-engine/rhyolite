@@ -8,6 +8,14 @@ pub struct Res<T> {
     id: u32,
     inner: T
 }
+impl<T> Res<T> {
+    pub fn new(id: u32, inner: T) -> Self {
+        Self {
+            id,
+            inner
+        }
+    }
+}
 
 pub struct Access {
     read_stages: vk::PipelineStageFlags2,
@@ -64,6 +72,7 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
                 break result;
             }
         };
+        println!("End");
         result
     }
 }

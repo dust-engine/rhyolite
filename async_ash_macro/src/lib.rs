@@ -351,72 +351,96 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
         Err(err) => return err.to_compile_error(),
     };
 
+    let mut current_import_id: usize = 0;
+    let mut import_bindings = proc_macro2::TokenStream::new();
+    let mut import_drops = proc_macro2::TokenStream::new();
+    let mut proc_macro_import_expr = |input_tokens: &proc_macro2::TokenStream| -> proc_macro2::TokenStream {
+        let global_res_variable_name = quote::format_ident!("__future_res_{}", current_import_id);
+        current_import_id += 1;
+        let output_tokens = quote::quote! {
+            ::async_ash::future::Res::new(0, &#global_res_variable_name)
+        };
+        import_bindings.extend(quote::quote! {
+            let #global_res_variable_name = #input_tokens;
+        });
+        import_drops.extend(quote::quote! {
+            drop(#global_res_variable_name);
+        });
+        output_tokens
+    };
+
     // Count the total number of awaits in the input
 
     let mut current_await_index: usize = 0;
-    let inner_closure = syn::Block {
-        brace_token: Default::default(),
-        stmts: input
-            .stmts
-            .iter()
-            .map(|stmt| {
-                transform_stmt_asyncs(stmt, &mut TransformContext {
-                    async_transform: &mut |a| {
-                        current_await_index += 1;
-    
-                        let base = a.base.clone();
-    
-                        // For each future, we first call init on it. This is a no-op for most futures, but for
-                        // (nested) block futures, this is going to move the future to its first yield point.
-                        // At that point it should yield the context of the first future.
-                        let tokens = quote::quote! {
-                            {
-                                let mut fut_pinned = std::pin::pin!(#base);
-                                fut_pinned.as_mut().init();
-                                let mut ctx = Default::default();
-                                fut_pinned.as_mut().context(&mut ctx);
-                                yield ctx;
-                                loop {
-                                    match fut_pinned.as_mut().record(__fut_ctx) {
-                                        std::task::Poll::Ready(v) => break v,
-                                        std::task::Poll::Pending => {
-                                            let mut ctx = Default::default();
-                                            fut_pinned.as_mut().context(&mut ctx);
-                                            yield ctx;
-                                        },
-                                    };
-                                }
-                            }
-                        };
-                        syn::parse2(tokens).unwrap()
-                    },
-                    macro_transform: &mut |mac| {
-                        let path = &mac.mac.path;
-                        if path.segments.len() != 1 {
-                            return syn::Expr::Macro(mac.clone());
-                        }
-                        match path.segments[0].ident.to_string().as_str() {
-                            "import" => proc_macro_import_expr(&mac.mac.tokens),
-                            _ => syn::Expr::Macro(mac.clone())
+    let mut awaited_future_bindings = proc_macro2::TokenStream::new();
+    let mut awaited_future_drops = proc_macro2::TokenStream::new();
+    let inner_closure_stmts: Vec<_> = input
+    .stmts
+    .iter()
+    .map(|stmt| {
+        transform_stmt_asyncs(stmt, &mut TransformContext {
+            async_transform: &mut |a| {
+                let global_future_variable_name = quote::format_ident!("__future_{}", current_await_index);
+                current_await_index += 1;
+
+                awaited_future_bindings.extend(quote::quote! {
+                    let mut #global_future_variable_name;
+                });
+                awaited_future_drops.extend(quote::quote! {
+                    drop(#global_future_variable_name);
+                });
+
+                let base = a.base.clone();
+
+
+                // For each future, we first call init on it. This is a no-op for most futures, but for
+                // (nested) block futures, this is going to move the future to its first yield point.
+                // At that point it should yield the context of the first future.
+                let tokens = quote::quote! {
+                    {
+                        #global_future_variable_name = #base;
+                        let mut fut_pinned = unsafe { std::pin::Pin::new_unchecked(&mut #global_future_variable_name) };
+                        fut_pinned.as_mut().init();
+                        let mut ctx = Default::default();
+                        fut_pinned.as_mut().context(&mut ctx);
+                        yield std::ops::GeneratorState::Yielded(ctx);
+                        loop {
+                            match fut_pinned.as_mut().record(__fut_ctx) {
+                                std::task::Poll::Ready(v) => break v,
+                                std::task::Poll::Pending => {
+                                    let mut ctx = Default::default();
+                                    fut_pinned.as_mut().context(&mut ctx);
+                                    yield std::ops::GeneratorState::Yielded(ctx);
+                                },
+                            };
                         }
                     }
-                })
-            })
-            .collect(),
-    }
-    .into_token_stream();
-    quote::quote! {
-        async_ash::future::GPUCommandBlock::new(static |_aa| {
-            let inner = static |__fut_ctx| #inner_closure;
-            let mut inner_pinned = std::pin::pin!(inner);
-            loop { 
-                match inner_pinned.as_mut().resume(_aa) {
-                    std::ops::GeneratorState::Complete(v) => break v,
-                    std::ops::GeneratorState::Yielded(v) => {
-                        yield v;
-                    },
                 };
+                syn::parse2(tokens).unwrap()
+            },
+            macro_transform: &mut |mac| {
+                let path = &mac.mac.path;
+                if path.segments.len() != 1 {
+                    return syn::Expr::Macro(mac.clone());
+                }
+                match path.segments[0].ident.to_string().as_str() {
+                    "import" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens)),
+                    _ => syn::Expr::Macro(mac.clone())
+                }
             }
+        })
+    })
+    .collect();
+    quote::quote! {
+        async_ash::future::GPUCommandBlock::new(static |__fut_ctx| {
+            #import_bindings
+            #awaited_future_bindings
+            #(#inner_closure_stmts)*
+
+            yield std::ops::GeneratorState::Complete(());
+            #awaited_future_drops
+            #import_drops
+            return;
         })
     }
 }
@@ -496,9 +520,4 @@ fn proc_macro_join(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
     token_stream
         .extend(quote::quote! {.map(|#input_expression| (#(#output_expression),*))}.into_iter());
     token_stream
-}
-
-
-fn proc_macro_import_expr(input: &proc_macro2::TokenStream) -> syn::Expr {
-    todo!()
 }
