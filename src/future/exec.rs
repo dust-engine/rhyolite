@@ -15,6 +15,9 @@ impl<T> Res<T> {
     pub fn new(id: u32, inner: T) -> Self {
         Self { id, inner }
     }
+    pub fn id(&self) -> u32 {
+        self.id
+    }
 }
 
 pub struct Access {
@@ -25,7 +28,7 @@ pub struct Access {
 }
 
 pub struct GlobalContext {
-    pub total_resource_count: usize,
+    pub total_resource_count: u32,
     pub command_buffer: vk::CommandBuffer,
 }
 #[derive(Default)]
@@ -78,10 +81,15 @@ impl StageContext {
 pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
     #[inline]
     fn record_all(mut self, command_buffer: vk::CommandBuffer) -> Self::Output {
+        let mut ctx = GlobalContext {
+            total_resource_count: 0,
+            command_buffer,
+        };
+
         let mut this = unsafe { std::pin::Pin::new_unchecked(&mut self) };
-        this.as_mut().init();
+        this.as_mut().init(&mut ctx);
         let result = loop {
-            if let Poll::Ready(result) = this.as_mut().record(command_buffer) {
+            if let Poll::Ready(result) = this.as_mut().record(&mut ctx) {
                 break result;
             }
             println!("-----pipeline barrier-------")

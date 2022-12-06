@@ -397,9 +397,11 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
             let global_res_variable_name =
                 quote::format_ident!("__future_res_{}", current_import_id);
             current_import_id += 1;
-            let output_tokens = quote::quote! {
-                ::async_ash::future::Res::new(0, &#global_res_variable_name)
-            };
+            let output_tokens = quote::quote! {{
+                let id = __fut_global_ctx.total_resource_count;
+                __fut_global_ctx.total_resource_count += 1;
+                ::async_ash::future::Res::new(id, &#global_res_variable_name)
+            }};
             import_bindings.extend(quote::quote! {
                 let #global_res_variable_name = #input_tokens;
             });
@@ -440,12 +442,12 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
                     {
                         #global_future_variable_name = #base;
                         let mut fut_pinned = unsafe { std::pin::Pin::new_unchecked(&mut #global_future_variable_name) };
-                        fut_pinned.as_mut().init();
+                        fut_pinned.as_mut().init(__fut_global_ctx);
                         let mut ctx = Default::default();
                         fut_pinned.as_mut().context(&mut ctx);
                         yield std::ops::GeneratorState::Yielded(ctx);
                         loop {
-                            match fut_pinned.as_mut().record(__fut_ctx) {
+                            match fut_pinned.as_mut().record(__fut_global_ctx) {
                                 std::task::Poll::Ready(v) => break v,
                                 std::task::Poll::Pending => {
                                     let mut ctx = Default::default();
@@ -523,7 +525,8 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     }
 
     quote::quote! {
-        async_ash::future::GPUCommandBlock::new(static |__fut_ctx| {
+        async_ash::future::GPUCommandBlock::new(static |__fut_global_ctx: *mut ::async_ash::future::GlobalContext| {
+            let __fut_global_ctx: &mut ::async_ash::future::GlobalContext = unsafe{&mut *__fut_global_ctx};
             #import_bindings
             #awaited_future_bindings
             #(#inner_closure_stmts)*

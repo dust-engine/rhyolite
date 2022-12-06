@@ -1,5 +1,4 @@
-use super::{GPUCommandFuture, StageContext};
-use ash::vk;
+use super::{GPUCommandFuture, GlobalContext, StageContext};
 use pin_project::pin_project;
 use std::pin::Pin;
 use std::task::Poll;
@@ -24,13 +23,6 @@ pub trait GPUCommandFutureExt: GPUCommandFuture + Sized {
 
 impl<T: GPUCommandFuture> GPUCommandFutureExt for T {}
 
-#[pin_project(project = GPUCommandJoinStateProj)]
-enum GPUCommandJoinState<G: GPUCommandFuture> {
-    Pending(#[pin] G),
-    Ready(G::Output),
-    Taken,
-}
-
 #[pin_project]
 pub struct GPUCommandJoin<G1, G2>
 where
@@ -54,7 +46,7 @@ where
 {
     type Output = (G1::Output, G2::Output);
     #[inline]
-    fn record(self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<Self::Output> {
+    fn record(self: Pin<&mut Self>, command_buffer: &mut GlobalContext) -> Poll<Self::Output> {
         let this = self.project();
         assert!(
             !*this.results_taken,
@@ -94,10 +86,10 @@ where
         }
     }
 
-    fn init(self: Pin<&mut Self>) {
+    fn init(self: Pin<&mut Self>, ctx: &mut GlobalContext) {
         let this = self.project();
-        this.inner1.init();
-        this.inner2.init();
+        this.inner1.init(ctx);
+        this.inner2.init(ctx);
     }
 }
 
@@ -115,9 +107,9 @@ where
 {
     type Output = R;
     #[inline]
-    fn record(self: Pin<&mut Self>, command_buffer: vk::CommandBuffer) -> Poll<Self::Output> {
+    fn record(self: Pin<&mut Self>, ctx: &mut GlobalContext) -> Poll<Self::Output> {
         let this = self.project();
-        match this.inner.record(command_buffer) {
+        match this.inner.record(ctx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(r) => {
                 let mapper = this
@@ -131,8 +123,8 @@ where
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         self.project().inner.context(ctx);
     }
-    fn init(self: Pin<&mut Self>) {
+    fn init(self: Pin<&mut Self>, ctx: &mut GlobalContext) {
         let this = self.project();
-        this.inner.init();
+        this.inner.init(ctx);
     }
 }
