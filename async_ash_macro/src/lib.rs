@@ -1,4 +1,6 @@
 extern crate proc_macro;
+use std::{cell::RefCell, borrow::Borrow};
+
 use quote::ToTokens;
 use syn::{
     parse::{Parse, ParseStream},
@@ -18,19 +20,20 @@ impl Parse for ExprGpuAsync {
 }
 
 
-struct TransformContext<'a, A: FnMut(&syn::ExprAwait) -> syn::Expr, M: FnMut(&syn::ExprMacro) -> syn::Expr> {
+struct TransformContext<'a, A: FnMut(&syn::ExprAwait) -> syn::Expr, M: FnMut(&syn::ExprMacro) -> syn::Expr, R: FnMut(&syn::ExprReturn) -> Option<syn::Expr>> {
     async_transform: &'a mut A,
     macro_transform: &'a mut M,
+    return_transform: &'a mut R,
 }
 
 fn transform_stmt_asyncs(
     stmt: &syn::Stmt,
-    transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
+    transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
 ) -> syn::Stmt {
     use syn::{Block, Expr, Pat, Stmt};
     fn transform_block(
         block: &Block,
-        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
+        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
     ) -> Block {
         Block {
             brace_token: block.brace_token.clone(),
@@ -43,7 +46,7 @@ fn transform_stmt_asyncs(
     }
     fn transform_pattern(
         pat: &Pat,
-        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
+        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
     ) -> Pat {
         match pat {
             Pat::Box(pat) => Pat::Box(syn::PatBox {
@@ -128,7 +131,7 @@ fn transform_stmt_asyncs(
     }
     fn transform_expr(
         expr: &Expr,
-        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
+        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
     ) -> Expr {
         match expr {
             Expr::Array(arr) => Expr::Array(syn::ExprArray {
@@ -263,13 +266,19 @@ fn transform_stmt_asyncs(
                 len: Box::new(transform_expr(&repeat.len, transform_context)),
                 ..repeat.clone()
             }),
-            Expr::Return(ret) => Expr::Return(syn::ExprReturn {
-                expr: ret
-                    .expr
-                    .as_ref()
-                    .map(|e| Box::new(transform_expr(&e, transform_context))),
-                ..ret.clone()
-            }),
+            Expr::Return(ret) => {
+                if let Some(expr) = (transform_context.return_transform)(ret) {
+                    expr
+                } else {
+                    Expr::Return(syn::ExprReturn {
+                        expr: ret
+                            .expr
+                            .as_ref()
+                            .map(|e| Box::new(transform_expr(&e, transform_context))),
+                        ..ret.clone()
+                    })
+                }
+            },
             Expr::Struct(s) => Expr::Struct(syn::ExprStruct {
                 fields: s
                     .fields
@@ -317,7 +326,7 @@ fn transform_stmt_asyncs(
     }
     fn transform_stmt(
         stmt: &Stmt,
-        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr>
+        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
     ) -> Stmt {
         match stmt {
             Stmt::Local(local) => Stmt::Local(syn::Local {
@@ -330,7 +339,9 @@ fn transform_stmt_asyncs(
                 }),
                 ..local.clone()
             }),
-            Stmt::Expr(expr) => Stmt::Expr(transform_expr(expr, transform_context)),
+            Stmt::Expr(expr) => {
+                Stmt::Expr(transform_expr(&expr, transform_context))
+            },
             Stmt::Semi(expr, semi) => {
                 Stmt::Semi(transform_expr(expr, transform_context), semi.clone())
             }
@@ -353,7 +364,7 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
 
     let mut current_import_id: usize = 0;
     let mut import_bindings = proc_macro2::TokenStream::new();
-    let mut import_drops = proc_macro2::TokenStream::new();
+    let mut import_drops = RefCell::new(proc_macro2::TokenStream::new());
     let mut proc_macro_import_expr = |input_tokens: &proc_macro2::TokenStream| -> proc_macro2::TokenStream {
         let global_res_variable_name = quote::format_ident!("__future_res_{}", current_import_id);
         current_import_id += 1;
@@ -363,7 +374,7 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
         import_bindings.extend(quote::quote! {
             let #global_res_variable_name = #input_tokens;
         });
-        import_drops.extend(quote::quote! {
+        import_drops.borrow_mut().extend(quote::quote! {
             drop(#global_res_variable_name);
         });
         output_tokens
@@ -373,8 +384,8 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
 
     let mut current_await_index: usize = 0;
     let mut awaited_future_bindings = proc_macro2::TokenStream::new();
-    let mut awaited_future_drops = proc_macro2::TokenStream::new();
-    let inner_closure_stmts: Vec<_> = input
+    let awaited_future_drops = RefCell::new(proc_macro2::TokenStream::new());
+    let mut inner_closure_stmts: Vec<_> = input
     .stmts
     .iter()
     .map(|stmt| {
@@ -386,7 +397,7 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
                 awaited_future_bindings.extend(quote::quote! {
                     let mut #global_future_variable_name;
                 });
-                awaited_future_drops.extend(quote::quote! {
+                awaited_future_drops.borrow_mut().extend(quote::quote! {
                     drop(#global_future_variable_name);
                 });
 
@@ -427,20 +438,67 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
                     "import" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens)),
                     _ => syn::Expr::Macro(mac.clone())
                 }
+            },
+            return_transform: &mut |ret| {
+                // Transform each return statement into a yield, drops, and return.
+                // We use RefCell on awaited_future_drops and import_drops so that they can be read while being modified.
+                // This ensures that we won't drop uninitialized values.'
+                // The executor will stop the execution as soon as it reaches the first `yield Complete` statement.
+                // Drops are written between the yield and return, so these values are retained inside the generator
+                // until the generator itself was dropped.
+                // We drop the generator only after semaphore was signaled from within the queue.
+                let returned_item = ret.expr.as_ref();
+                let awaited_future_drops = &*awaited_future_drops.borrow();
+                let import_drops = &*import_drops.borrow();
+                let token_stream = quote::quote!(
+                    {
+                        yield std::ops::GeneratorState::Complete(#returned_item);
+                        #awaited_future_drops
+                        #import_drops
+                        return;
+                    }
+                );
+                let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
+                Some(syn::Expr::Block(block))
             }
         })
     })
     .collect();
+
+    if let Some(last) = inner_closure_stmts.last_mut() {
+        
+        let awaited_future_drops = &*awaited_future_drops.borrow();
+        let import_drops = &*import_drops.borrow();
+        if let syn::Stmt::Expr(expr) = last {
+            let token_stream = quote::quote!(
+                {
+                    yield std::ops::GeneratorState::Complete(#expr);
+                    #awaited_future_drops
+                    #import_drops
+                    return;
+                }
+            );
+            let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
+            *expr = syn::Expr::Block(block);
+        } else {
+            let token_stream = quote::quote!(
+                {
+                    yield std::ops::GeneratorState::Complete(());
+                    #awaited_future_drops
+                    #import_drops
+                    return;
+                }
+            );
+            let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
+            inner_closure_stmts.push(syn::Stmt::Expr(syn::Expr::Block(block)))
+        }
+    }
+
     quote::quote! {
         async_ash::future::GPUCommandBlock::new(static |__fut_ctx| {
             #import_bindings
             #awaited_future_bindings
             #(#inner_closure_stmts)*
-
-            yield std::ops::GeneratorState::Complete(());
-            #awaited_future_drops
-            #import_drops
-            return;
         })
     }
 }

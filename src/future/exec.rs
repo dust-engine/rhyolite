@@ -64,13 +64,14 @@ impl GPUCommandFutureContext {
 
 pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
     #[inline]
-    fn record_all(self, command_buffer: vk::CommandBuffer) -> Self::Output {
-        let mut this = std::pin::pin!(self);
+    fn record_all(mut self, command_buffer: vk::CommandBuffer) -> Self::Output {
+        let mut this = unsafe { std::pin::Pin::new_unchecked(&mut self) };
         this.as_mut().init();
         let result = loop {
             if let Poll::Ready(result) = this.as_mut().record(command_buffer) {
                 break result;
             }
+            println!("-----pipeline barrier-------")
         };
         println!("End");
         result
