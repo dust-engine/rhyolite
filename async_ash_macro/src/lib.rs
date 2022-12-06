@@ -1,5 +1,5 @@
 extern crate proc_macro;
-use std::{cell::RefCell, borrow::Borrow};
+use std::{borrow::Borrow, cell::RefCell};
 
 use quote::ToTokens;
 use syn::{
@@ -19,8 +19,12 @@ impl Parse for ExprGpuAsync {
     }
 }
 
-
-struct TransformContext<'a, A: FnMut(&syn::ExprAwait) -> syn::Expr, M: FnMut(&syn::ExprMacro) -> syn::Expr, R: FnMut(&syn::ExprReturn) -> Option<syn::Expr>> {
+struct TransformContext<
+    'a,
+    A: FnMut(&syn::ExprAwait) -> syn::Expr,
+    M: FnMut(&syn::ExprMacro) -> syn::Expr,
+    R: FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
+> {
     async_transform: &'a mut A,
     macro_transform: &'a mut M,
     return_transform: &'a mut R,
@@ -28,12 +32,22 @@ struct TransformContext<'a, A: FnMut(&syn::ExprAwait) -> syn::Expr, M: FnMut(&sy
 
 fn transform_stmt_asyncs(
     stmt: &syn::Stmt,
-    transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
+    transform_context: &mut TransformContext<
+        '_,
+        impl FnMut(&syn::ExprAwait) -> syn::Expr,
+        impl FnMut(&syn::ExprMacro) -> syn::Expr,
+        impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
+    >,
 ) -> syn::Stmt {
     use syn::{Block, Expr, Pat, Stmt};
     fn transform_block(
         block: &Block,
-        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
+        transform_context: &mut TransformContext<
+            '_,
+            impl FnMut(&syn::ExprAwait) -> syn::Expr,
+            impl FnMut(&syn::ExprMacro) -> syn::Expr,
+            impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
+        >,
     ) -> Block {
         Block {
             brace_token: block.brace_token.clone(),
@@ -46,7 +60,12 @@ fn transform_stmt_asyncs(
     }
     fn transform_pattern(
         pat: &Pat,
-        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
+        transform_context: &mut TransformContext<
+            '_,
+            impl FnMut(&syn::ExprAwait) -> syn::Expr,
+            impl FnMut(&syn::ExprMacro) -> syn::Expr,
+            impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
+        >,
     ) -> Pat {
         match pat {
             Pat::Box(pat) => Pat::Box(syn::PatBox {
@@ -131,7 +150,12 @@ fn transform_stmt_asyncs(
     }
     fn transform_expr(
         expr: &Expr,
-        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
+        transform_context: &mut TransformContext<
+            '_,
+            impl FnMut(&syn::ExprAwait) -> syn::Expr,
+            impl FnMut(&syn::ExprMacro) -> syn::Expr,
+            impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
+        >,
     ) -> Expr {
         match expr {
             Expr::Array(arr) => Expr::Array(syn::ExprArray {
@@ -278,7 +302,7 @@ fn transform_stmt_asyncs(
                         ..ret.clone()
                     })
                 }
-            },
+            }
             Expr::Struct(s) => Expr::Struct(syn::ExprStruct {
                 fields: s
                     .fields
@@ -326,7 +350,12 @@ fn transform_stmt_asyncs(
     }
     fn transform_stmt(
         stmt: &Stmt,
-        transform_context: &mut TransformContext<'_, impl FnMut(&syn::ExprAwait) -> syn::Expr, impl FnMut(&syn::ExprMacro) -> syn::Expr, impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>>
+        transform_context: &mut TransformContext<
+            '_,
+            impl FnMut(&syn::ExprAwait) -> syn::Expr,
+            impl FnMut(&syn::ExprMacro) -> syn::Expr,
+            impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
+        >,
     ) -> Stmt {
         match stmt {
             Stmt::Local(local) => Stmt::Local(syn::Local {
@@ -339,9 +368,7 @@ fn transform_stmt_asyncs(
                 }),
                 ..local.clone()
             }),
-            Stmt::Expr(expr) => {
-                Stmt::Expr(transform_expr(&expr, transform_context))
-            },
+            Stmt::Expr(expr) => Stmt::Expr(transform_expr(&expr, transform_context)),
             Stmt::Semi(expr, semi) => {
                 Stmt::Semi(transform_expr(expr, transform_context), semi.clone())
             }
@@ -365,20 +392,22 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     let mut current_import_id: usize = 0;
     let mut import_bindings = proc_macro2::TokenStream::new();
     let mut import_drops = RefCell::new(proc_macro2::TokenStream::new());
-    let mut proc_macro_import_expr = |input_tokens: &proc_macro2::TokenStream| -> proc_macro2::TokenStream {
-        let global_res_variable_name = quote::format_ident!("__future_res_{}", current_import_id);
-        current_import_id += 1;
-        let output_tokens = quote::quote! {
-            ::async_ash::future::Res::new(0, &#global_res_variable_name)
+    let mut proc_macro_import_expr =
+        |input_tokens: &proc_macro2::TokenStream| -> proc_macro2::TokenStream {
+            let global_res_variable_name =
+                quote::format_ident!("__future_res_{}", current_import_id);
+            current_import_id += 1;
+            let output_tokens = quote::quote! {
+                ::async_ash::future::Res::new(0, &#global_res_variable_name)
+            };
+            import_bindings.extend(quote::quote! {
+                let #global_res_variable_name = #input_tokens;
+            });
+            import_drops.borrow_mut().extend(quote::quote! {
+                drop(#global_res_variable_name);
+            });
+            output_tokens
         };
-        import_bindings.extend(quote::quote! {
-            let #global_res_variable_name = #input_tokens;
-        });
-        import_drops.borrow_mut().extend(quote::quote! {
-            drop(#global_res_variable_name);
-        });
-        output_tokens
-    };
 
     // Count the total number of awaits in the input
 
@@ -466,7 +495,6 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     .collect();
 
     if let Some(last) = inner_closure_stmts.last_mut() {
-        
         let awaited_future_drops = &*awaited_future_drops.borrow();
         let import_drops = &*import_drops.borrow();
         if let syn::Stmt::Expr(expr) = last {

@@ -39,7 +39,7 @@ pub trait GPUCommandFuture {
 
     /// Returns the context for the operations recorded into the command buffer
     /// next time `record` was called.
-    fn context(self: Pin<&mut Self>, ctx: &mut GPUCommandFutureContext);
+    fn context(self: Pin<&mut Self>, ctx: &mut StageContext);
 
     /// Initialize the pinned future.
     /// This method is mostly a hook for `GPUCommandFutureBlock` to initialize

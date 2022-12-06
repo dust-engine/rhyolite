@@ -1,4 +1,4 @@
-use super::{GPUCommandFuture, GPUCommandFutureContext};
+use super::{GPUCommandFuture, StageContext};
 use ash::vk;
 use pin_project::pin_project;
 use std::pin::Pin;
@@ -11,7 +11,7 @@ pub trait GPUCommandFutureExt: GPUCommandFuture + Sized {
             inner1_result: None,
             inner2: other,
             inner2_result: None,
-            results_taken: false
+            results_taken: false,
         }
     }
     fn map<R, F: FnOnce(Self::Output) -> R>(self, mapper: F) -> GPUCommandMap<Self, F> {
@@ -44,7 +44,7 @@ where
     inner2: G2,
     inner2_result: Option<G2::Output>,
 
-    results_taken: bool
+    results_taken: bool,
 }
 
 impl<G1, G2> GPUCommandFuture for GPUCommandJoin<G1, G2>
@@ -80,7 +80,7 @@ where
         }
     }
 
-    fn context(self: Pin<&mut Self>, ctx: &mut GPUCommandFutureContext) {
+    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         let this = self.project();
         assert!(
             !*this.results_taken,
@@ -128,7 +128,7 @@ where
             }
         }
     }
-    fn context(self: Pin<&mut Self>, ctx: &mut GPUCommandFutureContext) {
+    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         self.project().inner.context(ctx);
     }
     fn init(self: Pin<&mut Self>) {

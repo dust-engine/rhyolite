@@ -1,19 +1,19 @@
-use ash::vk;
-use std::{task::Poll, collections::{HashMap, BTreeMap}};
 use crate::Device;
+use ash::vk;
+use std::{
+    collections::{BTreeMap, HashMap},
+    task::Poll,
+};
 
 use super::GPUCommandFuture;
 
 pub struct Res<T> {
     id: u32,
-    inner: T
+    inner: T,
 }
 impl<T> Res<T> {
     pub fn new(id: u32, inner: T) -> Self {
-        Self {
-            id,
-            inner
-        }
+        Self { id, inner }
     }
 }
 
@@ -24,15 +24,24 @@ pub struct Access {
     write_access: vk::AccessFlags2,
 }
 
+pub struct GlobalContext {
+    pub total_resource_count: usize,
+    pub command_buffer: vk::CommandBuffer,
+}
 #[derive(Default)]
-pub struct GPUCommandFutureContext {
+pub struct StageContext {
     accesses: BTreeMap<u32, Access>,
 }
 
-impl GPUCommandFutureContext {
+impl StageContext {
     /// Declare a global memory write
     #[inline]
-    pub fn write<T>(&mut self, res: &Res<T>, stages: vk::PipelineStageFlags2, accesses: vk::AccessFlags2) {
+    pub fn write<T>(
+        &mut self,
+        res: &Res<T>,
+        stages: vk::PipelineStageFlags2,
+        accesses: vk::AccessFlags2,
+    ) {
         let entry = self.accesses.entry(res.id).or_insert(Access {
             read_stages: vk::PipelineStageFlags2::NONE,
             read_access: vk::AccessFlags2::NONE,
@@ -44,7 +53,12 @@ impl GPUCommandFutureContext {
     }
     /// Declare a global memory read
     #[inline]
-    pub fn read<T>(&mut self, res: &Res<T>, stages: vk::PipelineStageFlags2, accesses: vk::AccessFlags2) {
+    pub fn read<T>(
+        &mut self,
+        res: &Res<T>,
+        stages: vk::PipelineStageFlags2,
+        accesses: vk::AccessFlags2,
+    ) {
         let entry = self.accesses.entry(res.id).or_insert(Access {
             read_stages: vk::PipelineStageFlags2::NONE,
             read_access: vk::AccessFlags2::NONE,
@@ -60,7 +74,6 @@ impl GPUCommandFutureContext {
         self.accesses.append(&mut other.accesses);
     }
 }
-
 
 pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
     #[inline]
