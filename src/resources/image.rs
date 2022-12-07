@@ -6,6 +6,7 @@ use crate::{DebugObject, Device, HasDevice};
 
 pub trait ImageLike: Send + Sync {
     fn raw_image(&self) -> vk::Image;
+    fn subresource_range(&self) -> vk::ImageSubresourceRange;
 }
 
 pub trait ImageViewLike: ImageLike {
@@ -17,11 +18,15 @@ impl ImageLike for vk::Image {
     fn raw_image(&self) -> vk::Image {
         *self
     }
+    fn subresource_range(&self) -> vk::ImageSubresourceRange {
+        unimplemented!("Raw image cannot be used here")
+    }
 }
 
 pub struct Image {
     device: Arc<Device>,
     pub(crate) image: vk::Image,
+    format: vk::Format,
 }
 
 impl HasDevice for Image {
@@ -41,7 +46,11 @@ impl DebugObject for Image {
 impl Image {
     pub fn new(device: Arc<Device>, info: &vk::ImageCreateInfo) -> VkResult<Self> {
         let image = unsafe { device.create_image(info, None)? };
-        Ok(Self { device, image })
+        Ok(Self {
+            device,
+            image,
+            format: info.format,
+        })
     }
 }
 
@@ -49,12 +58,36 @@ impl ImageLike for Image {
     fn raw_image(&self) -> vk::Image {
         self.image
     }
+    fn subresource_range(&self) -> vk::ImageSubresourceRange {
+        let aspect_mask = match self.format {
+            vk::Format::D16_UNORM | vk::Format::D32_SFLOAT | vk::Format::X8_D24_UNORM_PACK32 => {
+                vk::ImageAspectFlags::DEPTH
+            }
+            vk::Format::D16_UNORM_S8_UINT
+            | vk::Format::D24_UNORM_S8_UINT
+            | vk::Format::D32_SFLOAT_S8_UINT => {
+                vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+            }
+            _ => vk::ImageAspectFlags::COLOR,
+        };
+        vk::ImageSubresourceRange {
+            aspect_mask,
+            base_mip_level: 0,
+            level_count: vk::REMAINING_MIP_LEVELS,
+            base_array_layer: 0,
+            layer_count: vk::REMAINING_ARRAY_LAYERS,
+        }
+    }
 }
 
 impl<T: ImageLike> ImageLike for Arc<T> {
     fn raw_image(&self) -> vk::Image {
         let r: &T = self.as_ref();
         r.raw_image()
+    }
+    fn subresource_range(&self) -> vk::ImageSubresourceRange {
+        let r: &T = self.as_ref();
+        r.subresource_range()
     }
 }
 
@@ -71,11 +104,32 @@ pub struct MemImage {
     pub image: vk::Image,
     pub memory: Allocation,
     pub memory_flags: vk::MemoryPropertyFlags,
+    format: vk::Format,
 }
 
 impl ImageLike for MemImage {
     fn raw_image(&self) -> vk::Image {
         self.image
+    }
+    fn subresource_range(&self) -> vk::ImageSubresourceRange {
+        let aspect_mask = match self.format {
+            vk::Format::D16_UNORM | vk::Format::D32_SFLOAT | vk::Format::X8_D24_UNORM_PACK32 => {
+                vk::ImageAspectFlags::DEPTH
+            }
+            vk::Format::D16_UNORM_S8_UINT
+            | vk::Format::D24_UNORM_S8_UINT
+            | vk::Format::D32_SFLOAT_S8_UINT => {
+                vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+            }
+            _ => vk::ImageAspectFlags::COLOR,
+        };
+        vk::ImageSubresourceRange {
+            aspect_mask,
+            base_mip_level: 0,
+            level_count: vk::REMAINING_MIP_LEVELS,
+            base_array_layer: 0,
+            layer_count: vk::REMAINING_ARRAY_LAYERS,
+        }
     }
 }
 
@@ -161,6 +215,7 @@ impl Allocator {
             image,
             memory: allocation,
             memory_flags,
+            format: image_request.format,
         })
     }
 }

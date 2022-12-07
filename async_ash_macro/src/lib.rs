@@ -392,25 +392,28 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     let mut current_import_id: usize = 0;
     let mut import_bindings = proc_macro2::TokenStream::new();
     let mut import_drops = RefCell::new(proc_macro2::TokenStream::new());
-    let mut proc_macro_import_expr =
-        |input_tokens: &proc_macro2::TokenStream| -> proc_macro2::TokenStream {
-            let global_res_variable_name =
-                quote::format_ident!("__future_res_{}", current_import_id);
-            current_import_id += 1;
-            let output_tokens = quote::quote! {{
-                let id = __fut_global_ctx.total_resource_count;
-                __fut_global_ctx.total_resource_count += 1;
-                ::async_ash::future::Res::new(id, &#global_res_variable_name)
-            }};
-            import_bindings.extend(quote::quote! {
-                let #global_res_variable_name = #input_tokens;
-            });
-            import_drops.borrow_mut().extend(quote::quote! {
-                drop(#global_res_variable_name);
-            });
-            output_tokens
+    let mut proc_macro_import_expr = |input_tokens: &proc_macro2::TokenStream,
+                                      is_image: bool|
+     -> proc_macro2::TokenStream {
+        let global_res_variable_name = quote::format_ident!("__future_res_{}", current_import_id);
+        current_import_id += 1;
+        let output_tokens = if is_image {
+            quote::quote! {{
+                __fut_global_ctx.add_image(&#global_res_variable_name)
+            }}
+        } else {
+            quote::quote! {{
+                __fut_global_ctx.add_res(&#global_res_variable_name)
+            }}
         };
-
+        import_bindings.extend(quote::quote! {
+            let #global_res_variable_name = #input_tokens;
+        });
+        import_drops.borrow_mut().extend(quote::quote! {
+            drop(#global_res_variable_name);
+        });
+        output_tokens
+    };
     // Count the total number of awaits in the input
 
     let mut current_await_index: usize = 0;
@@ -466,7 +469,8 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
                     return syn::Expr::Macro(mac.clone());
                 }
                 match path.segments[0].ident.to_string().as_str() {
-                    "import" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens)),
+                    "import" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens, false)),
+                    "import_image" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens, true)),
                     _ => syn::Expr::Macro(mac.clone())
                 }
             },

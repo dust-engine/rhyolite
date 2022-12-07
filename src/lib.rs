@@ -8,6 +8,7 @@
 #![feature(iter_from_generator)]
 #![feature(async_closure)]
 #![feature(trait_alias)]
+#![feature(allocator_api)]
 
 extern crate self as async_ash;
 
@@ -19,6 +20,7 @@ mod physical_device;
 mod queue;
 mod resources;
 mod semaphore;
+pub mod utils;
 
 pub use debug::{DebugObject, DebugUtilsMessenger};
 pub use device::{Device, HasDevice};
