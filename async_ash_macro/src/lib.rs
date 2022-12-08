@@ -383,6 +383,33 @@ pub fn commands(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     proc_macro_commands(input.into()).into()
 }
 
+
+struct ForkInput {
+    forked_future: syn::Expr,
+    number_of_forks: Option<(syn::Token![,], usize)>,
+}
+impl Parse for ForkInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let forked_future = input.parse()?;
+        let number_of_forks = {
+            let comma: Option<syn::Token![,]> = input.parse()?;
+            if let Some(comma) = comma {
+                let number: syn::LitInt = input.parse()?;
+                let number = number.base10_parse::<usize>()?;
+                Some((comma, number))
+            } else {
+                None
+            }
+        };
+        
+        Ok(ForkInput {
+            forked_future,
+            number_of_forks
+        })
+    }
+}
+
+
 fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let input = match syn::parse2::<ExprGpuAsync>(input) {
         Ok(input) => input,
@@ -419,6 +446,44 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
     let mut current_await_index: usize = 0;
     let mut awaited_future_bindings = proc_macro2::TokenStream::new();
     let awaited_future_drops = RefCell::new(proc_macro2::TokenStream::new());
+
+    // Forks require advance declarations of pinned futures to ensure correct drop order.
+    let mut current_fork_index: usize = 0;
+    let mut fork_advance_decl = proc_macro2::TokenStream::new();
+    let fork_future_drops = RefCell::new(proc_macro2::TokenStream::new());
+    let mut proc_macro_fork_expr = |input_tokens: &proc_macro2::TokenStream| -> proc_macro2::TokenStream {
+        let ForkInput { forked_future, number_of_forks } = match syn::parse2::<ForkInput>(input_tokens.clone()) {
+            Ok(input) => input,
+            Err(err) => return err.to_compile_error(),
+        };
+        let global_fut_variable_name = quote::format_ident!("__future_forked_{}", current_fork_index);
+        let global_fut_variable_name_inner = quote::format_ident!("__future_forked_{}_inner", current_fork_index);
+        current_fork_index += 1;
+        fork_advance_decl.extend(quote::quote! {
+            let mut #global_fut_variable_name;
+            let mut #global_fut_variable_name_inner;
+        });
+        fork_future_drops.borrow_mut().extend(quote::quote! {
+            drop(#global_fut_variable_name);
+        });
+        let number_of_forks = number_of_forks.map(|(_, number)| number).unwrap_or(2);
+        let ret = syn::Expr::Tuple(syn::ExprTuple {
+            attrs: Vec::new(),
+            paren_token: Default::default(),
+            elems: (0..number_of_forks).map(|_| syn::Expr::Verbatim(quote::quote! {
+                GPUCommandForked::new(&#global_fut_variable_name_inner)
+            })).collect()
+        });
+        quote::quote! {{
+            #global_fut_variable_name = #forked_future; 
+            let mut pinned = unsafe{std::pin::Pin::new_unchecked(&mut #global_fut_variable_name)};
+            pinned.as_mut().init(__fut_global_ctx);
+            #global_fut_variable_name_inner = GPUCommandForkedInner::new(pinned);
+            #ret
+        }}
+    };
+
+
     let mut inner_closure_stmts: Vec<_> = input
     .stmts
     .iter()
@@ -471,6 +536,7 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
                 match path.segments[0].ident.to_string().as_str() {
                     "import" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens, false)),
                     "import_image" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens, true)),
+                    "fork" => syn::Expr::Verbatim(proc_macro_fork_expr(&mac.mac.tokens)),
                     _ => syn::Expr::Macro(mac.clone())
                 }
             },
@@ -502,12 +568,14 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
 
     if let Some(last) = inner_closure_stmts.last_mut() {
         let awaited_future_drops = &*awaited_future_drops.borrow();
+        let fork_future_drops = &*fork_future_drops.borrow();
         let import_drops = &*import_drops.borrow();
         if let syn::Stmt::Expr(expr) = last {
             let token_stream = quote::quote!(
                 {
                     yield std::ops::GeneratorState::Complete(#expr);
                     #awaited_future_drops
+                    #fork_future_drops
                     #import_drops
                     return;
                 }
@@ -519,6 +587,7 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
                 {
                     yield std::ops::GeneratorState::Complete(());
                     #awaited_future_drops
+                    #fork_future_drops
                     #import_drops
                     return;
                 }
@@ -532,6 +601,7 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
         async_ash::future::GPUCommandBlock::new(static |__fut_global_ctx: *mut ::async_ash::future::GlobalContext| {
             let __fut_global_ctx: &mut ::async_ash::future::GlobalContext = unsafe{&mut *__fut_global_ctx};
             #import_bindings
+            #fork_advance_decl
             #awaited_future_bindings
             #(#inner_closure_stmts)*
         })

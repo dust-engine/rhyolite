@@ -110,8 +110,12 @@ enum GlobalContextResource {
 pub struct GlobalContext {
     resources: Vec<GlobalContextResource>,
     pub command_buffer: vk::CommandBuffer,
+    stage_index: u32,
 }
 impl GlobalContext {
+    pub fn current_stage_index(&self) -> u32 {
+        self.stage_index
+    }
     pub fn add_res<T>(&mut self, res: T) -> Res<T> {
         let id = self.resources.len() as u32;
         Res { id, inner: res }
@@ -234,12 +238,13 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
     #[inline]
     fn record_all(
         mut self,
-        device: &crate::Device,
+        //device: &crate::Device,
         command_buffer: vk::CommandBuffer,
     ) -> Self::Output {
         let mut ctx = GlobalContext {
             resources: Vec::new(),
             command_buffer,
+            stage_index: 0,
         };
 
         let mut this = unsafe { std::pin::Pin::new_unchecked(&mut self) };
@@ -376,6 +381,7 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
                 // No need for pipeline barrier
                 println!("Warning: unnecessary dependency");
             } else {
+                /*
                 unsafe {
                     device.cmd_pipeline_barrier2(
                         command_buffer,
@@ -387,10 +393,12 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
                         },
                     );
                 }
+                */
             }
             memory_barrier = vk::MemoryBarrier2::default();
             image_barrier.clear();
             current_context = next_context;
+            ctx.stage_index += 1;
         };
         println!("End");
         result
