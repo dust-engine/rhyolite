@@ -5,6 +5,7 @@ use std::task::Poll;
 mod block;
 mod exec;
 mod ext;
+mod queue_exec;
 pub use block::*;
 pub use exec::*;
 pub use ext::*;
@@ -13,6 +14,9 @@ pub use async_ash_macro::{commands, join};
 
 pub trait GPUCommandFuture {
     type Output;
+
+    /// Objects with lifetimes that need to be extended until the future was executed on the GPU.
+    type RetainedState;
 
     /// Attempt to record as many commands as possible into the provided
     /// command_buffer until a pipeline barrier is needed.
@@ -35,7 +39,10 @@ pub trait GPUCommandFuture {
     ///
     /// Futures alone are *inert*; they must be `record`ed into a command
     /// buffer and submitted to a queue in order to do work on the GPU.
-    fn record(self: Pin<&mut Self>, ctx: &mut GlobalContext) -> Poll<Self::Output>;
+    fn record(
+        self: Pin<&mut Self>,
+        ctx: &mut GlobalContext,
+    ) -> Poll<(Self::Output, Self::RetainedState)>;
 
     /// Returns the context for the operations recorded into the command buffer
     /// next time `record` was called.

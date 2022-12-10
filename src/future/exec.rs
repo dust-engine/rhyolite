@@ -8,16 +8,22 @@ use std::{
 
 use super::GPUCommandFuture;
 
-pub struct Res<T> {
+pub struct Res<'a, T> {
     id: u32,
-    inner: T,
+    inner: &'a mut T,
 }
-impl<T> Res<T> {
-    pub fn new(id: u32, inner: T) -> Self {
+impl<'a, T> Res<'a, T> {
+    pub fn new(id: u32, inner: &'a mut T) -> Self {
         Self { id, inner }
     }
     pub fn id(&self) -> u32 {
         self.id
+    }
+    pub fn inner(&self) -> &T {
+        self.inner
+    }
+    pub fn inner_mut(&mut self) -> &mut T {
+        self.inner
     }
 }
 
@@ -116,11 +122,16 @@ impl GlobalContext {
     pub fn current_stage_index(&self) -> u32 {
         self.stage_index
     }
-    pub fn add_res<T>(&mut self, res: T) -> Res<T> {
+    pub fn add_res<'a, T>(&mut self, res: &'a mut T) -> Res<'a, T> {
         let id = self.resources.len() as u32;
+        self.resources.push(GlobalContextResource::Memory);
         Res { id, inner: res }
     }
-    pub fn add_image<T: ImageLike>(&mut self, res: T, initial_layout: vk::ImageLayout) -> Res<T> {
+    pub fn add_image<'a, T: ImageLike>(
+        &mut self,
+        res: &'a mut T,
+        initial_layout: vk::ImageLayout,
+    ) -> Res<'a, T> {
         let id = self.resources.len() as u32;
         self.resources.push(GlobalContextResource::Image {
             initial_layout,
@@ -257,7 +268,7 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
         let mut memory_barrier = vk::MemoryBarrier2::default();
         let mut image_barrier: Vec<vk::ImageMemoryBarrier2> = Vec::new();
 
-        let result = loop {
+        let (result, retained_state) = loop {
             if let Poll::Ready(result) = this.as_mut().record(&mut ctx) {
                 break result;
             }
@@ -270,7 +281,8 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
                 btree_map_union(&current_context.accesses, &next_context.accesses)
             {
                 let res = &ctx.resources[*id as usize];
-                let before_access = before_access.or(resource_accesses.get(*id as usize).and_then(|a| a.as_ref()));
+                let before_access =
+                    before_access.or(resource_accesses.get(*id as usize).and_then(|a| a.as_ref()));
                 match (res, before_access, after_access) {
                     (GlobalContextResource::Memory, Some(before_access), Some(after_access)) => {
                         get_memory_access(&mut memory_barrier, before_access, after_access)
@@ -309,7 +321,8 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
                         },
                         Some(before_access),
                         Some(after_access),
-                    ) if after_access.expected_layout() == vk::ImageLayout::UNDEFINED && after_access.produced_layout() != vk::ImageLayout::UNDEFINED =>
+                    ) if after_access.expected_layout() == vk::ImageLayout::UNDEFINED
+                        && after_access.produced_layout() != vk::ImageLayout::UNDEFINED =>
                     {
                         // Image layout transition. Prev image is in VALID or UNDEFINED. Next image is VALID to be read.
                         let mut image_memory_barrier = vk::MemoryBarrier2::default();
@@ -351,12 +364,15 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
                         if new_layout == vk::ImageLayout::UNDEFINED {
                             new_layout = after_access.produced_layout();
                         }
-                        if *initial_layout != new_layout && new_layout != vk::ImageLayout::UNDEFINED {
+                        if *initial_layout != new_layout && new_layout != vk::ImageLayout::UNDEFINED
+                        {
                             image_barrier.push(vk::ImageMemoryBarrier2 {
                                 src_stage_mask: vk::PipelineStageFlags2::NONE,
                                 src_access_mask: vk::AccessFlags2::NONE,
-                                dst_stage_mask: after_access.read_stages | after_access.write_stages,
-                                dst_access_mask: after_access.read_access | after_access.write_access,
+                                dst_stage_mask: after_access.read_stages
+                                    | after_access.write_stages,
+                                dst_access_mask: after_access.read_access
+                                    | after_access.write_access,
                                 old_layout: *initial_layout,
                                 new_layout,
                                 image: *image,
@@ -371,7 +387,7 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
 
                 let id = *id as usize;
                 let before_access = before_access.map(|a| a.clone());
-                resource_accesses.resize(resource_accesses.len().max(id), None);
+                resource_accesses.resize(resource_accesses.len().max(id + 1), None);
                 resource_accesses[id] = before_access.map(|a| a.clone());
             }
             if memory_barrier.src_stage_mask.is_empty()
@@ -400,7 +416,9 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
             current_context = next_context;
             ctx.stage_index += 1;
         };
-        println!("End");
+        println!("End, starting dropping state");
+        drop(retained_state);
+        println!("End, ending dropping state");
         result
     }
 }

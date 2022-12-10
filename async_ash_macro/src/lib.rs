@@ -19,94 +19,121 @@ impl Parse for ExprGpuAsync {
     }
 }
 
-struct TransformContext<
-    'a,
-    A: FnMut(&syn::ExprAwait) -> syn::Expr,
-    M: FnMut(&syn::ExprMacro) -> syn::Expr,
-    R: FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
-> {
-    async_transform: &'a mut A,
-    macro_transform: &'a mut M,
-    return_transform: &'a mut R,
+#[proc_macro]
+pub fn commands(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    proc_macro_commands(input.into()).into()
 }
 
-fn transform_stmt_asyncs(
-    stmt: &syn::Stmt,
-    transform_context: &mut TransformContext<
-        '_,
-        impl FnMut(&syn::ExprAwait) -> syn::Expr,
-        impl FnMut(&syn::ExprMacro) -> syn::Expr,
-        impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
-    >,
-) -> syn::Stmt {
-    use syn::{Block, Expr, Pat, Stmt};
-    fn transform_block(
-        block: &Block,
-        transform_context: &mut TransformContext<
-            '_,
-            impl FnMut(&syn::ExprAwait) -> syn::Expr,
-            impl FnMut(&syn::ExprMacro) -> syn::Expr,
-            impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
-        >,
-    ) -> Block {
+struct ForkInput {
+    forked_future: syn::Expr,
+    number_of_forks: Option<(syn::Token![,], usize)>,
+    comma: syn::Token![,],
+    scope: syn::Block,
+}
+impl Parse for ForkInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let forked_future = input.parse()?;
+        let comma: syn::Token![,] = input.parse()?;
+        let number_of_forks = {
+            let number: syn::LitInt = input.parse()?;
+            let number = number.base10_parse::<usize>()?;
+            Some(number)
+        };
+        let number_of_forks = if let Some(number_of_forks) = number_of_forks {
+            Some((comma, number_of_forks))
+        } else {
+            None
+        };
+
+        Ok(ForkInput {
+            forked_future,
+            number_of_forks,
+            comma: input.parse()?,
+            scope: input.parse()?,
+        })
+    }
+}
+
+struct CommandsTransformState {
+    current_import_id: usize,
+    import_bindings: proc_macro2::TokenStream,
+    import_drops: proc_macro2::TokenStream,
+    import_retained_states: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
+
+    current_await_index: usize,
+    await_bindings: proc_macro2::TokenStream,
+    await_drops: proc_macro2::TokenStream,
+    await_retained_states: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
+}
+impl Default for CommandsTransformState {
+    fn default() -> Self {
+        use proc_macro2::TokenStream;
+        use syn::punctuated::Punctuated;
+        Self {
+            current_import_id: 0,
+            import_bindings: TokenStream::new(),
+            import_drops: TokenStream::new(),
+            import_retained_states: Punctuated::new(),
+
+            current_await_index: 0,
+            await_bindings: TokenStream::new(),
+            await_drops: TokenStream::new(),
+            await_retained_states: Punctuated::new(),
+        }
+    }
+}
+
+use syn::{Block, Expr, Pat, Stmt};
+impl CommandsTransformState {
+    fn transform_block(&mut self, block: &Block) -> Block {
         Block {
             brace_token: block.brace_token.clone(),
             stmts: block
                 .stmts
                 .iter()
-                .map(move |stmt| transform_stmt(stmt, transform_context))
+                .map(move |stmt| self.transform_stmt(stmt))
                 .collect(),
         }
     }
-    fn transform_pattern(
-        pat: &Pat,
-        transform_context: &mut TransformContext<
-            '_,
-            impl FnMut(&syn::ExprAwait) -> syn::Expr,
-            impl FnMut(&syn::ExprMacro) -> syn::Expr,
-            impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
-        >,
-    ) -> Pat {
+    fn transform_pattern(&mut self, pat: &Pat) -> Pat {
         match pat {
             Pat::Box(pat) => Pat::Box(syn::PatBox {
-                pat: Box::new(transform_pattern(&pat.pat, transform_context)),
+                pat: Box::new(self.transform_pattern(&pat.pat)),
                 ..pat.clone()
             }),
             Pat::Ident(ident) => Pat::Ident(syn::PatIdent {
-                subpat: ident.subpat.as_ref().map(|(at, subpat)| {
-                    (
-                        at.clone(),
-                        Box::new(transform_pattern(subpat, transform_context)),
-                    )
-                }),
+                subpat: ident
+                    .subpat
+                    .as_ref()
+                    .map(|(at, subpat)| (at.clone(), Box::new(self.transform_pattern(subpat)))),
                 ..ident.clone()
             }),
             Pat::Lit(lit) => Pat::Lit(syn::PatLit {
-                expr: Box::new(transform_expr(&lit.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&lit.expr)),
                 ..lit.clone()
             }),
             Pat::Or(clause) => Pat::Or(syn::PatOr {
                 cases: clause
                     .cases
                     .iter()
-                    .map(|pat| transform_pattern(pat, transform_context))
+                    .map(|pat| self.transform_pattern(pat))
                     .collect(),
                 ..clause.clone()
             }),
             Pat::Range(range) => Pat::Range(syn::PatRange {
-                lo: Box::new(transform_expr(&range.lo, transform_context)),
-                hi: Box::new(transform_expr(&range.hi, transform_context)),
+                lo: Box::new(self.transform_expr(&range.lo)),
+                hi: Box::new(self.transform_expr(&range.hi)),
                 ..range.clone()
             }),
             Pat::Reference(r) => Pat::Reference(syn::PatReference {
-                pat: Box::new(transform_pattern(&r.pat, transform_context)),
+                pat: Box::new(self.transform_pattern(&r.pat)),
                 ..r.clone()
             }),
             Pat::Slice(slice) => Pat::Slice(syn::PatSlice {
                 elems: slice
                     .elems
                     .iter()
-                    .map(|pat| transform_pattern(pat, transform_context))
+                    .map(|pat| self.transform_pattern(pat))
                     .collect(),
                 ..slice.clone()
             }),
@@ -115,7 +142,7 @@ fn transform_stmt_asyncs(
                     .fields
                     .iter()
                     .map(|f| syn::FieldPat {
-                        pat: Box::new(transform_pattern(&f.pat, transform_context)),
+                        pat: Box::new(self.transform_pattern(&f.pat)),
                         ..f.clone()
                     })
                     .collect(),
@@ -125,7 +152,7 @@ fn transform_stmt_asyncs(
                 elems: tuple
                     .elems
                     .iter()
-                    .map(|pat| transform_pattern(pat, transform_context))
+                    .map(|pat| self.transform_pattern(pat))
                     .collect(),
                 ..tuple.clone()
             }),
@@ -135,170 +162,150 @@ fn transform_stmt_asyncs(
                         .pat
                         .elems
                         .iter()
-                        .map(|pat| transform_pattern(pat, transform_context))
+                        .map(|pat| self.transform_pattern(pat))
                         .collect(),
                     ..tuple.pat.clone()
                 },
                 ..tuple.clone()
             }),
             Pat::Type(ty) => Pat::Type(syn::PatType {
-                pat: Box::new(transform_pattern(&ty.pat, transform_context)),
+                pat: Box::new(self.transform_pattern(&ty.pat)),
                 ..ty.clone()
             }),
             _ => pat.clone(),
         }
     }
-    fn transform_expr(
-        expr: &Expr,
-        transform_context: &mut TransformContext<
-            '_,
-            impl FnMut(&syn::ExprAwait) -> syn::Expr,
-            impl FnMut(&syn::ExprMacro) -> syn::Expr,
-            impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
-        >,
-    ) -> Expr {
+    fn transform_expr(&mut self, expr: &Expr) -> Expr {
         match expr {
             Expr::Array(arr) => Expr::Array(syn::ExprArray {
                 elems: arr
                     .elems
                     .iter()
-                    .map(|expr| transform_expr(expr, transform_context))
+                    .map(|expr| self.transform_expr(expr))
                     .collect(),
                 ..arr.clone()
             }),
             Expr::Assign(assign) => Expr::Assign(syn::ExprAssign {
-                left: Box::new(transform_expr(&*assign.left, transform_context)),
-                right: Box::new(transform_expr(&*assign.right, transform_context)),
+                left: Box::new(self.transform_expr(&*assign.left)),
+                right: Box::new(self.transform_expr(&*assign.right)),
                 ..assign.clone()
             }),
             Expr::AssignOp(assign) => Expr::AssignOp(syn::ExprAssignOp {
-                left: Box::new(transform_expr(&*assign.left, transform_context)),
-                right: Box::new(transform_expr(&*assign.right, transform_context)),
+                left: Box::new(self.transform_expr(&*assign.left)),
+                right: Box::new(self.transform_expr(&*assign.right)),
                 ..assign.clone()
             }),
             Expr::Binary(binary) => Expr::Binary(syn::ExprBinary {
-                left: Box::new(transform_expr(&*binary.left, transform_context)),
-                right: Box::new(transform_expr(&*binary.right, transform_context)),
+                left: Box::new(self.transform_expr(&*binary.left)),
+                right: Box::new(self.transform_expr(&*binary.right)),
                 ..binary.clone()
             }),
             Expr::Block(block) => Expr::Block(syn::ExprBlock {
-                block: transform_block(&block.block, transform_context),
+                block: self.transform_block(&block.block),
                 ..block.clone()
             }),
             Expr::Call(call) => Expr::Call(syn::ExprCall {
-                func: Box::new(transform_expr(&*call.func, transform_context)),
+                func: Box::new(self.transform_expr(&*call.func)),
                 args: call
                     .args
                     .iter()
-                    .map(|expr| transform_expr(expr, transform_context))
+                    .map(|expr| self.transform_expr(expr))
                     .collect(),
                 ..call.clone()
             }),
             Expr::Cast(cast) => Expr::Cast(syn::ExprCast {
-                expr: Box::new(transform_expr(&*cast.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&*cast.expr)),
                 ..cast.clone()
             }),
             Expr::Field(field) => Expr::Field(syn::ExprField {
-                base: Box::new(transform_expr(&*field.base, transform_context)),
+                base: Box::new(self.transform_expr(&*field.base)),
                 ..field.clone()
             }),
             Expr::ForLoop(l) => Expr::ForLoop(syn::ExprForLoop {
-                pat: transform_pattern(&l.pat, transform_context),
-                expr: Box::new(transform_expr(&*l.expr, transform_context)),
-                body: transform_block(&l.body, transform_context),
+                pat: self.transform_pattern(&l.pat),
+                expr: Box::new(self.transform_expr(&*l.expr)),
+                body: self.transform_block(&l.body),
                 ..l.clone()
             }),
             Expr::Group(group) => Expr::Group(syn::ExprGroup {
-                expr: Box::new(transform_expr(&group.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&group.expr)),
                 ..group.clone()
             }),
             Expr::If(if_stmt) => Expr::If(syn::ExprIf {
-                cond: Box::new(transform_expr(&if_stmt.cond, transform_context)),
-                then_branch: transform_block(&if_stmt.then_branch, transform_context),
+                cond: Box::new(self.transform_expr(&if_stmt.cond)),
+                then_branch: self.transform_block(&if_stmt.then_branch),
                 else_branch: if_stmt.else_branch.as_ref().map(|(else_token, expr)| {
-                    (
-                        else_token.clone(),
-                        Box::new(transform_expr(&expr, transform_context)),
-                    )
+                    (else_token.clone(), Box::new(self.transform_expr(&expr)))
                 }),
                 ..if_stmt.clone()
             }),
             Expr::Index(index_expr) => Expr::Index(syn::ExprIndex {
-                expr: Box::new(transform_expr(&*index_expr.expr, transform_context)),
-                index: Box::new(transform_expr(&*index_expr.index, transform_context)),
+                expr: Box::new(self.transform_expr(&*index_expr.expr)),
+                index: Box::new(self.transform_expr(&*index_expr.index)),
                 ..index_expr.clone()
             }),
             Expr::Let(l) => Expr::Let(syn::ExprLet {
-                pat: transform_pattern(&l.pat, transform_context),
-                expr: Box::new(transform_expr(&*l.expr, transform_context)),
+                pat: self.transform_pattern(&l.pat),
+                expr: Box::new(self.transform_expr(&*l.expr)),
                 ..l.clone()
             }),
             Expr::Loop(loop_stmt) => Expr::Loop(syn::ExprLoop {
-                body: transform_block(&loop_stmt.body, transform_context),
+                body: self.transform_block(&loop_stmt.body),
                 ..loop_stmt.clone()
             }),
-            Expr::Macro(m) => (transform_context.macro_transform)(m),
+            Expr::Macro(m) => self.macro_transform(m),
             Expr::Match(match_expr) => Expr::Match(syn::ExprMatch {
-                expr: Box::new(transform_expr(&*match_expr.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&*match_expr.expr)),
                 arms: match_expr
                     .arms
                     .iter()
                     .map(|arm| syn::Arm {
-                        pat: transform_pattern(&arm.pat, transform_context),
+                        pat: self.transform_pattern(&arm.pat),
                         guard: arm.guard.as_ref().map(|(guard_token, expr)| {
-                            (
-                                guard_token.clone(),
-                                Box::new(transform_expr(&expr, transform_context)),
-                            )
+                            (guard_token.clone(), Box::new(self.transform_expr(&expr)))
                         }),
-                        body: Box::new(transform_expr(&arm.body, transform_context)),
+                        body: Box::new(self.transform_expr(&arm.body)),
                         ..arm.clone()
                     })
                     .collect(),
                 ..match_expr.clone()
             }),
             Expr::MethodCall(call) => Expr::MethodCall(syn::ExprMethodCall {
-                receiver: Box::new(transform_expr(&call.receiver, transform_context)),
+                receiver: Box::new(self.transform_expr(&call.receiver)),
                 args: call
                     .args
                     .iter()
-                    .map(|expr| transform_expr(expr, transform_context))
+                    .map(|expr| self.transform_expr(expr))
                     .collect(),
                 ..call.clone()
             }),
             Expr::Paren(paren) => Expr::Paren(syn::ExprParen {
-                expr: Box::new(transform_expr(&paren.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&paren.expr)),
                 ..paren.clone()
             }),
             Expr::Range(range) => Expr::Range(syn::ExprRange {
                 from: range
                     .from
                     .as_ref()
-                    .map(|f| Box::new(transform_expr(&f, transform_context))),
-                to: range
-                    .to
-                    .as_ref()
-                    .map(|t| Box::new(transform_expr(&t, transform_context))),
+                    .map(|f| Box::new(self.transform_expr(&f))),
+                to: range.to.as_ref().map(|t| Box::new(self.transform_expr(&t))),
                 ..range.clone()
             }),
             Expr::Reference(reference) => Expr::Reference(syn::ExprReference {
-                expr: Box::new(transform_expr(&reference.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&reference.expr)),
                 ..reference.clone()
             }),
             Expr::Repeat(repeat) => Expr::Repeat(syn::ExprRepeat {
-                expr: Box::new(transform_expr(&repeat.expr, transform_context)),
-                len: Box::new(transform_expr(&repeat.len, transform_context)),
+                expr: Box::new(self.transform_expr(&repeat.expr)),
+                len: Box::new(self.transform_expr(&repeat.len)),
                 ..repeat.clone()
             }),
             Expr::Return(ret) => {
-                if let Some(expr) = (transform_context.return_transform)(ret) {
+                if let Some(expr) = self.return_transform(ret) {
                     expr
                 } else {
                     Expr::Return(syn::ExprReturn {
-                        expr: ret
-                            .expr
-                            .as_ref()
-                            .map(|e| Box::new(transform_expr(&e, transform_context))),
+                        expr: ret.expr.as_ref().map(|e| Box::new(self.transform_expr(&e))),
                         ..ret.clone()
                     })
                 }
@@ -309,275 +316,234 @@ fn transform_stmt_asyncs(
                     .iter()
                     .map(|f| syn::FieldValue {
                         member: f.member.clone(),
-                        expr: transform_expr(&f.expr, transform_context),
+                        expr: self.transform_expr(&f.expr),
                         ..f.clone()
                     })
                     .collect(),
                 ..s.clone()
             }),
             Expr::Try(s) => Expr::Try(syn::ExprTry {
-                expr: Box::new(transform_expr(&s.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&s.expr)),
                 ..s.clone()
             }),
             Expr::Tuple(tuple) => Expr::Tuple(syn::ExprTuple {
                 elems: tuple
                     .elems
                     .iter()
-                    .map(|expr| transform_expr(expr, transform_context))
+                    .map(|expr| self.transform_expr(expr))
                     .collect(),
                 ..tuple.clone()
             }),
             Expr::Type(type_expr) => Expr::Type(syn::ExprType {
-                expr: Box::new(transform_expr(&type_expr.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&type_expr.expr)),
                 ..type_expr.clone()
             }),
             Expr::Unary(unary) => Expr::Unary(syn::ExprUnary {
-                expr: Box::new(transform_expr(&unary.expr, transform_context)),
+                expr: Box::new(self.transform_expr(&unary.expr)),
                 ..unary.clone()
             }),
             Expr::Unsafe(unsafe_stmt) => Expr::Unsafe(ExprUnsafe {
-                block: transform_block(&unsafe_stmt.block, transform_context),
+                block: self.transform_block(&unsafe_stmt.block),
                 ..unsafe_stmt.clone()
             }),
             Expr::While(while_stmt) => Expr::While(syn::ExprWhile {
-                cond: Box::new(transform_expr(&while_stmt.cond, transform_context)),
-                body: transform_block(&while_stmt.body, transform_context),
+                cond: Box::new(self.transform_expr(&while_stmt.cond)),
+                body: self.transform_block(&while_stmt.body),
                 ..while_stmt.clone()
             }),
-            Expr::Await(await_expr) => (transform_context.async_transform)(await_expr),
+            Expr::Await(await_expr) => self.async_transform(await_expr),
             _ => expr.clone(),
         }
     }
-    fn transform_stmt(
-        stmt: &Stmt,
-        transform_context: &mut TransformContext<
-            '_,
-            impl FnMut(&syn::ExprAwait) -> syn::Expr,
-            impl FnMut(&syn::ExprMacro) -> syn::Expr,
-            impl FnMut(&syn::ExprReturn) -> Option<syn::Expr>,
-        >,
-    ) -> Stmt {
+    fn transform_stmt(&mut self, stmt: &Stmt) -> Stmt {
         match stmt {
             Stmt::Local(local) => Stmt::Local(syn::Local {
-                pat: transform_pattern(&local.pat, transform_context),
+                pat: self.transform_pattern(&local.pat),
                 init: local.init.as_ref().map(|(eq_token, expr)| {
-                    (
-                        eq_token.clone(),
-                        Box::new(transform_expr(&expr, transform_context)),
-                    )
+                    (eq_token.clone(), Box::new(self.transform_expr(&expr)))
                 }),
                 ..local.clone()
             }),
-            Stmt::Expr(expr) => Stmt::Expr(transform_expr(&expr, transform_context)),
-            Stmt::Semi(expr, semi) => {
-                Stmt::Semi(transform_expr(expr, transform_context), semi.clone())
-            }
+            Stmt::Expr(expr) => Stmt::Expr(self.transform_expr(&expr)),
+            Stmt::Semi(expr, semi) => Stmt::Semi(self.transform_expr(expr), semi.clone()),
             _ => stmt.clone(),
         }
     }
-    transform_stmt(stmt, transform_context)
-}
 
-#[proc_macro]
-pub fn commands(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    proc_macro_commands(input.into()).into()
-}
+    fn import(
+        &mut self,
+        input_tokens: &proc_macro2::TokenStream,
+        is_image: bool,
+    ) -> proc_macro2::TokenStream {
+        let global_res_variable_name =
+            quote::format_ident!("__future_res_{}", self.current_import_id);
+        self.current_import_id += 1;
+        let output_tokens = if is_image {
+            quote::quote! {{
+                __fut_global_ctx.add_image(&mut #global_res_variable_name)
+            }}
+        } else {
+            quote::quote! {{
+                __fut_global_ctx.add_res(&mut #global_res_variable_name)
+            }}
+        };
+        self.import_bindings.extend(quote::quote! {
+            let mut #global_res_variable_name = #input_tokens;
+        });
+        self.import_drops.extend(quote::quote! {
+            drop(#global_res_variable_name);
+        });
+        self.import_retained_states
+            .push(syn::Expr::Verbatim(quote::quote! {
+                #global_res_variable_name
+            }));
+        output_tokens
+    }
+    fn async_transform(&mut self, input: &syn::ExprAwait) -> syn::Expr {
+        let global_future_variable_name =
+            quote::format_ident!("__future_{}", self.current_await_index);
+        self.current_await_index += 1;
 
+        self.await_bindings.extend(quote::quote! {
+            let mut #global_future_variable_name;
+        });
+        self.await_drops.extend(quote::quote! {
+            drop(#global_future_variable_name);
+        });
+        self.await_retained_states
+            .push(syn::Expr::Verbatim(quote::quote! {
+                #global_future_variable_name
+            }));
 
-struct ForkInput {
-    forked_future: syn::Expr,
-    number_of_forks: Option<(syn::Token![,], usize)>,
-}
-impl Parse for ForkInput {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let forked_future = input.parse()?;
-        let number_of_forks = {
-            let comma: Option<syn::Token![,]> = input.parse()?;
-            if let Some(comma) = comma {
-                let number: syn::LitInt = input.parse()?;
-                let number = number.base10_parse::<usize>()?;
-                Some((comma, number))
-            } else {
-                None
+        let base = input.base.clone();
+
+        // For each future, we first call init on it. This is a no-op for most futures, but for
+        // (nested) block futures, this is going to move the future to its first yield point.
+        // At that point it should yield the context of the first future.
+        let tokens = quote::quote! {
+            {
+                let mut fut = #base;
+                let mut fut_pinned = unsafe { std::pin::Pin::new_unchecked(&mut fut) };
+                fut_pinned.as_mut().init(__fut_global_ctx);
+                let mut ctx = Default::default();
+                fut_pinned.as_mut().context(&mut ctx);
+                yield ctx;
+                loop {
+                    match fut_pinned.as_mut().record(__fut_global_ctx) {
+                        std::task::Poll::Ready((ret, retained_state)) => {
+                            #global_future_variable_name = retained_state;
+                            break ret
+                        },
+                        std::task::Poll::Pending => {
+                            let mut ctx = Default::default();
+                            fut_pinned.as_mut().context(&mut ctx);
+                            yield ctx;
+                        },
+                    };
+                }
+                drop(fut);
             }
         };
-        
-        Ok(ForkInput {
+        syn::parse2(tokens).unwrap()
+    }
+    fn macro_transform(&mut self, mac: &syn::ExprMacro) -> syn::Expr {
+        let path = &mac.mac.path;
+        if path.segments.len() != 1 {
+            return syn::Expr::Macro(mac.clone());
+        }
+        match path.segments[0].ident.to_string().as_str() {
+            "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
+            "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
+            "fork" => syn::Expr::Verbatim(self.fork_transform(&mac.mac.tokens)),
+            _ => syn::Expr::Macro(mac.clone()),
+        }
+    }
+    fn return_transform(&mut self, ret: &syn::ExprReturn) -> Option<syn::Expr> {
+        // Transform each return statement into a yield, drops, and return.
+        // We use RefCell on awaited_future_drops and import_drops so that they can be read while being modified.
+        // This ensures that we won't drop uninitialized values.'
+        // The executor will stop the execution as soon as it reaches the first `yield Complete` statement.
+        // Drops are written between the yield and return, so these values are retained inside the generator
+        // until the generator itself was dropped.
+        // We drop the generator only after semaphore was signaled from within the queue.
+        let returned_item = ret.expr.as_ref();
+        let awaited_future_drops = &*self.await_drops.borrow();
+        let awaited_future_retained_states = &*self.await_retained_states.borrow();
+        let import_drops = &self.import_drops;
+        let import_retained_states = &self.import_retained_states;
+        let token_stream = quote::quote!(
+            {
+                return (#returned_item, ((#awaited_future_retained_states), (#import_retained_states)));
+            }
+        );
+        let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
+        Some(syn::Expr::Block(block))
+    }
+
+    fn fork_transform(&mut self, input: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let ForkInput {
             forked_future,
-            number_of_forks
-        })
+            number_of_forks,
+            comma: _,
+            scope,
+        } = match syn::parse2::<ForkInput>(input.clone()) {
+            Ok(input) => input,
+            Err(err) => return err.to_compile_error(),
+        };
+        let number_of_forks = number_of_forks.map(|(_, number)| number).unwrap_or(2);
+        let ret = syn::Expr::Tuple(syn::ExprTuple {
+            attrs: Vec::new(),
+            paren_token: Default::default(),
+            elems: (0..number_of_forks)
+                .map(|_| {
+                    syn::Expr::Verbatim(quote::quote! {
+                        GPUCommandForked::new(&forked_future_inner)
+                    })
+                })
+                .collect(),
+        });
+        // TODO: transform scope before feeding it in.
+        let scope = syn::Block {
+            brace_token: scope.brace_token.clone(),
+            stmts: scope
+                .stmts
+                .iter()
+                .map(|stmt| self.transform_stmt(stmt))
+                .collect(),
+        };
+        quote::quote! {{
+            let mut forked_future = GPUCommandForkedInner::wrap(#forked_future);
+            let mut pinned = unsafe{std::pin::Pin::new_unchecked(&mut forked_future)};
+            pinned.as_mut().unwrap_pinned().init(__fut_global_ctx);
+            let forked_future_inner = GPUCommandForkedInner::new(pinned);
+            let #forked_future = #ret;
+            #scope
+        }}
     }
 }
-
 
 fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let input = match syn::parse2::<ExprGpuAsync>(input) {
         Ok(input) => input,
         Err(err) => return err.to_compile_error(),
     };
-
-    let mut current_import_id: usize = 0;
-    let mut import_bindings = proc_macro2::TokenStream::new();
-    let mut import_drops = RefCell::new(proc_macro2::TokenStream::new());
-    let mut proc_macro_import_expr = |input_tokens: &proc_macro2::TokenStream,
-                                      is_image: bool|
-     -> proc_macro2::TokenStream {
-        let global_res_variable_name = quote::format_ident!("__future_res_{}", current_import_id);
-        current_import_id += 1;
-        let output_tokens = if is_image {
-            quote::quote! {{
-                __fut_global_ctx.add_image(&#global_res_variable_name)
-            }}
-        } else {
-            quote::quote! {{
-                __fut_global_ctx.add_res(&#global_res_variable_name)
-            }}
-        };
-        import_bindings.extend(quote::quote! {
-            let #global_res_variable_name = #input_tokens;
-        });
-        import_drops.borrow_mut().extend(quote::quote! {
-            drop(#global_res_variable_name);
-        });
-        output_tokens
-    };
-    // Count the total number of awaits in the input
-
-    let mut current_await_index: usize = 0;
-    let mut awaited_future_bindings = proc_macro2::TokenStream::new();
-    let awaited_future_drops = RefCell::new(proc_macro2::TokenStream::new());
-
-    // Forks require advance declarations of pinned futures to ensure correct drop order.
-    let mut current_fork_index: usize = 0;
-    let mut fork_advance_decl = proc_macro2::TokenStream::new();
-    let fork_future_drops = RefCell::new(proc_macro2::TokenStream::new());
-    let mut proc_macro_fork_expr = |input_tokens: &proc_macro2::TokenStream| -> proc_macro2::TokenStream {
-        let ForkInput { forked_future, number_of_forks } = match syn::parse2::<ForkInput>(input_tokens.clone()) {
-            Ok(input) => input,
-            Err(err) => return err.to_compile_error(),
-        };
-        let global_fut_variable_name = quote::format_ident!("__future_forked_{}", current_fork_index);
-        let global_fut_variable_name_inner = quote::format_ident!("__future_forked_{}_inner", current_fork_index);
-        current_fork_index += 1;
-        fork_advance_decl.extend(quote::quote! {
-            let mut #global_fut_variable_name;
-            let mut #global_fut_variable_name_inner;
-        });
-        fork_future_drops.borrow_mut().extend(quote::quote! {
-            drop(#global_fut_variable_name);
-        });
-        let number_of_forks = number_of_forks.map(|(_, number)| number).unwrap_or(2);
-        let ret = syn::Expr::Tuple(syn::ExprTuple {
-            attrs: Vec::new(),
-            paren_token: Default::default(),
-            elems: (0..number_of_forks).map(|_| syn::Expr::Verbatim(quote::quote! {
-                GPUCommandForked::new(&#global_fut_variable_name_inner)
-            })).collect()
-        });
-        quote::quote! {{
-            #global_fut_variable_name = #forked_future; 
-            let mut pinned = unsafe{std::pin::Pin::new_unchecked(&mut #global_fut_variable_name)};
-            pinned.as_mut().init(__fut_global_ctx);
-            #global_fut_variable_name_inner = GPUCommandForkedInner::new(pinned);
-            #ret
-        }}
-    };
-
+    let mut state = CommandsTransformState::default();
 
     let mut inner_closure_stmts: Vec<_> = input
-    .stmts
-    .iter()
-    .map(|stmt| {
-        transform_stmt_asyncs(stmt, &mut TransformContext {
-            async_transform: &mut |a| {
-                let global_future_variable_name = quote::format_ident!("__future_{}", current_await_index);
-                current_await_index += 1;
+        .stmts
+        .iter()
+        .map(|stmt| state.transform_stmt(stmt))
+        .collect();
 
-                awaited_future_bindings.extend(quote::quote! {
-                    let mut #global_future_variable_name;
-                });
-                awaited_future_drops.borrow_mut().extend(quote::quote! {
-                    drop(#global_future_variable_name);
-                });
-
-                let base = a.base.clone();
-
-
-                // For each future, we first call init on it. This is a no-op for most futures, but for
-                // (nested) block futures, this is going to move the future to its first yield point.
-                // At that point it should yield the context of the first future.
-                let tokens = quote::quote! {
-                    {
-                        #global_future_variable_name = #base;
-                        let mut fut_pinned = unsafe { std::pin::Pin::new_unchecked(&mut #global_future_variable_name) };
-                        fut_pinned.as_mut().init(__fut_global_ctx);
-                        let mut ctx = Default::default();
-                        fut_pinned.as_mut().context(&mut ctx);
-                        yield std::ops::GeneratorState::Yielded(ctx);
-                        loop {
-                            match fut_pinned.as_mut().record(__fut_global_ctx) {
-                                std::task::Poll::Ready(v) => break v,
-                                std::task::Poll::Pending => {
-                                    let mut ctx = Default::default();
-                                    fut_pinned.as_mut().context(&mut ctx);
-                                    yield std::ops::GeneratorState::Yielded(ctx);
-                                },
-                            };
-                        }
-                    }
-                };
-                syn::parse2(tokens).unwrap()
-            },
-            macro_transform: &mut |mac| {
-                let path = &mac.mac.path;
-                if path.segments.len() != 1 {
-                    return syn::Expr::Macro(mac.clone());
-                }
-                match path.segments[0].ident.to_string().as_str() {
-                    "import" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens, false)),
-                    "import_image" => syn::Expr::Verbatim(proc_macro_import_expr(&mac.mac.tokens, true)),
-                    "fork" => syn::Expr::Verbatim(proc_macro_fork_expr(&mac.mac.tokens)),
-                    _ => syn::Expr::Macro(mac.clone())
-                }
-            },
-            return_transform: &mut |ret| {
-                // Transform each return statement into a yield, drops, and return.
-                // We use RefCell on awaited_future_drops and import_drops so that they can be read while being modified.
-                // This ensures that we won't drop uninitialized values.'
-                // The executor will stop the execution as soon as it reaches the first `yield Complete` statement.
-                // Drops are written between the yield and return, so these values are retained inside the generator
-                // until the generator itself was dropped.
-                // We drop the generator only after semaphore was signaled from within the queue.
-                let returned_item = ret.expr.as_ref();
-                let awaited_future_drops = &*awaited_future_drops.borrow();
-                let import_drops = &*import_drops.borrow();
-                let token_stream = quote::quote!(
-                    {
-                        yield std::ops::GeneratorState::Complete(#returned_item);
-                        #awaited_future_drops
-                        #import_drops
-                        return;
-                    }
-                );
-                let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
-                Some(syn::Expr::Block(block))
-            }
-        })
-    })
-    .collect();
-
+    // Transform the final return
     if let Some(last) = inner_closure_stmts.last_mut() {
-        let awaited_future_drops = &*awaited_future_drops.borrow();
-        let fork_future_drops = &*fork_future_drops.borrow();
-        let import_drops = &*import_drops.borrow();
+        let import_retained_states = &*state.import_retained_states.borrow();
+        let awaited_future_retained_states = &*state.await_retained_states.borrow();
+
         if let syn::Stmt::Expr(expr) = last {
             let token_stream = quote::quote!(
                 {
-                    yield std::ops::GeneratorState::Complete(#expr);
-                    #awaited_future_drops
-                    #fork_future_drops
-                    #import_drops
-                    return;
+                    return (#expr, ((#awaited_future_retained_states), (#import_retained_states)));
                 }
             );
             let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
@@ -585,11 +551,7 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
         } else {
             let token_stream = quote::quote!(
                 {
-                    yield std::ops::GeneratorState::Complete(());
-                    #awaited_future_drops
-                    #fork_future_drops
-                    #import_drops
-                    return;
+                    return ((), ((#awaited_future_retained_states), (#import_retained_states)));
                 }
             );
             let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
@@ -597,11 +559,12 @@ fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStr
         }
     }
 
+    let import_bindings = state.import_bindings;
+    let awaited_future_bindings = state.await_bindings;
     quote::quote! {
         async_ash::future::GPUCommandBlock::new(static |__fut_global_ctx: *mut ::async_ash::future::GlobalContext| {
             let __fut_global_ctx: &mut ::async_ash::future::GlobalContext = unsafe{&mut *__fut_global_ctx};
             #import_bindings
-            #fork_advance_decl
             #awaited_future_bindings
             #(#inner_closure_stmts)*
         })

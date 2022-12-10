@@ -6,17 +6,17 @@ use std::pin::Pin;
 use std::task::Poll;
 
 //S Generator takes a raw pointer as the argument. https://github.com/rust-lang/rust/issues/68923
-pub trait GPUCommandGenerator<R> =
-    for<'a> Generator<*mut GlobalContext, Yield = GeneratorState<StageContext, R>, Return = ()>;
+pub trait GPUCommandGenerator<R, State> =
+    for<'a> Generator<*mut GlobalContext, Yield = StageContext, Return = (R, State)>;
 
 #[pin_project]
-pub struct GPUCommandBlock<R, G> {
+pub struct GPUCommandBlock<R, State, G> {
     #[pin]
     inner: G,
     next_ctx: Option<StageContext>,
-    _marker: std::marker::PhantomData<R>,
+    _marker: std::marker::PhantomData<(R, State)>,
 }
-impl<R, G: GPUCommandGenerator<R>> GPUCommandBlock<R, G> {
+impl<R, State, G: GPUCommandGenerator<R, State>> GPUCommandBlock<R, State, G> {
     pub fn new(inner: G) -> Self {
         Self {
             inner,
@@ -25,23 +25,24 @@ impl<R, G: GPUCommandGenerator<R>> GPUCommandBlock<R, G> {
         }
     }
 }
-impl<R, G: GPUCommandGenerator<R>> GPUCommandFuture for GPUCommandBlock<R, G> {
+impl<R, State, G: GPUCommandGenerator<R, State>> GPUCommandFuture for GPUCommandBlock<R, State, G> {
     type Output = R;
-    fn record(self: Pin<&mut Self>, ctx: &mut GlobalContext) -> Poll<R> {
+    type RetainedState = State;
+    fn record(
+        self: Pin<&mut Self>,
+        ctx: &mut GlobalContext,
+    ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
         match this.inner.resume(ctx) {
-            GeneratorState::Yielded(ctx) => match ctx {
-                GeneratorState::Yielded(ctx) => {
-                    *this.next_ctx = Some(ctx);
-                    Poll::Pending
-                }
-                GeneratorState::Complete(r) => {
-                    *this.next_ctx = None;
-                    Poll::Ready(r)
-                }
-            },
+            GeneratorState::Yielded(ctx) => {
+                *this.next_ctx = Some(ctx);
+                Poll::Pending
+            }
             // Block generators should never be driven to completion. Instead, they should be dropped before completion.
-            GeneratorState::Complete(_) => unreachable!(),
+            GeneratorState::Complete((ret, state)) => {
+                *this.next_ctx = None;
+                Poll::Ready((ret, state))
+            }
         }
     }
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
