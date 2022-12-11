@@ -70,7 +70,7 @@ impl<
             vk::PipelineStageFlags2::COPY,
             vk::AccessFlags2::TRANSFER_READ,
         );
-        ctx.read(
+        ctx.write(
             dst,
             vk::PipelineStageFlags2::COPY,
             vk::AccessFlags2::TRANSFER_WRITE,

@@ -255,7 +255,7 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
         let mut ctx = GlobalContext {
             resources: Vec::new(),
             command_buffer,
-            stage_index: 0,
+            stage_index: 1,
         };
 
         let mut this = unsafe { std::pin::Pin::new_unchecked(&mut self) };
@@ -272,7 +272,6 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
             if let Poll::Ready(result) = this.as_mut().record(&mut ctx) {
                 break result;
             }
-            println!("-----pipeline barrier-------");
 
             let mut next_context = StageContext::default();
             this.as_mut().context(&mut next_context);
@@ -395,8 +394,10 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
                 && image_barrier.is_empty()
             {
                 // No need for pipeline barrier
-                println!("Warning: unnecessary dependency");
+                println!("-----pipeline barrier: no op-------");
             } else {
+                
+                println!("-----pipeline barrier: {:?} => {:?} -------", memory_barrier.src_access_mask, memory_barrier.dst_access_mask);
                 /*
                 unsafe {
                     device.cmd_pipeline_barrier2(
