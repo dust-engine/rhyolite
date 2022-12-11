@@ -1,6 +1,6 @@
 use super::{GPUCommandFuture, GlobalContext, StageContext};
 use pin_project::pin_project;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -139,52 +139,49 @@ where
 }
 
 #[pin_project(project = GPUCommandForkedStateInnerProj)]
-pub enum GPUCommandForkedStateInner<G> {
+pub enum GPUCommandForkedStateInner<G: GPUCommandFuture> {
     Some(#[pin] G),
-    None,
+    Resolved(G::Output),
 }
-impl<G> GPUCommandForkedStateInner<G> {
+impl<G: GPUCommandFuture> GPUCommandForkedStateInner<G> {
     pub fn unwrap_pinned(self: Pin<&mut Self>) -> Pin<&mut G> {
         use GPUCommandForkedStateInnerProj::*;
         match self.project() {
             Some(g) => g,
-            None => panic!(),
+            Resolved(_) => panic!(),
         }
     }
 }
-enum GPUCommandForkedState<'a, G: GPUCommandFuture> {
-    Pending {
-        inner: Pin<&'a mut GPUCommandForkedStateInner<G>>,
-        last_stage: u32,
-    },
-    Ready(G::Output),
-    Taken,
-}
 
-pub struct GPUCommandForkedInner<'a, G: GPUCommandFuture>(Cell<GPUCommandForkedState<'a, G>>);
-impl<'a, G: GPUCommandFuture> GPUCommandForkedInner<'a, G> {
-    pub fn wrap(item: G) -> GPUCommandForkedStateInner<G> {
-        GPUCommandForkedStateInner::Some(item)
-    }
-    pub fn new(inner: Pin<&'a mut GPUCommandForkedStateInner<G>>) -> Self {
-        Self(Cell::new(GPUCommandForkedState::Pending {
+// The shared structure between all branches
+pub struct GPUCommandForkedInner<'a, G: GPUCommandFuture, const N: usize> {
+    inner: Pin<&'a mut GPUCommandForkedStateInner<G>>,
+    last_stage: u32,
+    ready: [bool; N],
+}
+impl<'a, G: GPUCommandFuture, const N: usize> GPUCommandForkedInner<'a, G, N> {
+    pub fn new(inner: Pin<&'a mut GPUCommandForkedStateInner<G>>) -> RefCell<Self> {
+        RefCell::new(Self {
             inner,
             last_stage: 0,
-        }))
+            ready: [false; N],
+        })
     }
 }
 
+/// The structure specific to a single branch
 #[pin_project]
-pub struct GPUCommandForked<'a, 'r, G: GPUCommandFuture> {
-    inner: &'r GPUCommandForkedInner<'a, G>,
+pub struct GPUCommandForked<'a, 'r, G: GPUCommandFuture, const N: usize> {
+    inner: &'r RefCell<GPUCommandForkedInner<'a, G, N>>,
+    id: usize,
 }
-impl<'a, 'r, G: GPUCommandFuture> GPUCommandForked<'a, 'r, G> {
-    pub fn new(inner: &'r GPUCommandForkedInner<'a, G>) -> Self {
-        Self { inner }
+impl<'a, 'r, G: GPUCommandFuture, const N: usize> GPUCommandForked<'a, 'r, G, N> {
+    pub fn new(inner: &'r RefCell<GPUCommandForkedInner<'a, G, N>>, id: usize) -> Self {
+        Self { inner, id }
     }
 }
 
-impl<'a, 'r, G> GPUCommandFuture for GPUCommandForked<'a, 'r, G>
+impl<'a, 'r, G, const N: usize> GPUCommandFuture for GPUCommandForked<'a, 'r, G, N>
 where
     G: GPUCommandFuture,
     G::Output: Clone,
@@ -196,66 +193,40 @@ where
         self: Pin<&mut Self>,
         ctx: &mut GlobalContext,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
-        let this = self.project();
-        let state = this.inner.0.replace(GPUCommandForkedState::Taken);
-        match state {
-            GPUCommandForkedState::Pending {
-                mut inner,
-                last_stage,
-            } => {
-                if ctx.current_stage_index() >= last_stage {
-                    match inner.as_mut().unwrap_pinned().record(ctx) {
-                        Poll::Pending => {
-                            this.inner.0.replace(GPUCommandForkedState::Pending {
-                                inner,
-                                last_stage: ctx.current_stage_index(),
-                            });
-                            Poll::Pending
-                        }
-                        Poll::Ready((r, s)) => {
-                            inner.as_mut().set(GPUCommandForkedStateInner::None);
+        let mut this = &mut *self.project().inner.borrow_mut();
+        if !this.ready.iter().all(|a| *a) {
+            // no op.
+            return Poll::Pending;
+        }
+        match this.inner.as_mut().project() {
+            GPUCommandForkedStateInnerProj::Resolved(result) => Poll::Ready((result.clone(), None)),
+            GPUCommandForkedStateInnerProj::Some(inner) => {
+                if this.last_stage < ctx.current_stage_index() {
+                    // do the work
+                    this.last_stage = ctx.current_stage_index();
+                    match inner.record(ctx) {
+                        Poll::Pending => Poll::Pending,
+                        Poll::Ready((result, retained)) => {
                             this.inner
-                                .0
-                                .replace(GPUCommandForkedState::Ready(r.clone()));
-                            Poll::Ready((r, Some(s)))
+                                .set(GPUCommandForkedStateInner::Resolved(result.clone()));
+                            Poll::Ready((result, Some(retained)))
                         }
                     }
                 } else {
-                    // The stage was already executed by someone else.
-                    this.inner
-                        .0
-                        .replace(GPUCommandForkedState::Pending { inner, last_stage });
                     Poll::Pending
                 }
             }
-            GPUCommandForkedState::Ready(r) => {
-                this.inner
-                    .0
-                    .replace(GPUCommandForkedState::Ready(r.clone()));
-                Poll::Ready((r, None))
-            }
-            GPUCommandForkedState::Taken => unreachable!(),
         }
     }
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
-        let this = self.project();
-        let state = this.inner.0.replace(GPUCommandForkedState::Taken);
-        match state {
-            GPUCommandForkedState::Pending {
-                mut inner,
-                last_stage,
-            } => {
-                inner.as_mut().unwrap_pinned().context(ctx);
-                this.inner
-                    .0
-                    .replace(GPUCommandForkedState::Pending { inner, last_stage });
-            }
-            GPUCommandForkedState::Ready(r) => {
-                this.inner.0.replace(GPUCommandForkedState::Ready(r));
-                // The command was already recorded, so it's not gonna do anything really.
-            }
-            GPUCommandForkedState::Taken => unreachable!(),
+        let id = self.id;
+        let mut this = self.project().inner.borrow_mut();
+        this.ready[id] = true;
+        if !this.ready.iter().all(|a| *a) {
+            // no op. only the one that finishes the latest will actually record and generate dependencies.
+            return;
         }
+        this.inner.as_mut().unwrap_pinned().context(ctx);
     }
     fn init(self: Pin<&mut Self>, ctx: &mut GlobalContext) {
         // Noop. The inner command will be initialized when fork was called on it.

@@ -35,22 +35,25 @@ impl Parse for ForkInput {
         let forked_future = input.parse()?;
         let comma: syn::Token![,] = input.parse()?;
         let number_of_forks = {
-            let number: syn::LitInt = input.parse()?;
-            let number = number.base10_parse::<usize>()?;
-            Some(number)
+            let number: Option<syn::LitInt> = input.parse().ok();
+            let number = number.and_then(|a| a.base10_parse::<usize>().ok());
+            number
         };
-        let number_of_forks = if let Some(number_of_forks) = number_of_forks {
-            Some((comma, number_of_forks))
+        if let Some(number_of_forks) = number_of_forks {
+            Ok(ForkInput {
+                forked_future,
+                number_of_forks: Some((comma, number_of_forks)),
+                comma: input.parse()?,
+                scope: input.parse()?,
+            })
         } else {
-            None
-        };
-
-        Ok(ForkInput {
-            forked_future,
-            number_of_forks,
-            comma: input.parse()?,
-            scope: input.parse()?,
-        })
+            Ok(ForkInput {
+                forked_future,
+                number_of_forks: None,
+                comma,
+                scope: input.parse()?,
+            })
+        }
     }
 }
 
@@ -429,19 +432,19 @@ impl CommandsTransformState {
                 fut_pinned.as_mut().context(&mut ctx);
                 yield ctx;
                 loop {
+                    use ::std::task::Poll::*;
                     match fut_pinned.as_mut().record(__fut_global_ctx) {
-                        std::task::Poll::Ready((ret, retained_state)) => {
+                        Ready((output, retained_state)) => {
                             #global_future_variable_name = retained_state;
-                            break ret
+                            break output
                         },
-                        std::task::Poll::Pending => {
+                        Yielded => {
                             let mut ctx = Default::default();
                             fut_pinned.as_mut().context(&mut ctx);
                             yield ctx;
                         },
                     };
                 }
-                drop(fut);
             }
         };
         syn::parse2(tokens).unwrap()
@@ -495,9 +498,9 @@ impl CommandsTransformState {
             attrs: Vec::new(),
             paren_token: Default::default(),
             elems: (0..number_of_forks)
-                .map(|_| {
+                .map(|i| {
                     syn::Expr::Verbatim(quote::quote! {
-                        GPUCommandForked::new(&forked_future_inner)
+                        GPUCommandForked::new(&forked_future_inner, #i)
                     })
                 })
                 .collect(),
@@ -512,10 +515,10 @@ impl CommandsTransformState {
                 .collect(),
         };
         quote::quote! {{
-            let mut forked_future = GPUCommandForkedInner::wrap(#forked_future);
+            let mut forked_future = ::async_ash::future::GPUCommandForkedStateInner::Some(#forked_future);
             let mut pinned = unsafe{std::pin::Pin::new_unchecked(&mut forked_future)};
             pinned.as_mut().unwrap_pinned().init(__fut_global_ctx);
-            let forked_future_inner = GPUCommandForkedInner::new(pinned);
+            let forked_future_inner = GPUCommandForkedInner::<_, #number_of_forks>::new(pinned);
             let #forked_future = #ret;
             #scope
         }}
