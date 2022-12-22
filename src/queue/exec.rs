@@ -1,4 +1,4 @@
-use std::{ops::Generator, pin::Pin, sync::Arc, task::Poll};
+use std::{ops::Generator, pin::Pin, sync::Arc, task::Poll, marker::PhantomData};
 
 use ash::vk;
 use futures_util::future::OptionFuture;
@@ -32,38 +32,42 @@ impl CombinedQueueExecutor {
 }
 
 pub trait QueueFuture {
+    type Output;
     fn init(self: Pin<&mut Self>, prev_queue: QueueRef);
     /// Record all command buffers for the specified queue_index, up to the specified timeline index.
     /// The executor calls record with increasing `timeline` value, and wrap them in vk::SubmitInfo2.
     /// queue should be the queue of the parent node, or None if multiple parents with different queues.
     /// queue should be None on subsequent calls.
-    fn record(self: Pin<&mut Self>) -> Poll<QueueRef>;
+    fn record(self: Pin<&mut Self>) -> Poll<(QueueRef, Self::Output)>;
 
     fn execute(self);
 }
 
 
-pub trait QueueFutureBlockGenerator = Generator<QueueRef, Return = QueueRef>;
+pub trait QueueFutureBlockGenerator<R> = Generator<QueueRef, Return = (QueueRef, R)>;
 
 #[pin_project]
-pub struct QueueFutureBlock<I> {
+pub struct QueueFutureBlock<R, I> {
     #[pin]
     inner: I,
     initial_queue_ref: QueueRef,
+    _marker: PhantomData<fn() -> R>
 }
-impl<I: QueueFutureBlockGenerator> QueueFutureBlock<I> {
+impl<R, I: QueueFutureBlockGenerator<R>> QueueFutureBlock<R, I> {
     pub fn new(inner: I) -> Self {
         Self {
             inner,
-            initial_queue_ref: QueueRef::null()
+            initial_queue_ref: QueueRef::null(),
+            _marker: PhantomData
         }
     }
 }
-impl<I: QueueFutureBlockGenerator> QueueFuture for QueueFutureBlock<I> {
+impl<R, I: QueueFutureBlockGenerator<R>> QueueFuture for QueueFutureBlock<R, I> {
+    type Output = R;
     fn init(self: Pin<&mut Self>, prev_queue: QueueRef) {
         *self.project().initial_queue_ref = prev_queue;
     }
-    fn record(self: Pin<&mut Self>) -> Poll<QueueRef> {
+    fn record(self: Pin<&mut Self>) -> Poll<(QueueRef, R)> {
         let this = self.project();
         match this.inner.resume(*this.initial_queue_ref) {
             std::ops::GeneratorState::Yielded(_) => Poll::Pending,
@@ -74,4 +78,28 @@ impl<I: QueueFutureBlockGenerator> QueueFuture for QueueFutureBlock<I> {
         todo!()
     }
 }
-// when do we know for sure that we can merge two
+
+#[pin_project]
+pub struct QueueFutureJoin<I1, I2> {
+    #[pin]
+    left: I1,
+    #[pin]
+    right: I2,
+    initial_queue_ref: QueueRef,
+}
+/*
+impl<I1: QueueFuture, I2: QueueFuture> QueueFuture for QueueFutureJoin<I1, I2> {
+    fn init(self: Pin<&mut Self>, prev_queue: QueueRef) {
+        let this = self.project();
+        *this.initial_queue_ref = prev_queue;
+    }
+
+    fn record(self: Pin<&mut Self>) -> Poll<QueueRef> {
+        todo!()
+    }
+
+    fn execute(self) {
+        todo!()
+    }
+}
+*/

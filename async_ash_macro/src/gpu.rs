@@ -25,9 +25,9 @@ impl CommandsTransformer for State {
             loop {
                 use ::std::task::Poll::*;
                 match fut_pinned.as_mut().record() {
-                    Ready(next_queue) => {
+                    Ready((next_queue, ret)) => {
                         __current_queue = next_queue;
-                        break;
+                        break ret;
                     },
                     Yielded => {
                         yield;
@@ -44,11 +44,17 @@ impl CommandsTransformer for State {
     // inner block yields. outer block needs to give inner block the current queue, and the inner block choose to yield or not.
 
     fn macro_transform(&mut self, mac: &syn::ExprMacro) -> syn::Expr {
-        todo!()
+        syn::Expr::Macro(mac.clone())
     }
 
     fn return_transform(&mut self, ret: &syn::ExprReturn) -> Option<syn::Expr> {
-        todo!()
+        let returned_item = ret.expr.as_ref().map(|a| *a.clone()).unwrap_or(syn::Expr::Verbatim(quote::quote!(())));
+        let token_stream = quote::quote!(
+            {
+                return (__current_queue, #returned_item);
+            }
+        );
+        Some(syn::Expr::Verbatim(token_stream))
     }
 }
 
@@ -64,12 +70,24 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
         .iter()
         .map(|stmt| state.transform_stmt(stmt))
         .collect();
-        quote::quote! {
-            async_ash::queue::QueueFutureBlock::new(static |__initial_queue| {
-                let mut __current_queue: ::async_ash::queue::QueueRef = __initial_queue;
-                //let __fut_global_ctx: &mut ::async_ash::future::GlobalContext = unsafe{&mut *__fut_global_ctx};
-                #(#inner_closure_stmts)*
-                return __current_queue;
-            })
+    if let Some(last) = inner_closure_stmts.last_mut() {
+        if let syn::Stmt::Expr(expr) = last {
+            let token_stream = quote::quote!({
+                return (__current_queue, #expr);
+            });
+            *expr = syn::Expr::Verbatim(token_stream);
+        } else {
+            let token_stream = quote::quote!({
+                return (__current_queue, ());
+            });
+            inner_closure_stmts.push(syn::Stmt::Expr(syn::Expr::Verbatim(token_stream)))
         }
+    }
+    quote::quote! {
+        async_ash::queue::QueueFutureBlock::new(static |__initial_queue| {
+            let mut __current_queue: ::async_ash::queue::QueueRef = __initial_queue;
+            //let __fut_global_ctx: &mut ::async_ash::future::GlobalContext = unsafe{&mut *__fut_global_ctx};
+            #(#inner_closure_stmts)*
+        })
+    }
 }

@@ -14,7 +14,7 @@ pub struct GPUCommandBlock<R, State, G> {
     #[pin]
     inner: G,
     next_ctx: Option<StageContext>,
-    _marker: std::marker::PhantomData<(R, State)>,
+    _marker: std::marker::PhantomData<fn() -> (R, State)>,
 }
 impl<R, State, G: GPUCommandGenerator<R, State>> GPUCommandBlock<R, State, G> {
     pub fn new(inner: G) -> Self {
