@@ -1,9 +1,11 @@
-pub use crate::semaphore::{SemaphoreOp, StagedSemaphoreOp};
-mod router;
+
+mod exec;
 use crate::Device;
 use ash::{prelude::VkResult, vk};
-pub use router::{QueueIndex, QueueType, Queues, QueuesCreateInfo};
+pub use exec::*;
 use std::sync::Arc;
+mod router;
+pub use router::QueuesCreateInfo;
 
 pub struct Queue {
     pub(super) device: Arc<Device>,

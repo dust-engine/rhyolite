@@ -2,17 +2,6 @@ use crate::transformer::CommandsTransformer;
 use std::borrow::Borrow;
 use syn::parse::{Parse, ParseStream};
 
-struct ExprGpuAsync {
-    pub stmts: Vec<syn::Stmt>,
-}
-impl Parse for ExprGpuAsync {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        Ok(ExprGpuAsync {
-            stmts: syn::Block::parse_within(input)?,
-        })
-    }
-}
-
 struct CommandsTransformState {
     current_import_id: usize,
     import_bindings: proc_macro2::TokenStream,
@@ -173,7 +162,6 @@ impl CommandsTransformState {
                 })
                 .collect(),
         });
-        // TODO: transform scope before feeding it in.
         let scope = syn::Block {
             brace_token: scope.brace_token.clone(),
             stmts: scope
@@ -227,7 +215,7 @@ impl Parse for ForkInput {
 }
 
 pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    let input = match syn::parse2::<ExprGpuAsync>(input) {
+    let input = match syn::parse2::<crate::ExprGpuAsync>(input) {
         Ok(input) => input,
         Err(err) => return err.to_compile_error(),
     };

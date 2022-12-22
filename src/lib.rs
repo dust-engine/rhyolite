@@ -17,7 +17,7 @@ mod device;
 pub mod future;
 mod instance;
 mod physical_device;
-mod queue;
+pub mod queue;
 mod resources;
 mod semaphore;
 pub mod utils;

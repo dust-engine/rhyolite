@@ -5,7 +5,6 @@ use std::task::Poll;
 mod block;
 mod exec;
 mod ext;
-mod queue_exec;
 pub use block::*;
 pub use exec::*;
 pub use ext::*;

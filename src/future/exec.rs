@@ -396,8 +396,10 @@ pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
                 // No need for pipeline barrier
                 println!("-----pipeline barrier: no op-------");
             } else {
-                
-                println!("-----pipeline barrier: {:?} => {:?} -------", memory_barrier.src_access_mask, memory_barrier.dst_access_mask);
+                println!(
+                    "-----pipeline barrier: {:?} => {:?} -------",
+                    memory_barrier.src_access_mask, memory_barrier.dst_access_mask
+                );
                 /*
                 unsafe {
                     device.cmd_pipeline_barrier2(
