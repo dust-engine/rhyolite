@@ -253,6 +253,7 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
 
     let import_bindings = state.import_bindings;
     let awaited_future_bindings = state.await_bindings;
+    // todo: __fut_global_ctx dereference on-site.
     quote::quote! {
         async_ash::future::GPUCommandBlock::new(static |__fut_global_ctx: *mut ::async_ash::future::GlobalContext| {
             let __fut_global_ctx: &mut ::async_ash::future::GlobalContext = unsafe{&mut *__fut_global_ctx};

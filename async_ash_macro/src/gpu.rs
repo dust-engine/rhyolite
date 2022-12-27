@@ -23,15 +23,18 @@ impl CommandsTransformer for State {
             let mut fut_pinned = std::pin::pin!(#base);
             fut_pinned.as_mut().init(__current_queue);
             loop {
-                use ::std::task::Poll::*;
-                match fut_pinned.as_mut().record() {
-                    Ready((next_queue, ret)) => {
+                use ::async_ash::queue::QueueFuturePoll::*;
+                match fut_pinned.as_mut().record(unsafe{&mut *(__ctx as *mut ::async_ash::queue::QueueContext)}) {
+                    Ready { next_queue, output } => {
                         __current_queue = next_queue;
-                        break ret;
+                        break output;
                     },
-                    Yielded => {
-                        yield;
+                    Semaphore => {
+                        yield true;
                     },
+                    Barrier => {
+                        yield false;
+                    }
                 };
             }
         }})
@@ -84,9 +87,8 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
         }
     }
     quote::quote! {
-        async_ash::queue::QueueFutureBlock::new(static |__initial_queue| {
+        async_ash::queue::QueueFutureBlock::new(static |(__initial_queue, __ctx)| {
             let mut __current_queue: ::async_ash::queue::QueueRef = __initial_queue;
-            //let __fut_global_ctx: &mut ::async_ash::future::GlobalContext = unsafe{&mut *__fut_global_ctx};
             #(#inner_closure_stmts)*
         })
     }
