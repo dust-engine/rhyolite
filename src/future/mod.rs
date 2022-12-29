@@ -40,7 +40,7 @@ pub trait GPUCommandFuture {
     /// buffer and submitted to a queue in order to do work on the GPU.
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut GlobalContext,
+        ctx: &mut CommandBufferRecordContext,
     ) -> Poll<(Self::Output, Self::RetainedState)>;
 
     /// Returns the context for the operations recorded into the command buffer
@@ -54,5 +54,5 @@ pub trait GPUCommandFuture {
     /// For executors, this method should be called once, and as soon as the future was pinnned.
     /// For implementations of `GPUCommandFuture`, this method can be ignored in most cases.
     /// For combinators, this method should be called recursively for all inner futures.
-    fn init(self: Pin<&mut Self>, ctx: &mut GlobalContext) {}
+    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {}
 }

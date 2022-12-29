@@ -1,4 +1,4 @@
-use super::{GPUCommandFuture, GlobalContext, StageContext};
+use super::{CommandBufferRecordContext, GPUCommandFuture, StageContext};
 use pin_project::pin_project;
 use std::marker::PhantomData;
 use std::ops::{Generator, GeneratorState};
@@ -6,8 +6,11 @@ use std::pin::Pin;
 use std::task::Poll;
 
 //S Generator takes a raw pointer as the argument. https://github.com/rust-lang/rust/issues/68923
-pub trait GPUCommandGenerator<R, State> =
-    for<'a> Generator<*mut GlobalContext, Yield = StageContext, Return = (R, State)>;
+pub trait GPUCommandGenerator<R, State> = for<'a> Generator<
+    *mut CommandBufferRecordContext<'a>,
+    Yield = StageContext,
+    Return = (R, State),
+>;
 
 #[pin_project]
 pub struct GPUCommandBlock<R, State, G> {
@@ -30,7 +33,7 @@ impl<R, State, G: GPUCommandGenerator<R, State>> GPUCommandFuture for GPUCommand
     type RetainedState = State;
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut GlobalContext,
+        ctx: &mut CommandBufferRecordContext,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
         match this.inner.resume(ctx) {
@@ -53,7 +56,7 @@ impl<R, State, G: GPUCommandGenerator<R, State>> GPUCommandFuture for GPUCommand
             .expect("Attempted to take the context multiple times");
         ctx.merge(next_ctx);
     }
-    fn init(mut self: Pin<&mut Self>, ctx: &mut GlobalContext) {
+    fn init(mut self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
         // Reach the first yield point to get the context of the first awaited future.
         assert!(self.next_ctx.is_none());
         if let Poll::Pending = self.as_mut().record(ctx) {

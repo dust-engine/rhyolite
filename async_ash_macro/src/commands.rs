@@ -127,7 +127,11 @@ impl CommandsTransformer for CommandsTransformState {
         // Drops are written between the yield and return, so these values are retained inside the generator
         // until the generator itself was dropped.
         // We drop the generator only after semaphore was signaled from within the queue.
-        let returned_item = ret.expr.as_ref().map(|a| *a.clone()).unwrap_or(syn::Expr::Verbatim(quote::quote!(())));
+        let returned_item = ret
+            .expr
+            .as_ref()
+            .map(|a| *a.clone())
+            .unwrap_or(syn::Expr::Verbatim(quote::quote!(())));
         let awaited_future_retained_states = &*self.await_retained_states.borrow();
         let import_retained_states = &self.import_retained_states;
         let token_stream = quote::quote!(

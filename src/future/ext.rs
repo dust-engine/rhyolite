@@ -1,4 +1,4 @@
-use super::{GPUCommandFuture, GlobalContext, StageContext};
+use super::{CommandBufferRecordContext, GPUCommandFuture, StageContext};
 use pin_project::pin_project;
 use std::cell::{Cell, RefCell};
 use std::pin::Pin;
@@ -50,7 +50,7 @@ where
     #[inline]
     fn record(
         self: Pin<&mut Self>,
-        command_buffer: &mut GlobalContext,
+        command_buffer: &mut CommandBufferRecordContext,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
         assert!(
@@ -91,7 +91,7 @@ where
         }
     }
 
-    fn init(self: Pin<&mut Self>, ctx: &mut GlobalContext) {
+    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
         let this = self.project();
         this.inner1.init(ctx);
         this.inner2.init(ctx);
@@ -115,7 +115,7 @@ where
     #[inline]
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut GlobalContext,
+        ctx: &mut CommandBufferRecordContext,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
         match this.inner.record(ctx) {
@@ -132,7 +132,7 @@ where
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         self.project().inner.context(ctx);
     }
-    fn init(self: Pin<&mut Self>, ctx: &mut GlobalContext) {
+    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
         let this = self.project();
         this.inner.init(ctx);
     }
@@ -191,7 +191,7 @@ where
     #[inline]
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut GlobalContext,
+        ctx: &mut CommandBufferRecordContext,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let mut this = &mut *self.project().inner.borrow_mut();
         if !this.ready.iter().all(|a| *a) {
@@ -228,7 +228,7 @@ where
         }
         this.inner.as_mut().unwrap_pinned().context(ctx);
     }
-    fn init(self: Pin<&mut Self>, ctx: &mut GlobalContext) {
+    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
         // Noop. The inner command will be initialized when fork was called on it.
     }
 }

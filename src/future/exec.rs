@@ -1,8 +1,12 @@
-use crate::{utils::merge_iter::btree_map_union, Device, ImageLike};
+use crate::{
+    utils::merge_iter::btree_map_union, Device, ImageLike, SubmissionResource,
+    SubmissionResourceType,
+};
 use ash::vk;
 use std::{
     alloc::Allocator,
     collections::{BTreeMap, HashMap},
+    pin::Pin,
     task::Poll,
 };
 
@@ -113,18 +117,27 @@ enum GlobalContextResource {
         subresource_range: vk::ImageSubresourceRange,
     },
 }
-pub struct GlobalContext {
-    resources: Vec<GlobalContextResource>,
-    pub command_buffer: vk::CommandBuffer,
-    stage_index: u32,
+
+/// One per command buffer record call. If multiple command buffers were merged together on the queue level,
+/// this would be the same.
+pub struct CommandBufferRecordContext<'a> {
+    pub(crate) resources: &'a mut Vec<SubmissionResource>,
+    // perhaps also a reference to the command buffer allocator
+    pub(crate) command_buffer: vk::CommandBuffer,
+    pub(crate) stage_index: &'a mut u32,
+    pub(crate) last_stage: &'a mut Option<StageContext>,
 }
-impl GlobalContext {
+
+impl<'b> CommandBufferRecordContext<'b> {
     pub fn current_stage_index(&self) -> u32 {
-        self.stage_index
+        *self.stage_index
     }
     pub fn add_res<'a, T>(&mut self, res: &'a mut T) -> Res<'a, T> {
         let id = self.resources.len() as u32;
-        self.resources.push(GlobalContextResource::Memory);
+        self.resources.push(SubmissionResource {
+            ty: SubmissionResourceType::Memory,
+            access: None,
+        });
         Res { id, inner: res }
     }
     pub fn add_image<'a, T: ImageLike>(
@@ -133,10 +146,13 @@ impl GlobalContext {
         initial_layout: vk::ImageLayout,
     ) -> Res<'a, T> {
         let id = self.resources.len() as u32;
-        self.resources.push(GlobalContextResource::Image {
-            initial_layout,
-            image: res.raw_image(),
-            subresource_range: res.subresource_range(),
+        self.resources.push(SubmissionResource {
+            ty: SubmissionResourceType::Image {
+                initial_layout,
+                image: res.raw_image(),
+                subresource_range: res.subresource_range(),
+            },
+            access: None,
         });
         Res { id, inner: res }
     }
@@ -245,187 +261,168 @@ impl StageContext {
     }
 }
 
-pub trait GPUCommandFutureRecordAll: GPUCommandFuture + Sized {
-    #[inline]
-    fn record_all(
-        mut self,
-        //device: &crate::Device,
-        command_buffer: vk::CommandBuffer,
-    ) -> Self::Output {
-        let mut ctx = GlobalContext {
-            resources: Vec::new(),
-            command_buffer,
-            stage_index: 1,
-        };
-
-        let mut this = unsafe { std::pin::Pin::new_unchecked(&mut self) };
-        this.as_mut().init(&mut ctx);
-
-        let mut current_context = StageContext::default();
-        this.as_mut().context(&mut current_context);
-
-        let mut resource_accesses: Vec<Option<Access>> = vec![];
+impl<'b> CommandBufferRecordContext<'b> {
+    fn add_barrier(
+        prev: &StageContext,
+        next: &StageContext,
+        resources: &mut Vec<SubmissionResource>,
+    ) {
         let mut memory_barrier = vk::MemoryBarrier2::default();
         let mut image_barrier: Vec<vk::ImageMemoryBarrier2> = Vec::new();
+        for (id, before_access, after_access) in btree_map_union(&prev.accesses, &next.accesses) {
+            let res = &resources[*id as usize];
 
-        let (result, retained_state) = loop {
-            if let Poll::Ready(result) = this.as_mut().record(&mut ctx) {
-                break result;
-            }
-
-            let mut next_context = StageContext::default();
-            this.as_mut().context(&mut next_context);
-
-            for (id, before_access, after_access) in
-                btree_map_union(&current_context.accesses, &next_context.accesses)
-            {
-                let res = &ctx.resources[*id as usize];
-                let before_access =
-                    before_access.or(resource_accesses.get(*id as usize).and_then(|a| a.as_ref()));
-                match (res, before_access, after_access) {
-                    (GlobalContextResource::Memory, Some(before_access), Some(after_access)) => {
-                        get_memory_access(&mut memory_barrier, before_access, after_access)
-                    }
-                    (
-                        GlobalContextResource::Image {
-                            initial_layout: _,
-                            image,
-                            subresource_range,
-                        },
-                        Some(before_access),
-                        Some(after_access),
-                    ) if before_access.produced_layout() != after_access.expected_layout()
-                        && after_access.expected_layout() != vk::ImageLayout::UNDEFINED =>
-                    {
-                        // Image layout transition. Prev image is in VALID or UNDEFINED. Next image is VALID to be read.
-                        let mut image_memory_barrier = vk::MemoryBarrier2::default();
-                        get_memory_access(&mut image_memory_barrier, before_access, after_access);
-                        image_barrier.push(vk::ImageMemoryBarrier2 {
-                            src_stage_mask: image_memory_barrier.src_stage_mask,
-                            src_access_mask: image_memory_barrier.src_access_mask,
-                            dst_stage_mask: image_memory_barrier.dst_stage_mask,
-                            dst_access_mask: image_memory_barrier.dst_access_mask,
-                            old_layout: before_access.produced_layout(),
-                            new_layout: after_access.expected_layout(),
-                            image: *image,
-                            subresource_range: subresource_range.clone(),
-                            ..Default::default()
-                        });
-                    }
-                    (
-                        GlobalContextResource::Image {
-                            initial_layout: _,
-                            image,
-                            subresource_range,
-                        },
-                        Some(before_access),
-                        Some(after_access),
-                    ) if after_access.expected_layout() == vk::ImageLayout::UNDEFINED
-                        && after_access.produced_layout() != vk::ImageLayout::UNDEFINED =>
-                    {
-                        // Image layout transition. Prev image is in VALID or UNDEFINED. Next image is VALID to be read.
-                        let mut image_memory_barrier = vk::MemoryBarrier2::default();
-                        get_memory_access(&mut image_memory_barrier, before_access, after_access);
-                        image_barrier.push(vk::ImageMemoryBarrier2 {
-                            src_stage_mask: image_memory_barrier.src_stage_mask,
-                            src_access_mask: image_memory_barrier.src_access_mask,
-                            dst_stage_mask: image_memory_barrier.dst_stage_mask,
-                            dst_access_mask: image_memory_barrier.dst_access_mask,
-                            old_layout: vk::ImageLayout::UNDEFINED,
-                            new_layout: after_access.produced_layout(),
-                            image: *image,
-                            subresource_range: subresource_range.clone(),
-                            ..Default::default()
-                        });
-                    }
-                    (
-                        GlobalContextResource::Image {
-                            initial_layout: _,
-                            image: _,
-                            subresource_range: _,
-                        },
-                        Some(before_access),
-                        Some(after_access),
-                    ) => {
-                        // Image without layout transition
-                        get_memory_access(&mut memory_barrier, before_access, after_access)
-                    }
-                    (
-                        GlobalContextResource::Image {
-                            initial_layout,
-                            image,
-                            subresource_range,
-                        },
-                        None,
-                        Some(after_access),
-                    ) => {
-                        let mut new_layout = after_access.expected_layout();
-                        if new_layout == vk::ImageLayout::UNDEFINED {
-                            new_layout = after_access.produced_layout();
-                        }
-                        if *initial_layout != new_layout && new_layout != vk::ImageLayout::UNDEFINED
-                        {
-                            image_barrier.push(vk::ImageMemoryBarrier2 {
-                                src_stage_mask: vk::PipelineStageFlags2::NONE,
-                                src_access_mask: vk::AccessFlags2::NONE,
-                                dst_stage_mask: after_access.read_stages
-                                    | after_access.write_stages,
-                                dst_access_mask: after_access.read_access
-                                    | after_access.write_access,
-                                old_layout: *initial_layout,
-                                new_layout,
-                                image: *image,
-                                subresource_range: subresource_range.clone(),
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    _ => {}
+            // If before_access is none, it means that the resource wasn't accessed in the prior stage.
+            // Take the value from the stages before that. Otherwise, take the access from the prior stage.
+            let before_access =
+                before_access.or(resources.get(*id as usize).and_then(|a| a.access.as_ref()));
+            match (&res.ty, before_access, after_access) {
+                (SubmissionResourceType::Memory, Some(before_access), Some(after_access)) => {
+                    get_memory_access(&mut memory_barrier, before_access, after_access)
                 }
-                drop(before_access);
-
-                let id = *id as usize;
-                let before_access = before_access.map(|a| a.clone());
-                resource_accesses.resize(resource_accesses.len().max(id + 1), None);
-                resource_accesses[id] = before_access.map(|a| a.clone());
+                (
+                    SubmissionResourceType::Image {
+                        initial_layout: _,
+                        image,
+                        subresource_range,
+                    },
+                    Some(before_access),
+                    Some(after_access),
+                ) if before_access.produced_layout() != after_access.expected_layout()
+                    && after_access.expected_layout() != vk::ImageLayout::UNDEFINED =>
+                {
+                    // Image layout transition. Prev image is in VALID or UNDEFINED. Next image is VALID to be read.
+                    let mut image_memory_barrier = vk::MemoryBarrier2::default();
+                    get_memory_access(&mut image_memory_barrier, before_access, after_access);
+                    image_barrier.push(vk::ImageMemoryBarrier2 {
+                        src_stage_mask: image_memory_barrier.src_stage_mask,
+                        src_access_mask: image_memory_barrier.src_access_mask,
+                        dst_stage_mask: image_memory_barrier.dst_stage_mask,
+                        dst_access_mask: image_memory_barrier.dst_access_mask,
+                        old_layout: before_access.produced_layout(),
+                        new_layout: after_access.expected_layout(),
+                        image: *image,
+                        subresource_range: subresource_range.clone(),
+                        ..Default::default()
+                    });
+                }
+                (
+                    SubmissionResourceType::Image {
+                        initial_layout: _,
+                        image,
+                        subresource_range,
+                    },
+                    Some(before_access),
+                    Some(after_access),
+                ) if after_access.expected_layout() == vk::ImageLayout::UNDEFINED
+                    && after_access.produced_layout() != vk::ImageLayout::UNDEFINED =>
+                {
+                    // Image layout transition. Prev image is in VALID or UNDEFINED. Next image is VALID to be read.
+                    let mut image_memory_barrier = vk::MemoryBarrier2::default();
+                    get_memory_access(&mut image_memory_barrier, before_access, after_access);
+                    image_barrier.push(vk::ImageMemoryBarrier2 {
+                        src_stage_mask: image_memory_barrier.src_stage_mask,
+                        src_access_mask: image_memory_barrier.src_access_mask,
+                        dst_stage_mask: image_memory_barrier.dst_stage_mask,
+                        dst_access_mask: image_memory_barrier.dst_access_mask,
+                        old_layout: vk::ImageLayout::UNDEFINED,
+                        new_layout: after_access.produced_layout(),
+                        image: *image,
+                        subresource_range: subresource_range.clone(),
+                        ..Default::default()
+                    });
+                }
+                (
+                    SubmissionResourceType::Image {
+                        initial_layout: _,
+                        image: _,
+                        subresource_range: _,
+                    },
+                    Some(before_access),
+                    Some(after_access),
+                ) => {
+                    // Image without layout transition
+                    get_memory_access(&mut memory_barrier, before_access, after_access)
+                }
+                (
+                    SubmissionResourceType::Image {
+                        initial_layout,
+                        image,
+                        subresource_range,
+                    },
+                    None,
+                    Some(after_access),
+                ) => {
+                    let mut new_layout = after_access.expected_layout();
+                    if new_layout == vk::ImageLayout::UNDEFINED {
+                        new_layout = after_access.produced_layout();
+                    }
+                    if *initial_layout != new_layout && new_layout != vk::ImageLayout::UNDEFINED {
+                        image_barrier.push(vk::ImageMemoryBarrier2 {
+                            src_stage_mask: vk::PipelineStageFlags2::NONE,
+                            src_access_mask: vk::AccessFlags2::NONE,
+                            dst_stage_mask: after_access.read_stages | after_access.write_stages,
+                            dst_access_mask: after_access.read_access | after_access.write_access,
+                            old_layout: *initial_layout,
+                            new_layout,
+                            image: *image,
+                            subresource_range: subresource_range.clone(),
+                            ..Default::default()
+                        });
+                    }
+                }
+                _ => {}
             }
-            if memory_barrier.src_stage_mask.is_empty()
-                && memory_barrier.dst_stage_mask.is_empty()
-                && image_barrier.is_empty()
-            {
-                // No need for pipeline barrier
-                println!("-----pipeline barrier: no op-------");
-            } else {
-                println!(
-                    "-----pipeline barrier: {:?} => {:?} -------",
-                    memory_barrier.src_access_mask, memory_barrier.dst_access_mask
+
+            let id = *id as usize;
+
+            // If this stage has None access, this will write inherited access.
+            // Otherwise, write the access for the current stage.
+            resources[id].access = before_access.map(|a| a.clone());
+        }
+
+        if memory_barrier.src_stage_mask.is_empty()
+            && memory_barrier.dst_stage_mask.is_empty()
+            && image_barrier.is_empty()
+        {
+            // No need for pipeline barrier
+            println!("-----pipeline barrier: no op-------");
+        } else {
+            println!(
+                "-----pipeline barrier: {:?} => {:?} -------",
+                memory_barrier.src_access_mask, memory_barrier.dst_access_mask
+            );
+            /*
+            unsafe {
+                device.cmd_pipeline_barrier2(
+                    command_buffer,
+                    &vk::DependencyInfo {
+                        dependency_flags: vk::DependencyFlags::BY_REGION, // TODO
+                        memory_barrier_count: 1,
+                        p_memory_barriers: &memory_barrier,
+                        ..Default::default()
+                    },
                 );
-                /*
-                unsafe {
-                    device.cmd_pipeline_barrier2(
-                        command_buffer,
-                        &vk::DependencyInfo {
-                            dependency_flags: vk::DependencyFlags::BY_REGION, // TODO
-                            memory_barrier_count: 1,
-                            p_memory_barriers: &memory_barrier,
-                            ..Default::default()
-                        },
-                    );
-                }
-                */
             }
-            memory_barrier = vk::MemoryBarrier2::default();
-            image_barrier.clear();
-            current_context = next_context;
-            ctx.stage_index += 1;
-        };
-        println!("End, starting dropping state");
-        drop(retained_state);
-        println!("End, ending dropping state");
-        result
+            */
+        }
+    }
+    pub(crate) fn record_one_step<T: GPUCommandFuture>(
+        &mut self,
+        mut fut: Pin<&mut T>,
+    ) -> Poll<(T::Output, T::RetainedState)> {
+        let mut next_stage = StageContext::default();
+        fut.as_mut().context(&mut next_stage);
+        if let Some(last_stage) = &self.last_stage {
+            Self::add_barrier(last_stage, &next_stage, &mut self.resources);
+        }
+
+        let ret = fut.as_mut().record(self);
+        *self.last_stage = Some(next_stage);
+        *self.stage_index += 1;
+        ret
     }
 }
-impl<T> GPUCommandFutureRecordAll for T where T: GPUCommandFuture {}
 
 fn get_memory_access(
     memory_barrier: &mut vk::MemoryBarrier2,

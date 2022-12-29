@@ -7,7 +7,7 @@ use std::{
 use ash::vk;
 use pin_project::pin_project;
 
-use crate::future::{GPUCommandFuture, GlobalContext, Res, StageContext};
+use crate::future::{CommandBufferRecordContext, GPUCommandFuture, Res, StageContext};
 
 pub trait BufferSlice {
     fn raw_buffer(&self) -> vk::Buffer;
@@ -40,7 +40,7 @@ impl<
     #[inline]
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut GlobalContext,
+        ctx: &mut CommandBufferRecordContext,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         println!("{}, on stage {}", self.str, ctx.current_stage_index());
         let this = self.project();

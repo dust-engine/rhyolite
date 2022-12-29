@@ -1,10 +1,17 @@
 use crate::transformer::CommandsTransformer;
 
 struct State {
+    current_dispose_index: u32,
+    dispose_forward_decl: proc_macro2::TokenStream,
+    dispose_fn_body: proc_macro2::TokenStream,
 }
 impl Default for State {
     fn default() -> Self {
-        Self{}
+        Self {
+            dispose_forward_decl: proc_macro2::TokenStream::new(),
+            dispose_fn_body: proc_macro2::TokenStream::new(),
+            current_dispose_index: 0,
+        }
     }
 }
 
@@ -19,12 +26,26 @@ impl CommandsTransformer for State {
 
     fn async_transform(&mut self, input: &syn::ExprAwait) -> syn::Expr {
         let base = input.base.clone();
-        syn::Expr::Verbatim(quote::quote!{{
+
+        let dispose_token_name =
+            quote::format_ident!("__future_dispose_{}", self.current_dispose_index);
+        self.current_dispose_index += 1;
+
+        self.dispose_forward_decl.extend(quote::quote! {
+            let mut #dispose_token_name = None;
+        });
+        self.dispose_fn_body.extend(quote::quote! {
+            if let Some(f) = #dispose_token_name {f.await} else {
+                println!("Is none");
+            };
+        });
+
+        syn::Expr::Verbatim(quote::quote! {{
             let mut fut_pinned = std::pin::pin!(#base);
-            fut_pinned.as_mut().init(__current_queue);
-            loop {
+            fut_pinned.as_mut().init(unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)}, __current_queue);
+            let output = loop {
                 use ::async_ash::queue::QueueFuturePoll::*;
-                match fut_pinned.as_mut().record(unsafe{&mut *(__ctx as *mut ::async_ash::queue::QueueContext)}) {
+                match fut_pinned.as_mut().record(unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)}) {
                     Ready { next_queue, output } => {
                         __current_queue = next_queue;
                         break output;
@@ -36,7 +57,10 @@ impl CommandsTransformer for State {
                         yield false;
                     }
                 };
-            }
+            };
+            #dispose_token_name = Some(fut_pinned.dispose());
+            println!("Assigned");
+            output
         }})
     }
     //               queue
@@ -51,10 +75,15 @@ impl CommandsTransformer for State {
     }
 
     fn return_transform(&mut self, ret: &syn::ExprReturn) -> Option<syn::Expr> {
-        let returned_item = ret.expr.as_ref().map(|a| *a.clone()).unwrap_or(syn::Expr::Verbatim(quote::quote!(())));
+        let returned_item = ret
+            .expr
+            .as_ref()
+            .map(|a| *a.clone())
+            .unwrap_or(syn::Expr::Verbatim(quote::quote!(())));
+
         let token_stream = quote::quote!(
             {
-                return (__current_queue, #returned_item);
+                return (__current_queue, dispose_fn_future(), #returned_item);
             }
         );
         Some(syn::Expr::Verbatim(token_stream))
@@ -73,22 +102,31 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
         .iter()
         .map(|stmt| state.transform_stmt(stmt))
         .collect();
+
+    let dispose_forward_decl = state.dispose_forward_decl;
+    let dispose_fn_body = state.dispose_fn_body;
+
     if let Some(last) = inner_closure_stmts.last_mut() {
         if let syn::Stmt::Expr(expr) = last {
             let token_stream = quote::quote!({
-                return (__current_queue, #expr);
+                return (__current_queue, dispose_fn_future(), #expr);
             });
             *expr = syn::Expr::Verbatim(token_stream);
         } else {
             let token_stream = quote::quote!({
-                return (__current_queue, ());
+                return (__current_queue, dispose_fn_future(), ());
             });
             inner_closure_stmts.push(syn::Stmt::Expr(syn::Expr::Verbatim(token_stream)))
         }
     }
+
     quote::quote! {
         async_ash::queue::QueueFutureBlock::new(static |(__initial_queue, __ctx)| {
-            let mut __current_queue: ::async_ash::queue::QueueRef = __initial_queue;
+            #dispose_forward_decl
+            let dispose_fn_future = || async {
+                #dispose_fn_body
+            };
+            let mut __current_queue: ::async_ash::queue::QueueMask = __initial_queue;
             #(#inner_closure_stmts)*
         })
     }
