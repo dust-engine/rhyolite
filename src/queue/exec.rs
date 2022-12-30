@@ -195,17 +195,18 @@ impl Queues {
                 vk::SemaphoreSubmitInfo {
                     semaphore: dep.timeline_semaphore.semaphore,
                     value: dep.timeline_index,
-                    stage_mask: todo!(),
+                    stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS, // TODO: Optimization
                     device_index: 0,
                     ..Default::default()
                 }
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
+
         let signal_semaphore_infos = Box::new(vk::SemaphoreSubmitInfo {
             semaphore: queue_ctx.timeline_semaphore.semaphore,
             value: queue_ctx.timeline_index + 1,
-            stage_mask: todo!(),
+            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS, // TODO: Optimization
             device_index: 0,
             ..Default::default()
         });

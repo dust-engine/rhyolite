@@ -3,12 +3,14 @@ use crate::transformer::CommandsTransformer;
 struct State {
     current_dispose_index: u32,
     dispose_forward_decl: proc_macro2::TokenStream,
+    dispose_borrow_takes: proc_macro2::TokenStream,
     dispose_fn_body: proc_macro2::TokenStream,
 }
 impl Default for State {
     fn default() -> Self {
         Self {
             dispose_forward_decl: proc_macro2::TokenStream::new(),
+            dispose_borrow_takes: proc_macro2::TokenStream::new(),
             dispose_fn_body: proc_macro2::TokenStream::new(),
             current_dispose_index: 0,
         }
@@ -31,13 +33,27 @@ impl CommandsTransformer for State {
             quote::format_ident!("__future_dispose_{}", self.current_dispose_index);
         self.current_dispose_index += 1;
 
+        // Creates a location to store the dispose future. Dispose futures should be invoked
+        // when the future returned by the parent QueueFutureBlock was invoked.
+        // When the corresponding QueueFuture was awaited, the macro writes the return value of
+        // its dispose method into this location.
+        // This needs to be a cell because __dispose_fn_future "pre-mutably-borrows" the value.
+        // This value also needs to be written by the .await statement, creating a double borrow.
         self.dispose_forward_decl.extend(quote::quote! {
-            let mut #dispose_token_name = None;
+            let mut #dispose_token_name = ::std::cell::Cell::new(None);
         });
+        // The program may return at different locations, and upon return, not all futures may have
+        // been awaited. We should only await the dispose futures for those actually awaited so far
+        // in the QueueFuture. We check this at runtime to avoid returning different variants of
+        // the dispose future.
         self.dispose_fn_body.extend(quote::quote! {
-            if let Some(f) = #dispose_token_name {f.await} else {
-                println!("Is none");
-            };
+            if let Some(f) = #dispose_token_name {f.await}
+        });
+        // __dispose_fn_future borrows #dispose_token_name ahead of time. We move out the values
+        // from the cell when __dispose_fn_future was invoked so that we can return a Future with
+        // 'static lifetime. 
+        self.dispose_borrow_takes.extend(quote::quote! {
+            let #dispose_token_name = #dispose_token_name.replace(None);
         });
 
         syn::Expr::Verbatim(quote::quote! {{
@@ -58,7 +74,7 @@ impl CommandsTransformer for State {
                     }
                 };
             };
-            #dispose_token_name = Some(fut_pinned.dispose());
+            #dispose_token_name.replace(Some(fut_pinned.dispose()));
             println!("Assigned");
             output
         }})
@@ -83,7 +99,7 @@ impl CommandsTransformer for State {
 
         let token_stream = quote::quote!(
             {
-                return (__current_queue, dispose_fn_future(), #returned_item);
+                return (__current_queue, __dispose_fn_future(), #returned_item);
             }
         );
         Some(syn::Expr::Verbatim(token_stream))
@@ -105,16 +121,17 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
 
     let dispose_forward_decl = state.dispose_forward_decl;
     let dispose_fn_body = state.dispose_fn_body;
+    let dispose_borrow_takes = state.dispose_borrow_takes;
 
     if let Some(last) = inner_closure_stmts.last_mut() {
         if let syn::Stmt::Expr(expr) = last {
             let token_stream = quote::quote!({
-                return (__current_queue, dispose_fn_future(), #expr);
+                return (__current_queue, __dispose_fn_future(), #expr);
             });
             *expr = syn::Expr::Verbatim(token_stream);
         } else {
             let token_stream = quote::quote!({
-                return (__current_queue, dispose_fn_future(), ());
+                return (__current_queue, __dispose_fn_future(), ());
             });
             inner_closure_stmts.push(syn::Stmt::Expr(syn::Expr::Verbatim(token_stream)))
         }
@@ -123,8 +140,11 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
     quote::quote! {
         async_ash::queue::QueueFutureBlock::new(static |(__initial_queue, __ctx)| {
             #dispose_forward_decl
-            let dispose_fn_future = || async {
-                #dispose_fn_body
+            let mut __dispose_fn_future = || {
+                #dispose_borrow_takes
+                async move {
+                    #dispose_fn_body
+                }
             };
             let mut __current_queue: ::async_ash::queue::QueueMask = __initial_queue;
             #(#inner_closure_stmts)*
