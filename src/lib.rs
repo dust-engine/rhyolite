@@ -21,6 +21,7 @@ pub mod queue;
 mod resources;
 mod semaphore;
 pub mod utils;
+pub mod commands;
 
 pub use debug::{DebugObject, DebugUtilsMessenger};
 pub use device::{Device, HasDevice};

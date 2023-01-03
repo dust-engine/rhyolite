@@ -123,7 +123,6 @@ enum GlobalContextResource {
 pub struct CommandBufferRecordContext<'a> {
     pub(crate) resources: &'a mut Vec<SubmissionResource>,
     // perhaps also a reference to the command buffer allocator
-    pub(crate) command_buffer: vk::CommandBuffer,
     pub(crate) stage_index: &'a mut u32,
     pub(crate) last_stage: &'a mut Option<StageContext>,
 }

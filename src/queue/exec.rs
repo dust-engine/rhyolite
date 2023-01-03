@@ -430,32 +430,10 @@ impl<I1: QueueFuture, I2: QueueFuture> QueueFuture for QueueFutureJoin<I1, I2> {
         futures_util::future::join(this.inner1.dispose(), this.inner2.dispose()).map(|_| ())
     }
 }
-
-/// A command pool.
-struct CommandPoolInner {
-    command_pool: vk::CommandPool,
-    command_buffers: Vec<vk::CommandBuffer>,
-}
-pub struct CommandPool {
-    queue: QueueRef,
-    inner: RefCell<CommandPoolInner>,
-}
-
-impl CommandPool {
-    pub fn record<I: GPUCommandFuture>(&self, fut: I) -> RunCommandsQueueFuture<I> {
-        RunCommandsQueueFuture {
-            exec: self,
-            inner: fut,
-            queue: QueueRef::null(),
-            retained_state: None,
-            prev_queue: QueueMask::empty(),
-        }
-    }
-}
-
+/*
 #[pin_project]
 pub struct RunCommandsQueueFuture<'a, I: GPUCommandFuture> {
-    exec: &'a CommandPool,
+    command_pool: &'a CommandPool,
     #[pin]
     inner: I,
     queue: QueueRef, // If null, use the previous queue.
@@ -483,7 +461,7 @@ impl<'a, I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<'a, I> {
         r.dependencies.merge_with(prev_queue);
         let mut command_ctx = CommandBufferRecordContext {
             resources: &mut ctx.resources,
-            command_buffer: vk::CommandBuffer::null(),
+            command_pool: this.command_pool,
             stage_index: &mut r.stage_index,
             last_stage: &mut r.last_stage,
         };
@@ -507,7 +485,7 @@ impl<'a, I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<'a, I> {
         let r = &mut ctx.queues[this.queue.0 as usize];
         let mut command_ctx = CommandBufferRecordContext {
             resources: &mut ctx.resources,
-            command_buffer: vk::CommandBuffer::null(),
+            command_pool: this.command_pool,
             stage_index: &mut r.stage_index,
             last_stage: &mut r.last_stage,
         };
@@ -536,9 +514,9 @@ impl<'a, I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<'a, I> {
             .expect("Dispose should be called after recording finish");
         async move {
             // await timeline
-
             println!("Await timeline: {}", timelie_index);
             drop(retained_state);
         }
     }
 }
+*/

@@ -60,22 +60,16 @@ impl CommandsTransformer for State {
             let mut fut_pinned = std::pin::pin!(#base);
             fut_pinned.as_mut().init(unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)}, __current_queue);
             let output = loop {
-                use ::async_ash::queue::QueueFuturePoll::*;
                 match fut_pinned.as_mut().record(unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)}) {
-                    Ready { next_queue, output } => {
+                    ::async_ash::queue::QueueFuturePoll::Ready { next_queue, output } => {
                         __current_queue = next_queue;
                         break output;
                     },
-                    Semaphore => {
-                        yield true;
-                    },
-                    Barrier => {
-                        yield false;
-                    }
+                    ::async_ash::queue::QueueFuturePoll::Semaphore => yield true,
+                    ::async_ash::queue::QueueFuturePoll::Barrier => yield false,
                 };
             };
             #dispose_token_name.replace(Some(fut_pinned.dispose()));
-            println!("Assigned");
             output
         }})
     }
