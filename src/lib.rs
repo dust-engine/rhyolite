@@ -8,6 +8,7 @@
 #![feature(iter_from_generator)]
 #![feature(async_closure)]
 #![feature(trait_alias)]
+#![feature(let_chains)]
 #![feature(allocator_api)]
 
 extern crate self as async_ash;

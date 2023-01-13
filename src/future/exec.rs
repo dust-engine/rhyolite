@@ -3,7 +3,6 @@ use crate::{
     SubmissionResourceType,
 };
 use ash::vk;
-use bevy::reflect::erased_serde::__private::serde::__private::de;
 use std::{
     alloc::Allocator,
     collections::{BTreeMap, HashMap},
@@ -14,13 +13,17 @@ use std::{
 use super::GPUCommandFuture;
 
 pub struct Res<'a, T> {
-    access: Access,
+    last_accessed_stage_index: u32,
+    prev_stage_access: Access,
+    current_stage_access: Access,
     inner: &'a mut T,
 }
 impl<'a, T> Res<'a, T> {
     pub fn new(inner: &'a mut T) -> Self {
         Self {
-            access: Access::default(),
+            last_accessed_stage_index: 0,
+            prev_stage_access: Access::default(),
+            current_stage_access: Access::default(),
             inner
         }
     }
@@ -34,13 +37,15 @@ impl<'a, T> Res<'a, T> {
 
 pub struct ResImage<'a, T> {
     res: Res<'a, T>,
+    old_layout: vk::ImageLayout,
     layout: vk::ImageLayout,
 }
 impl<'a, T> ResImage<'a, T> {
     pub fn new(inner: &'a mut T, initial_layout: vk::ImageLayout) -> Self {
         Self {
             res: Res::new(inner),
-            layout: initial_layout
+            layout: initial_layout,
+            old_layout: initial_layout,
         }
     }
     pub fn inner(&self) -> &T {
@@ -73,15 +78,6 @@ impl Access {
     pub fn has_write(&self) -> bool {
         !self.write_stages.is_empty()
     }
-}
-
-enum GlobalContextResource {
-    Memory,
-    Image {
-        initial_layout: vk::ImageLayout,
-        image: vk::Image,
-        subresource_range: vk::ImageSubresourceRange,
-    },
 }
 
 /// One per command buffer record call. If multiple command buffers were merged together on the queue level,
@@ -167,34 +163,59 @@ impl Ord for StageContextImage {
 }
 
 
-#[derive(Default)]
 pub struct StageContext {
-    global_access: Access,
-    image_accesses: BTreeMap<StageContextImage, ImageAccess>,
+    stage_index: u32,
+    global_access: vk::MemoryBarrier2,
+    image_accesses: BTreeMap<StageContextImage, (vk::MemoryBarrier2, vk::ImageLayout, vk::ImageLayout)>,
 }
 
 impl StageContext {
+    pub fn new(index: u32) -> Self {
+        Self {
+            stage_index: index,
+            global_access: vk::MemoryBarrier2::default(),
+            image_accesses: BTreeMap::new()
+        }
+    }
     /// Declare a global memory write
     #[inline]
     pub fn write<T>(
         &mut self,
-        res: &Res<T>,
+        res: &mut Res<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
     ) {
-        self.global_access.write_stages |= stages;
-        self.global_access.write_access |= accesses;
+        if res.last_accessed_stage_index < self.stage_index {
+            res.prev_stage_access = std::mem::replace(&mut res.current_stage_access, Default::default());
+        }
+        get_memory_access(&mut self.global_access, &res.prev_stage_access, &Access {
+            write_access: accesses,
+            write_stages: stages,
+            ..Default::default()
+        });
+        res.current_stage_access.write_access |= accesses;
+        res.current_stage_access.write_stages |= stages;
+        res.last_accessed_stage_index = self.stage_index;
     }
     /// Declare a global memory read
     #[inline]
     pub fn read<T>(
         &mut self,
-        res: &Res<T>,
+        res: &mut Res<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
     ) {
-        self.global_access.read_stages |= stages;
-        self.global_access.read_access |= accesses;
+        if res.last_accessed_stage_index < self.stage_index {
+            res.prev_stage_access = std::mem::replace(&mut res.current_stage_access, Default::default());
+        }
+        get_memory_access(&mut self.global_access, &res.prev_stage_access, &Access {
+            read_access: accesses,
+            read_stages: stages,
+            ..Default::default()
+        });
+        res.current_stage_access.read_access |= accesses;
+        res.current_stage_access.read_stages |= stages;
+        res.last_accessed_stage_index = self.stage_index;
     }
     #[inline]
     pub fn write_image<T>(
@@ -204,24 +225,27 @@ impl StageContext {
         accesses: vk::AccessFlags2,
         layout: vk::ImageLayout,
     ) where T: ImageLike {
-        let entry = self.image_accesses.entry(StageContextImage {
+        let (barrier, old_layout, new_layout) = self.image_accesses.entry(StageContextImage {
             image: res.inner().raw_image(),
             subresource_range: res.inner().subresource_range(),
-        }).or_insert(ImageAccess::default());
-
-        entry.prev_access = res.res.access.clone();
-        entry.prev_layout = res.layout;
-        entry.layout = layout;
-
-        entry.access.write_stages |= stages;
-        entry.access.write_access |= accesses;
-
-        res.layout = layout;
-        res.res.access = Access {
+        }).or_insert((Default::default(), res.old_layout, layout));
+        
+        if res.res.last_accessed_stage_index < self.stage_index {
+            res.res.prev_stage_access = std::mem::replace(&mut res.res.current_stage_access, Default::default());
+            res.old_layout = res.layout;
+        } else {
+            assert_eq!(res.layout, layout, "Layout mismatch.");
+        }
+        get_memory_access(barrier, &res.res.prev_stage_access, &Access {
             write_access: accesses,
             write_stages: stages,
             ..Default::default()
-        };
+        });
+
+        res.res.current_stage_access.write_access |= accesses;
+        res.res.current_stage_access.write_stages |= stages;
+        res.res.last_accessed_stage_index = self.stage_index;
+        res.layout = layout;
     }
     /// Declare a global memory read
     #[inline]
@@ -232,30 +256,30 @@ impl StageContext {
         accesses: vk::AccessFlags2,
         layout: vk::ImageLayout,
     ) where T: ImageLike {
-        let entry = self.image_accesses.entry(StageContextImage {
+        let (barrier, old_layout, new_layout) = self.image_accesses.entry(StageContextImage {
             image: res.inner().raw_image(),
             subresource_range: res.inner().subresource_range(),
-        }).or_insert(ImageAccess::default());
+        }).or_insert((Default::default(), res.old_layout, layout));
         
-        entry.prev_access = res.res.access.clone();
-        entry.prev_layout = res.layout;
-        entry.access.read_stages |= stages;
-        entry.access.read_access |= accesses;
-        entry.layout = layout;
-
-        res.layout = layout;
-        res.res.access = Access {
+        if res.res.last_accessed_stage_index < self.stage_index {
+            res.res.prev_stage_access = std::mem::replace(&mut res.res.current_stage_access, Default::default());
+            res.old_layout = res.layout;
+        } else {
+            assert_eq!(res.layout, layout, "Layout mismatch.");
+        }
+        get_memory_access(barrier, &res.res.prev_stage_access, &Access {
             read_access: accesses,
             read_stages: stages,
             ..Default::default()
-        };
+        });
 
+        res.res.current_stage_access.read_access |= accesses;
+        res.res.current_stage_access.read_stages |= stages;
+        res.res.last_accessed_stage_index = self.stage_index;
+        res.layout = layout;
     }
     pub fn merge(&mut self, mut other: Self) {
-        self.global_access.read_access |= other.global_access.read_access;
-        self.global_access.read_stages |= other.global_access.read_stages;
-        self.global_access.write_access |= other.global_access.write_access;
-        self.global_access.write_stages |= other.global_access.write_stages;
+        todo!()
         // TODO: Merge image accesses.
     }
 }
@@ -272,33 +296,34 @@ impl CommandBufferRecordState {
         next: &StageContext,
         cmd_pipeline_barrier: impl FnOnce(&vk::DependencyInfo) -> ()
     ) {
-        let mut global_memory_barrier = vk::MemoryBarrier2::default();
+        let mut global_memory_barrier = next.global_access.clone();
         let mut image_barrier: Vec<vk::ImageMemoryBarrier2> = Vec::new();
 
         // Set the global memory barrier.
-        get_memory_access(&mut global_memory_barrier, &prev.global_access, &next.global_access);
 
 
 
-        for (image, image_access) in next.image_accesses.iter() {
-            if image_access.prev_layout == image_access.layout {
-                get_memory_access(&mut global_memory_barrier, &image_access.prev_access, &image_access.access);
+        for (image, (barrier, old_layout, new_layout)) in next.image_accesses.iter() {
+            if old_layout == new_layout {
+                global_memory_barrier.dst_access_mask |= barrier.dst_access_mask;
+                global_memory_barrier.src_access_mask |= barrier.src_access_mask;
+                global_memory_barrier.dst_stage_mask |= barrier.dst_stage_mask;
+                global_memory_barrier.src_stage_mask |= barrier.src_stage_mask;
             } else {
                 // Needs image layout transfer.
-                let mut b  = vk::MemoryBarrier2::default();
-                get_memory_access(&mut b, &image_access.prev_access, &image_access.access);
                 let o = vk::ImageMemoryBarrier2 {
-                    src_access_mask: b.src_access_mask,
-                    src_stage_mask: b.src_stage_mask,
-                    dst_access_mask: b.dst_access_mask,
-                    dst_stage_mask: b.dst_stage_mask,
+                    src_access_mask: barrier.src_access_mask,
+                    src_stage_mask: barrier.src_stage_mask,
+                    dst_access_mask: barrier.dst_access_mask,
+                    dst_stage_mask: barrier.dst_stage_mask,
                     image: image.image,
                     subresource_range: image.subresource_range,
-                    old_layout: image_access.prev_layout,
-                    new_layout: image_access.layout,
+                    old_layout: *old_layout,
+                    new_layout: *new_layout,
                     ..Default::default()
                 };
-                if b.src_access_mask.is_empty() {
+                if barrier.src_access_mask.is_empty() {
+                    // TODO: This is a bit questionable
                     continue;
                 }
                 image_barrier.push(o);
@@ -330,7 +355,7 @@ impl<'b> CommandBufferRecordContext<'b> {
         &mut self,
         mut fut: Pin<&mut T>,
     ) -> Poll<(T::Output, T::RetainedState)> {
-        let mut next_stage = StageContext::default();
+        let mut next_stage = StageContext::new(*self.stage_index);
         fut.as_mut().context(&mut next_stage);
         if let Some(last_stage) = &self.last_stage {
             self.state.add_barrier(last_stage, &next_stage, |_| {
@@ -406,12 +431,15 @@ mod tests {
         None,
     }
     impl ReadWrite {
-        fn to_access(&self) -> Access {
+        fn stage<T>(&self, stage_ctx: &mut StageContext, res: &mut Res<T>) {
             match &self {
-                ReadWrite::Read(read_stages, read_access) => Access { read_stages: *read_stages, read_access: *read_access, ..Default::default() },
-                ReadWrite::Write(write_stages, write_access) => Access { write_stages: *write_stages, write_access: *write_access, ..Default::default() },
-                ReadWrite::ReadWrite(a) => a.clone(),
-                ReadWrite::None => Default::default()
+                ReadWrite::Read(stage, access) => stage_ctx.read(res, *stage, *access),
+                ReadWrite::Write(stage, access) => stage_ctx.write(res, *stage, *access),
+                ReadWrite::ReadWrite(access) => {
+                    stage_ctx.read(res, access.read_stages, access.read_access);
+                    stage_ctx.write(res, access.write_stages, access.write_access);
+                },
+                ReadWrite::None => (),
             }
         }
     }
@@ -456,17 +484,18 @@ mod tests {
             ), // Dispatch writes into a storage buffer. Draw consumes that buffer as an index buffer.
         ];
 
+        let mut buffer: vk::Buffer = unsafe { std::mem::transmute(123_u64)};
         for test_case in test_cases.into_iter() {
+            let mut buffer = Res::new(&mut buffer);
             let mut state = CommandBufferRecordState::default();
+            let mut stage1 = StageContext::new(0);
+            test_case.0[0].stage(&mut stage1, &mut buffer);
+
+            let mut stage2 = StageContext::new(1);
+            test_case.0[1].stage(&mut stage2, &mut buffer);
 
             let mut called = false;
-            state.add_barrier(&StageContext {
-                global_access: test_case.0[0].to_access(),
-                ..Default::default()
-            }, &StageContext {
-                global_access: test_case.0[1].to_access(),
-                ..Default::default()
-            }, |dep| {
+            state.add_barrier(&stage1, &stage2, |dep| {
                 called = true;
                 assert_global(
                     dep,
@@ -478,6 +507,8 @@ mod tests {
             });
             if test_case.1.0 != vk::PipelineStageFlags2::NONE && test_case.1.2 != vk::PipelineStageFlags2::NONE {
                 assert!(called);
+            } else {
+                assert!(!called);
             }
         }
     }
@@ -518,17 +549,19 @@ mod tests {
                 ]
             ),
         ];
+        let mut buffer: vk::Buffer = unsafe { std::mem::transmute(123_u64)};
         for test_case in test_cases.into_iter() {
             let mut state = CommandBufferRecordState::default();
+            let mut buffer = Res::new(&mut buffer);
+
+            let mut stage1 = StageContext::new(0);
+            test_case.0[0].stage(&mut stage1, &mut buffer);
+
+            let mut stage2 = StageContext::new(1);
+            test_case.0[1].stage(&mut stage2, &mut buffer);
 
             let mut called = false;
-            state.add_barrier(&StageContext {
-                global_access: test_case.0[0].to_access(),
-                ..Default::default()
-            }, &StageContext {
-                global_access: test_case.0[1].to_access(),
-                ..Default::default()
-            }, |dep| {
+            state.add_barrier(&stage1, &stage2, |dep| {
                 called = true;
                 assert_global(
                     dep,
@@ -543,13 +576,13 @@ mod tests {
                 assert!(called);
             }
             called = false;
-            state.add_barrier(&StageContext {
-                global_access: test_case.0[1].to_access(),
-                ..Default::default()
-            }, &StageContext {
-                global_access: test_case.0[2].to_access(),
-                ..Default::default()
-            }, |dep| {
+
+            
+            let mut stage3 = StageContext::new(2);
+            test_case.0[2].stage(&mut stage3, &mut buffer);
+
+
+            state.add_barrier(&stage2, &stage3, |dep| {
                 called = true;
                 assert_global(
                     dep,
@@ -590,16 +623,18 @@ mod tests {
                 layer_count: vk::REMAINING_ARRAY_LAYERS,
             }
         };
+        
+        let mut buffer1: vk::Buffer = unsafe { std::mem::transmute(4562_usize)};
+        let mut buffer2: vk::Buffer = unsafe { std::mem::transmute(578_usize)};
 
 
         {
-            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::UNDEFINED);
+            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
             // First dispatch writes to a storage image, second dispatch reads from that storage image.
-            let mut stage1 = StageContext::default();
+            let mut stage1 = StageContext::new(0);
             stage1.write_image(&mut stage_image_res, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE, vk::ImageLayout::GENERAL);
     
-    
-            let mut stage2 = StageContext::default();
+            let mut stage2 = StageContext::new(1);
             stage2.read_image(&mut stage_image_res, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_READ, vk::ImageLayout::GENERAL);
     
             let mut called = false;
@@ -616,13 +651,13 @@ mod tests {
             assert!(called);
         }
         {
-            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::UNDEFINED);
+            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
             // Dispatch writes into a storage image. Draw samples that image in a fragment shader.
-            let mut stage1 = StageContext::default();
+            let mut stage1 = StageContext::new(0);
             stage1.write_image(&mut stage_image_res, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE, vk::ImageLayout::GENERAL);
     
     
-            let mut stage2 = StageContext::default();
+            let mut stage2 = StageContext::new(1);
             stage2.read_image(&mut stage_image_res, vk::PipelineStageFlags2::FRAGMENT_SHADER, vk::AccessFlags2::SHADER_SAMPLED_READ, vk::ImageLayout::READ_ONLY_OPTIMAL);
     
             let mut called = false;
@@ -644,21 +679,21 @@ mod tests {
 
         {
             // Tests that image access info are retained across stages.
-            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::UNDEFINED);
-            let mut stage_image_res2 = ResImage::new(&mut stage_image2, vk::ImageLayout::UNDEFINED);
-            // Stage 1 is a compute shader which writes into a buffer and an image.
-            // Stage 2 is a graphics pass which reads the buffer as the vertex input and writes to another image.
-            // Stage 3 is a compute shader, reads both images, and writes into a buffer.
-            // Stage 4 is a compute shader that reads the buffer.
-            let mut stage1 = StageContext::default();
-            stage1.global_access.write_access |= vk::AccessFlags2::SHADER_STORAGE_WRITE;
-            stage1.global_access.write_stages |= vk::PipelineStageFlags2::COMPUTE_SHADER;
+            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
+            let mut stage_image_res2 = ResImage::new(&mut stage_image2, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            let mut buffer_res1 = Res::new(&mut buffer1);
+            let mut buffer_res2 = Res::new(&mut buffer2);
+            // Stage 1 is a compute shader which writes into buffer1 and an image.
+            // Stage 2 is a graphics pass which reads buffer1 as the vertex input and writes to another image.
+            // Stage 3 is a compute shader, reads both images, and writes into buffer2.
+            // Stage 4 is a compute shader that reads buffer2.
+            let mut stage1 = StageContext::new(0);
+            stage1.write(&mut buffer_res1, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE);
             stage1.write_image(&mut stage_image_res, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE, vk::ImageLayout::GENERAL);
     
     
-            let mut stage2 = StageContext::default();
-            stage2.global_access.read_access |= vk::AccessFlags2::VERTEX_ATTRIBUTE_READ;
-            stage2.global_access.read_stages |= vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT;
+            let mut stage2 = StageContext::new(1);
+            stage2.read(&mut buffer_res1, vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT, vk::AccessFlags2::VERTEX_ATTRIBUTE_READ);
             stage2.write_image(&mut stage_image_res2, vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT, vk::AccessFlags2::COLOR_ATTACHMENT_WRITE, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
             
 
@@ -669,11 +704,10 @@ mod tests {
             });
             assert!(called);
 
-            let mut stage3 = StageContext::default();
+            let mut stage3 = StageContext::new(2);
             stage3.read_image(&mut stage_image_res, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_READ, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
             stage3.read_image(&mut stage_image_res2, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_READ, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-            stage3.global_access.write_access |= vk::AccessFlags2::SHADER_STORAGE_WRITE;
-            stage3.global_access.write_stages |= vk::PipelineStageFlags2::COMPUTE_SHADER;
+            stage3.write(&mut buffer_res2, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE);
     
             called = false;
             state.add_barrier(&stage2, &stage3, |dep| {
@@ -702,6 +736,16 @@ mod tests {
                     assert_eq!(image_memory_barrier.dst_stage_mask, vk::PipelineStageFlags2::COMPUTE_SHADER);
                     assert_eq!(image_memory_barrier.dst_access_mask, vk::AccessFlags2::SHADER_STORAGE_READ);
                 }
+            });
+            assert!(called);
+
+
+            let mut stage4 = StageContext::new(3);
+            stage4.read(&mut buffer_res2, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_READ);
+            called = false;
+            state.add_barrier(&stage3, &stage4, |dep| {
+                called = true;
+                assert_global(dep, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE, vk::PipelineStageFlags2::COMPUTE_SHADER,vk::AccessFlags2::SHADER_STORAGE_READ);
             });
             assert!(called);
         }
