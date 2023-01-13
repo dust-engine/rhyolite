@@ -5,7 +5,7 @@ use futures_util::future::OptionFuture;
 use pin_project::pin_project;
 
 use crate::{
-    future::{Access, CommandBufferRecordContext, GPUCommandFuture, StageContext},
+    future::{CommandBufferRecordContext, GPUCommandFuture, StageContext},
     Device, Queue, TimelineSemaphore,
 };
 
@@ -67,14 +67,9 @@ pub(crate) enum SubmissionResourceType {
         subresource_range: vk::ImageSubresourceRange,
     },
 }
-pub(crate) struct SubmissionResource {
-    pub(crate) ty: SubmissionResourceType,
-    pub(crate) access: Option<Access>,
-}
 
 /// One for each submission.
 pub struct SubmissionContext {
-    resources: Vec<SubmissionResource>,
     queues: Vec<QueueSubmissionContext>,
 }
 
@@ -86,7 +81,6 @@ impl SubmissionContext {
 
 /// One per queue per submission
 pub struct QueueSubmissionContext {
-    last_stage: Option<StageContext>,
     stage_index: u32,
     timeline_index: u64,
     timeline_semaphore: TimelineSemaphore,
@@ -117,10 +111,8 @@ impl Queues {
     ) -> impl std::future::Future<Output = F::Output> {
         let mut future = std::pin::pin!(future);
         let mut submission_context = SubmissionContext {
-            resources: Vec::new(),
             queues: Vec::from_iter(
                 std::iter::repeat_with(|| QueueSubmissionContext {
-                    last_stage: None,
                     stage_index: 0,
                     timeline_index: 0,
                     timeline_semaphore: TimelineSemaphore::new(self.device.clone(), 0).unwrap(),

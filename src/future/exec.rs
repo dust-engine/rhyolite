@@ -1,5 +1,5 @@
 use crate::{
-    utils::merge_iter::btree_map_union, Device, ImageLike, SubmissionResource,
+    utils::merge_iter::btree_map_union, Device, ImageLike,
     SubmissionResourceType,
 };
 use ash::vk;
@@ -56,37 +56,11 @@ impl<'a, T> ResImage<'a, T> {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct Access {
-    read_stages: vk::PipelineStageFlags2,
-    read_access: vk::AccessFlags2,
-    write_stages: vk::PipelineStageFlags2,
-    write_access: vk::AccessFlags2,
-}
-
-#[derive(Clone, Default)]
-pub struct ImageAccess {
-    access: Access,
-    prev_access: Access,
-    prev_layout: vk::ImageLayout,
-    layout: vk::ImageLayout,
-}
-impl Access {
-    pub fn has_read(&self) -> bool {
-        !self.read_stages.is_empty()
-    }
-    pub fn has_write(&self) -> bool {
-        !self.write_stages.is_empty()
-    }
-}
-
 /// One per command buffer record call. If multiple command buffers were merged together on the queue level,
 /// this would be the same.
 pub struct CommandBufferRecordContext<'a> {
-    pub(crate) state: &'a mut CommandBufferRecordState,
     // perhaps also a reference to the command buffer allocator
     pub(crate) stage_index: &'a mut u32,
-    pub(crate) last_stage: &'a mut Option<StageContext>,
 }
 
 impl<'b> CommandBufferRecordContext<'b> {
@@ -284,26 +258,33 @@ impl StageContext {
     }
 }
 
-#[derive(Default)]
-pub struct CommandBufferRecordState {
-    
-}
-
-impl CommandBufferRecordState {
-    fn add_barrier(
+impl<'b> CommandBufferRecordContext<'b> {
+    pub(crate) fn record_one_step<T: GPUCommandFuture>(
         &mut self,
-        prev: &StageContext,
-        next: &StageContext,
+        mut fut: Pin<&mut T>,
+    ) -> Poll<(T::Output, T::RetainedState)> {
+        let mut next_stage = StageContext::new(*self.stage_index);
+        fut.as_mut().context(&mut next_stage);
+        Self::add_barrier(&next_stage, |_| {
+            // TODO: noop for now
+        });
+
+        let ret = fut.as_mut().record(self);
+        *self.stage_index += 1;
+        ret
+    }
+    fn add_barrier(
+        next_stage: &StageContext,
         cmd_pipeline_barrier: impl FnOnce(&vk::DependencyInfo) -> ()
     ) {
-        let mut global_memory_barrier = next.global_access.clone();
+        let mut global_memory_barrier = next_stage.global_access.clone();
         let mut image_barrier: Vec<vk::ImageMemoryBarrier2> = Vec::new();
 
         // Set the global memory barrier.
 
 
 
-        for (image, (barrier, old_layout, new_layout)) in next.image_accesses.iter() {
+        for (image, (barrier, old_layout, new_layout)) in next_stage.image_accesses.iter() {
             if old_layout == new_layout {
                 global_memory_barrier.dst_access_mask |= barrier.dst_access_mask;
                 global_memory_barrier.src_access_mask |= barrier.src_access_mask;
@@ -350,23 +331,23 @@ impl CommandBufferRecordState {
         }
     }
 }
-impl<'b> CommandBufferRecordContext<'b> {
-    pub(crate) fn record_one_step<T: GPUCommandFuture>(
-        &mut self,
-        mut fut: Pin<&mut T>,
-    ) -> Poll<(T::Output, T::RetainedState)> {
-        let mut next_stage = StageContext::new(*self.stage_index);
-        fut.as_mut().context(&mut next_stage);
-        if let Some(last_stage) = &self.last_stage {
-            self.state.add_barrier(last_stage, &next_stage, |_| {
-                // TODO: noop for now
-            });
-        }
 
-        let ret = fut.as_mut().record(self);
-        *self.last_stage = Some(next_stage);
-        *self.stage_index += 1;
-        ret
+
+
+#[derive(Clone, Default)]
+struct Access {
+    read_stages: vk::PipelineStageFlags2,
+    read_access: vk::AccessFlags2,
+    write_stages: vk::PipelineStageFlags2,
+    write_access: vk::AccessFlags2,
+}
+
+impl Access {
+    pub fn has_read(&self) -> bool {
+        !self.read_stages.is_empty()
+    }
+    pub fn has_write(&self) -> bool {
+        !self.write_stages.is_empty()
     }
 }
 
@@ -487,7 +468,6 @@ mod tests {
         let mut buffer: vk::Buffer = unsafe { std::mem::transmute(123_u64)};
         for test_case in test_cases.into_iter() {
             let mut buffer = Res::new(&mut buffer);
-            let mut state = CommandBufferRecordState::default();
             let mut stage1 = StageContext::new(0);
             test_case.0[0].stage(&mut stage1, &mut buffer);
 
@@ -495,7 +475,7 @@ mod tests {
             test_case.0[1].stage(&mut stage2, &mut buffer);
 
             let mut called = false;
-            state.add_barrier(&stage1, &stage2, |dep| {
+            CommandBufferRecordContext::add_barrier(&stage2, |dep| {
                 called = true;
                 assert_global(
                     dep,
@@ -551,7 +531,6 @@ mod tests {
         ];
         let mut buffer: vk::Buffer = unsafe { std::mem::transmute(123_u64)};
         for test_case in test_cases.into_iter() {
-            let mut state = CommandBufferRecordState::default();
             let mut buffer = Res::new(&mut buffer);
 
             let mut stage1 = StageContext::new(0);
@@ -561,7 +540,7 @@ mod tests {
             test_case.0[1].stage(&mut stage2, &mut buffer);
 
             let mut called = false;
-            state.add_barrier(&stage1, &stage2, |dep| {
+            CommandBufferRecordContext::add_barrier(&stage2, |dep| {
                 called = true;
                 assert_global(
                     dep,
@@ -582,7 +561,7 @@ mod tests {
             test_case.0[2].stage(&mut stage3, &mut buffer);
 
 
-            state.add_barrier(&stage2, &stage3, |dep| {
+            CommandBufferRecordContext::add_barrier(&stage3, |dep| {
                 called = true;
                 assert_global(
                     dep,
@@ -600,7 +579,6 @@ mod tests {
 
     #[test]
     fn c2c_image_tests() {
-        let mut state = CommandBufferRecordState::default();
         let image: vk::Image = unsafe { std::mem::transmute(123_usize)};
         let mut stage_image = StageContextImage {
             image,
@@ -638,7 +616,7 @@ mod tests {
             stage2.read_image(&mut stage_image_res, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_READ, vk::ImageLayout::GENERAL);
     
             let mut called = false;
-            state.add_barrier(&stage1, &stage2, |dep| {
+            CommandBufferRecordContext::add_barrier(&stage2, |dep| {
                 called = true;
                 assert_global(
                     dep,
@@ -661,7 +639,7 @@ mod tests {
             stage2.read_image(&mut stage_image_res, vk::PipelineStageFlags2::FRAGMENT_SHADER, vk::AccessFlags2::SHADER_SAMPLED_READ, vk::ImageLayout::READ_ONLY_OPTIMAL);
     
             let mut called = false;
-            state.add_barrier(&stage1, &stage2, |dep| {
+            CommandBufferRecordContext::add_barrier(&stage2, |dep| {
                 called = true;
                 assert_eq!(dep.memory_barrier_count, 0);
                 assert_eq!(dep.buffer_memory_barrier_count, 0);
@@ -698,7 +676,7 @@ mod tests {
             
 
             let mut called = false;
-            state.add_barrier(&stage1, &stage2, |dep| {
+            CommandBufferRecordContext::add_barrier(&stage2, |dep| {
                 called = true;
                 assert_global(dep, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE, vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT,vk::AccessFlags2::VERTEX_ATTRIBUTE_READ);
             });
@@ -710,7 +688,7 @@ mod tests {
             stage3.write(&mut buffer_res2, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE);
     
             called = false;
-            state.add_barrier(&stage2, &stage3, |dep| {
+            CommandBufferRecordContext::add_barrier(&stage3, |dep| {
                 called = true;
                 assert_eq!(dep.memory_barrier_count, 0);
                 assert_eq!(dep.buffer_memory_barrier_count, 0);
@@ -743,7 +721,7 @@ mod tests {
             let mut stage4 = StageContext::new(3);
             stage4.read(&mut buffer_res2, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_READ);
             called = false;
-            state.add_barrier(&stage3, &stage4, |dep| {
+            CommandBufferRecordContext::add_barrier(&stage4, |dep| {
                 called = true;
                 assert_global(dep, vk::PipelineStageFlags2::COMPUTE_SHADER, vk::AccessFlags2::SHADER_STORAGE_WRITE, vk::PipelineStageFlags2::COMPUTE_SHADER,vk::AccessFlags2::SHADER_STORAGE_READ);
             });
