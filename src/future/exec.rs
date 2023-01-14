@@ -267,6 +267,7 @@ impl CommandBufferRecordContext {
     pub fn record_one_step<T: GPUCommandFuture>(
         &mut self,
         mut fut: Pin<&mut T>,
+        recycled_state: &mut T::RecycledState
     ) -> Poll<(T::Output, T::RetainedState)> {
         let mut next_stage = StageContext::new(self.stage_index);
         fut.as_mut().context(&mut next_stage);
@@ -274,7 +275,7 @@ impl CommandBufferRecordContext {
             // TODO: noop for now
         });
 
-        let ret = fut.as_mut().record(self);
+        let ret = fut.as_mut().record(self, recycled_state);
         self.stage_index += 1;
         ret
     }

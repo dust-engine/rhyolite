@@ -5,6 +5,7 @@ use std::task::Poll;
 mod block;
 mod exec;
 mod ext;
+pub mod state;
 pub use block::*;
 pub use exec::*;
 pub use ext::*;
@@ -16,6 +17,9 @@ pub trait GPUCommandFuture {
 
     /// Objects with lifetimes that need to be extended until the future was executed on the GPU.
     type RetainedState;
+
+    /// Optional object to be passed in at record time that collects reused states.
+    type RecycledState: Default;
 
     /// Attempt to record as many commands as possible into the provided
     /// command_buffer until a pipeline barrier is needed.
@@ -41,6 +45,7 @@ pub trait GPUCommandFuture {
     fn record(
         self: Pin<&mut Self>,
         ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)>;
 
     /// Returns the context for the operations recorded into the command buffer

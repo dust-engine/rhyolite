@@ -47,23 +47,26 @@ where
 {
     type Output = (G1::Output, G2::Output);
     type RetainedState = (G1::RetainedState, G2::RetainedState);
+    type RecycledState = (G1::RecycledState, G2::RecycledState);
     #[inline]
     fn record(
         self: Pin<&mut Self>,
         command_buffer: &mut CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
         assert!(
             !*this.results_taken,
             "Attempted to record a GPUCommandJoin after it's finished"
         );
+        let (recycle1, recycle2) = recycled_state;
         if this.inner1_result.is_none() {
-            if let Poll::Ready(r) = this.inner1.record(command_buffer) {
+            if let Poll::Ready(r) = this.inner1.record(command_buffer, recycle1) {
                 *this.inner1_result = Some(r);
             }
         }
         if this.inner2_result.is_none() {
-            if let Poll::Ready(r) = this.inner2.record(command_buffer) {
+            if let Poll::Ready(r) = this.inner2.record(command_buffer, recycle2) {
                 *this.inner2_result = Some(r);
             }
         }
@@ -112,13 +115,15 @@ where
 {
     type Output = R;
     type RetainedState = G::RetainedState;
+    type RecycledState = G::RecycledState;
     #[inline]
     fn record(
         self: Pin<&mut Self>,
         ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
-        match this.inner.record(ctx) {
+        match this.inner.record(ctx, recycled_state) {
             Poll::Pending => Poll::Pending,
             Poll::Ready((r, retained_state)) => {
                 let mapper = this
@@ -188,10 +193,12 @@ where
 {
     type Output = G::Output;
     type RetainedState = Option<G::RetainedState>;
+    type RecycledState = G::RecycledState;
     #[inline]
     fn record(
         self: Pin<&mut Self>,
         ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let mut this = &mut *self.project().inner.borrow_mut();
         if !this.ready.iter().all(|a| *a) {
@@ -204,7 +211,7 @@ where
                 if this.last_stage < ctx.current_stage_index() {
                     // do the work
                     this.last_stage = ctx.current_stage_index();
-                    match inner.record(ctx) {
+                    match inner.record(ctx, recycled_state) {
                         Poll::Pending => Poll::Pending,
                         Poll::Ready((result, retained)) => {
                             this.inner
