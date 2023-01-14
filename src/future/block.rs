@@ -5,10 +5,30 @@ use std::ops::{Generator, GeneratorState};
 use std::pin::Pin;
 use std::task::Poll;
 
+pub struct GPUCommandGeneratorContextFetchPtr {
+    this: *mut (),
+    fetch: fn(*mut (), ctx: &mut StageContext),
+}
+impl GPUCommandGeneratorContextFetchPtr {
+    pub fn new<T: GPUCommandFuture>(this: Pin<&mut T>) -> Self {
+        Self {
+            this: unsafe {
+                this.get_unchecked_mut() as *mut T as *mut ()
+            },
+            fetch: |ptr, stage| unsafe {
+                let ptr = std::pin::Pin::new_unchecked(&mut *(ptr as *mut T));
+                T::context(ptr, stage)
+            }
+        }
+    }
+    pub fn call(&mut self, ctx: &mut StageContext) {
+        (self.fetch)(self.this, ctx);
+    }
+}
 //S Generator takes a raw pointer as the argument. https://github.com/rust-lang/rust/issues/68923
-pub trait GPUCommandGenerator<R, State> = for<'a> Generator<
-    *mut CommandBufferRecordContext<'a>,
-    Yield = StageContext,
+pub trait GPUCommandGenerator<R, State> = Generator<
+    *mut CommandBufferRecordContext,
+    Yield = GPUCommandGeneratorContextFetchPtr,
     Return = (R, State),
 >;
 
@@ -16,7 +36,7 @@ pub trait GPUCommandGenerator<R, State> = for<'a> Generator<
 pub struct GPUCommandBlock<R, State, G> {
     #[pin]
     inner: G,
-    next_ctx: Option<StageContext>,
+    next_ctx: Option<GPUCommandGeneratorContextFetchPtr>,
     _marker: std::marker::PhantomData<fn() -> (R, State)>,
 }
 impl<R, State, G: GPUCommandGenerator<R, State>> GPUCommandBlock<R, State, G> {
@@ -52,9 +72,9 @@ impl<R, State, G: GPUCommandGenerator<R, State>> GPUCommandFuture for GPUCommand
         let next_ctx = self
             .project()
             .next_ctx
-            .take()
-            .expect("Attempted to take the context multiple times");
-        ctx.merge(next_ctx);
+            .as_mut()
+            .expect("Calling context without calling init");
+        next_ctx.call(ctx);
     }
     fn init(mut self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
         // Reach the first yield point to get the context of the first awaited future.

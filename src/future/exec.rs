@@ -58,14 +58,19 @@ impl<'a, T> ResImage<'a, T> {
 
 /// One per command buffer record call. If multiple command buffers were merged together on the queue level,
 /// this would be the same.
-pub struct CommandBufferRecordContext<'a> {
+pub struct CommandBufferRecordContext {
     // perhaps also a reference to the command buffer allocator
-    pub(crate) stage_index: &'a mut u32,
+    pub(crate) stage_index: u32,
 }
 
-impl<'b> CommandBufferRecordContext<'b> {
+impl CommandBufferRecordContext {
+    pub fn new(stage_index: u32) -> Self {
+        Self {
+            stage_index
+        }
+    }
     pub fn current_stage_index(&self) -> u32 {
-        *self.stage_index
+        self.stage_index
     }
     pub fn add_res<'a, T>(&mut self, res: &'a mut T) -> Res<'a, T> {
         Res::new(res)
@@ -258,19 +263,19 @@ impl StageContext {
     }
 }
 
-impl<'b> CommandBufferRecordContext<'b> {
-    pub(crate) fn record_one_step<T: GPUCommandFuture>(
+impl CommandBufferRecordContext {
+    pub fn record_one_step<T: GPUCommandFuture>(
         &mut self,
         mut fut: Pin<&mut T>,
     ) -> Poll<(T::Output, T::RetainedState)> {
-        let mut next_stage = StageContext::new(*self.stage_index);
+        let mut next_stage = StageContext::new(self.stage_index);
         fut.as_mut().context(&mut next_stage);
         Self::add_barrier(&next_stage, |_| {
             // TODO: noop for now
         });
 
         let ret = fut.as_mut().record(self);
-        *self.stage_index += 1;
+        self.stage_index += 1;
         ret
     }
     fn add_barrier(

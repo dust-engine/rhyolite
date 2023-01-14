@@ -86,9 +86,7 @@ impl CommandsTransformer for CommandsTransformState {
                 let mut fut = #base;
                 let mut fut_pinned = unsafe { std::pin::Pin::new_unchecked(&mut fut) };
                 fut_pinned.as_mut().init(__fut_global_ctx);
-                let mut ctx = Default::default();
-                fut_pinned.as_mut().context(&mut ctx);
-                yield ctx;
+                yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
                 loop {
                     use ::std::task::Poll::*;
                     match fut_pinned.as_mut().record(__fut_global_ctx) {
@@ -97,9 +95,7 @@ impl CommandsTransformer for CommandsTransformState {
                             break output
                         },
                         Yielded => {
-                            let mut ctx = Default::default();
-                            fut_pinned.as_mut().context(&mut ctx);
-                            yield ctx;
+                            yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
                         },
                     };
                 }
@@ -259,8 +255,8 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
     let awaited_future_bindings = state.await_bindings;
     // todo: __fut_global_ctx dereference on-site.
     quote::quote! {
-        async_ash::future::GPUCommandBlock::new(static |__fut_global_ctx: *mut ::async_ash::future::GlobalContext| {
-            let __fut_global_ctx: &mut ::async_ash::future::GlobalContext = unsafe{&mut *__fut_global_ctx};
+        async_ash::future::GPUCommandBlock::new(static |__fut_global_ctx: *mut ::async_ash::future::CommandBufferRecordContext| {
+            let __fut_global_ctx: &mut ::async_ash::future::CommandBufferRecordContext = unsafe{&mut *__fut_global_ctx};
             #import_bindings
             #awaited_future_bindings
             #(#inner_closure_stmts)*
