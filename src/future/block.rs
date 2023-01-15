@@ -77,11 +77,12 @@ impl<R, State, Recycle: Default, G: GPUCommandGenerator<R, State, Recycle>> GPUC
             .expect("Calling context without calling init");
         next_ctx.call(ctx);
     }
-    fn init(mut self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
+    fn init(mut self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Recycle) {
         // Reach the first yield point to get the context of the first awaited future.
         assert!(self.next_ctx.is_none());
         let this = self.project();
-        match this.inner.resume((ctx, std::ptr::null_mut())) {
+        match this.inner.resume((ctx, recycled_state)) {
             GeneratorState::Yielded(ctx) => {
                 *this.next_ctx = Some(ctx);
             }

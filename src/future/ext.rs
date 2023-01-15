@@ -94,10 +94,11 @@ where
         }
     }
 
-    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
+    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,) {
         let this = self.project();
-        this.inner1.init(ctx);
-        this.inner2.init(ctx);
+        this.inner1.init(ctx, &mut recycled_state.0);
+        this.inner2.init(ctx, &mut recycled_state.1);
     }
 }
 
@@ -137,9 +138,10 @@ where
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         self.project().inner.context(ctx);
     }
-    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
+    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState) {
         let this = self.project();
-        this.inner.init(ctx);
+        this.inner.init(ctx, recycled_state);
     }
 }
 
@@ -235,7 +237,8 @@ where
         }
         this.inner.as_mut().unwrap_pinned().context(ctx);
     }
-    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext) {
+    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,) {
         // Noop. The inner command will be initialized when fork was called on it.
     }
 }

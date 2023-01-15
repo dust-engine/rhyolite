@@ -1,6 +1,6 @@
 use crate::transformer::CommandsTransformer;
 use std::borrow::Borrow;
-use syn::parse::{Parse, ParseStream};
+use syn::{parse::{Parse, ParseStream}, spanned::Spanned, punctuated::Punctuated};
 
 struct CommandsTransformState {
     current_import_id: usize,
@@ -12,6 +12,8 @@ struct CommandsTransformState {
     await_bindings: proc_macro2::TokenStream,
     await_drops: proc_macro2::TokenStream,
     await_retained_states: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
+    
+    recycled_state_count: usize,
 }
 impl Default for CommandsTransformState {
     fn default() -> Self {
@@ -27,6 +29,7 @@ impl Default for CommandsTransformState {
             await_bindings: TokenStream::new(),
             await_drops: TokenStream::new(),
             await_retained_states: Punctuated::new(),
+            recycled_state_count: 0,
         }
     }
 }
@@ -61,10 +64,11 @@ impl CommandsTransformer for CommandsTransformState {
         output_tokens
     }
     fn async_transform(&mut self, input: &syn::ExprAwait) -> syn::Expr {
-        let index = syn::Index::from(self.current_await_index);
+        let index = syn::Index::from(self.recycled_state_count);
         let global_future_variable_name =
             quote::format_ident!("__future_{}", self.current_await_index);
         self.current_await_index += 1;
+        self.recycled_state_count += 1;
 
         self.await_bindings.extend(quote::quote! {
             let mut #global_future_variable_name;
@@ -82,22 +86,19 @@ impl CommandsTransformer for CommandsTransformState {
         // For each future, we first call init on it. This is a no-op for most futures, but for
         // (nested) block futures, this is going to move the future to its first yield point.
         // At that point it should yield the context of the first future.
-        let tokens = quote::quote! {
+        let tokens = quote::quote_spanned! {input.span()=>
             {
                 let mut fut = #base;
                 let mut fut_pinned = unsafe { std::pin::Pin::new_unchecked(&mut fut) };
-                fut_pinned.as_mut().init(unsafe{&mut *__fut_global_ctx});
+                fut_pinned.as_mut().init(unsafe{&mut *__fut_global_ctx}, &mut unsafe{&mut *__recycled_states}.#index);
                 (__fut_global_ctx, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
                 loop {
-                    use ::std::task::Poll::*;
                     match fut_pinned.as_mut().record(unsafe{&mut *__fut_global_ctx}, &mut unsafe{&mut *__recycled_states}.#index) {
-                        Ready((output, retained_state)) => {
+                        ::std::task::Poll::Ready((output, retained_state)) => {
                             #global_future_variable_name = retained_state;
                             break output
                         },
-                        Yielded => {
-                            (__fut_global_ctx, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
-                        },
+                        ::std::task::Poll::Pending => (__fut_global_ctx, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut()),
                     };
                 }
             }
@@ -113,6 +114,7 @@ impl CommandsTransformer for CommandsTransformState {
             "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
             "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
             "fork" => syn::Expr::Verbatim(self.fork_transform(&mac.mac.tokens)),
+            "using" => syn::Expr::Verbatim(self.using_transform(&mac.mac)),
             _ => syn::Expr::Macro(mac.clone()),
         }
     }
@@ -141,6 +143,16 @@ impl CommandsTransformer for CommandsTransformState {
     }
 }
 impl CommandsTransformState {
+    fn using_transform(&mut self, input: &syn::Macro) -> proc_macro2::TokenStream {
+        // Transform the use! macros. Input should be an expression that implements Default.
+        // Returns a mutable reference to the value.
+        
+        let index = syn::Index::from(self.recycled_state_count);
+        self.recycled_state_count += 1;
+        quote::quote_spanned! {input.span()=>
+            &mut unsafe{&mut *__recycled_states}.#index
+        }
+    }
     fn fork_transform(&mut self, input: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         let ForkInput {
             forked_future,
@@ -174,7 +186,7 @@ impl CommandsTransformState {
         quote::quote! {{
             let mut forked_future = ::async_ash::future::GPUCommandForkedStateInner::Some(#forked_future);
             let mut pinned = unsafe{std::pin::Pin::new_unchecked(&mut forked_future)};
-            pinned.as_mut().unwrap_pinned().init(__fut_global_ctx);
+            pinned.as_mut().unwrap_pinned().init(__fut_global_ctx, __recycled_states);
             let forked_future_inner = GPUCommandForkedInner::<_, #number_of_forks>::new(pinned);
             let #forked_future = #ret;
             #scope
@@ -254,14 +266,22 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
 
     let import_bindings = state.import_bindings;
     let awaited_future_bindings = state.await_bindings;
-    let recycled_state_annotation: syn::punctuated::Punctuated<syn::PatWild, syn::Token![,]> = syn::punctuated::Punctuated::from_iter(
-        std::iter::repeat(syn::PatWild {
-            attrs: Vec::new(),
-            underscore_token: Default::default()
-        }).take(state.current_await_index)
-    );
+    let recycled_states_type = syn::Type::Tuple(syn::TypeTuple {
+        paren_token: Default::default(),
+        elems: {
+            let mut elems = syn::punctuated::Punctuated::from_iter(
+                std::iter::repeat(syn::Type::Infer(syn::TypeInfer {
+                    underscore_token: Default::default()
+                })).take(state.recycled_state_count)
+            );
+            if state.recycled_state_count == 1 {
+                elems.push_punct(Default::default());
+            }
+            elems
+        },
+    });
     quote::quote! {
-        async_ash::future::GPUCommandBlock::new(static |(mut __fut_global_ctx, mut __recycled_states): (*mut ::async_ash::future::CommandBufferRecordContext, *mut (#recycled_state_annotation, ))| {
+        async_ash::future::GPUCommandBlock::new(static |(mut __fut_global_ctx, mut __recycled_states): (*mut ::async_ash::future::CommandBufferRecordContext, *mut #recycled_states_type)| {
             #import_bindings
             #awaited_future_bindings
             #(#inner_closure_stmts)*
