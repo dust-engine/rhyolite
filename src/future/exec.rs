@@ -1,6 +1,5 @@
 use crate::{
-    utils::merge_iter::btree_map_union, Device, ImageLike,
-    SubmissionResourceType,
+    ImageLike,
 };
 use ash::vk;
 use std::{

@@ -90,10 +90,10 @@ impl CommandsTransformer for CommandsTransformState {
             {
                 let mut fut = #base;
                 let mut fut_pinned = unsafe { std::pin::Pin::new_unchecked(&mut fut) };
-                fut_pinned.as_mut().init(unsafe{&mut *__fut_global_ctx}, &mut unsafe{&mut *__recycled_states}.#index);
+                ::async_ash::future::GPUCommandFuture::init(fut_pinned.as_mut(), unsafe{&mut *__fut_global_ctx}, &mut unsafe{&mut *__recycled_states}.#index);
                 (__fut_global_ctx, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
                 loop {
-                    match fut_pinned.as_mut().record(unsafe{&mut *__fut_global_ctx}, &mut unsafe{&mut *__recycled_states}.#index) {
+                    match ::async_ash::future::GPUCommandFuture::record(fut_pinned.as_mut(), unsafe{&mut *__fut_global_ctx}, &mut unsafe{&mut *__recycled_states}.#index) {
                         ::std::task::Poll::Ready((output, retained_state)) => {
                             #global_future_variable_name = retained_state;
                             break output

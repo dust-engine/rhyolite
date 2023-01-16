@@ -5,10 +5,11 @@ use std::task::Poll;
 mod block;
 mod exec;
 mod ext;
-pub mod state;
+mod state;
 pub use block::*;
 pub use exec::*;
 pub use ext::*;
+pub use state::*;
 
 pub use async_ash_macro::{commands, join};
 
