@@ -5,7 +5,7 @@ use futures_util::future::OptionFuture;
 use pin_project::pin_project;
 
 use crate::{
-    future::{CommandBufferRecordContext, GPUCommandFuture, StageContext},
+    future::{CommandBufferRecordContext, GPUCommandFuture, StageContext, PerFrameState},
     Device, TimelineSemaphore, commands::SharedCommandPool,
 };
 
@@ -61,7 +61,8 @@ impl Iterator for QueueMaskIterator {
 
 /// One for each submission.
 pub struct SubmissionContext<'a> {
-    queue_families: &'a mut [Option<SharedCommandPool>],
+    // Indexed by queue family.s
+    shared_command_pools: &'a mut [Option<SharedCommandPool>],
     queues: Vec<QueueSubmissionContext>,
 }
 
@@ -94,39 +95,50 @@ pub struct Queues {
     /// Queues, and their queue family index.
     queues: Vec<(vk::Queue, u32)>,
 
-    /// Some queue families may never have any queues created from it,
-    /// in which case this would be None on the corresponding index.
-    queue_families: Vec<Option<SharedCommandPool>>
+    /// Mapping from queue families to queue refs
+    families: Vec<QueueMask>
 }
 
 impl Queues {
     /// This function can only be called once per device.
     pub(crate) unsafe fn new(device: &Arc<Device>, num_queue_family: u32, queue_create_infos: &[vk::DeviceQueueCreateInfo]) -> Self {
-        let queues: Vec<_> = queue_create_infos.iter().flat_map(|info| {
-            (0..info.queue_count).map(|queue_index| unsafe {
-                (device.get_device_queue(info.queue_family_index, queue_index), info.queue_family_index)
-            })
-        }).collect();
-        let mut shared_command_pools : Vec<Option<SharedCommandPool>>= Vec::from_iter(std::iter::repeat_with(|| None).take(num_queue_family as usize));
+        let mut families = vec![QueueMask::empty(); num_queue_family as usize];
+        
+        let mut queues: Vec<(vk::Queue, u32)> = Vec::new();
+        
         for info in queue_create_infos.iter() {
-            let pool = &mut shared_command_pools[info.queue_family_index as usize];
-            if pool.is_some() { panic!() };
-            *pool = Some(SharedCommandPool::new(device.clone(), info.queue_family_index));
+            for i in 0..info.queue_count {
+                families[info.queue_family_index as usize].set_queue(QueueRef(queues.len() as u8));
+                queues.push(
+                    (device.get_device_queue(info.queue_family_index, info.queue_family_index), info.queue_family_index));
+            }
         }
+        
+
         Self {
             device: device.clone(),
             queues,
-            queue_families: shared_command_pools
+            families
         }
+    }
+    pub fn make_shared_command_pools(&self) -> Vec<Option<SharedCommandPool>> {
+        self.families.iter().enumerate().map(|(queue_family_index, queues)| {
+            if queues.is_empty() {
+                None
+            } else {
+                Some(SharedCommandPool::new(self.device.clone(), queue_family_index as u32))
+            }
+        }).collect()
     }
     pub fn submit<F: QueueFuture>(
         &mut self,
         future: F,
+        shared_command_pools: &mut [Option<SharedCommandPool>],
         recycled_state: &mut F::RecycledState
     ) -> impl std::future::Future<Output = F::Output> {
         let mut future = std::pin::pin!(future);
         let mut submission_context = SubmissionContext {
-            queue_families: &mut self.queue_families,
+            shared_command_pools,
             queues: self.queues.iter().map(|(queue, queue_family_index)| QueueSubmissionContext {
                 queue_family_index: *queue_family_index,
                 stage_index: 0,
@@ -170,7 +182,7 @@ impl Queues {
                     vk::Fence::null()
                 ).unwrap();
                 */
-                println!("Submits");
+                println!("Submit");
                 for submission in queue_submissions.iter() {
                     Self::submit_for_queue_cleanup(submission);
                 }
@@ -502,7 +514,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
         let mut command_ctx = CommandBufferRecordContext {
             stage_index: r.stage_index,
             command_buffers: &mut r.command_buffers,
-            command_pool: ctx.queue_families[r.queue_family_index as usize].as_mut().unwrap(),
+            command_pool: ctx.shared_command_pools[r.queue_family_index as usize].as_mut().unwrap(),
             recording_command_buffer: &mut r.recording_command_buffer,
         };
         this.inner.init(&mut command_ctx, recycled_state);
@@ -526,7 +538,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
         let mut command_ctx = CommandBufferRecordContext {
             stage_index: r.stage_index,
             command_buffers: &mut r.command_buffers,
-            command_pool: ctx.queue_families[r.queue_family_index as usize].as_mut().unwrap(),
+            command_pool: ctx.shared_command_pools[r.queue_family_index as usize].as_mut().unwrap(),
             recording_command_buffer: &mut r.recording_command_buffer,
         };
 

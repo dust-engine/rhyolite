@@ -1,7 +1,6 @@
 use std::{sync::Arc, ops::{Deref, DerefMut}, marker::PhantomData, cell::Cell};
 use crate::{Device, future::{use_state, use_per_frame_state, PerFrameState, PerFrameContainer, use_cached_state}, device, queue, HasDevice};
 use ash::vk;
-use thread_local::ThreadLocal;
 use std::cell::UnsafeCell;
 
 /// An unsafe command pool. Command buffer lifecycles are unmanaged.

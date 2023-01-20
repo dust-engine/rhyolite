@@ -66,8 +66,12 @@ impl<T> Drop for PerFrameContainer<T> {
 pub fn use_per_frame_state<T>(
     this: &mut PerFrameState<T>,
     create: impl FnOnce() -> T,
+    reuse: impl FnOnce(&mut T),
 ) -> PerFrameContainer<T> {
-    let item = this.receiver.try_recv().unwrap_or_else(|err| match err {
+    let item = this.receiver.try_recv().map(|mut item| {
+        reuse(&mut item);
+        item
+    }).unwrap_or_else(|err| match err {
         mpsc::TryRecvError::Empty => create(),
         mpsc::TryRecvError::Disconnected => panic!(),
     });
