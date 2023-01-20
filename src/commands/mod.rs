@@ -1,4 +1,4 @@
 mod pool;
 
-pub use pool::UnsafeCommandPool;
+pub use pool::*;
 

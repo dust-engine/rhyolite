@@ -1,31 +1,35 @@
-use std::sync::Arc;
-use crate::Device;
+use std::{sync::Arc, ops::{Deref, DerefMut}, marker::PhantomData, cell::Cell};
+use crate::{Device, future::{use_state, use_per_frame_state, PerFrameState, PerFrameContainer, use_cached_state}, device, queue, HasDevice};
 use ash::vk;
+use thread_local::ThreadLocal;
+use std::cell::UnsafeCell;
 
 /// An unsafe command pool. Command buffer lifecycles are unmanaged.
 pub struct UnsafeCommandPool {
     device: Arc<Device>,
     command_pool: vk::CommandPool,
 }
-// command pool usage pattern
-// Give out references to command buffers.
+unsafe impl Send for UnsafeCommandPool {}
+impl !Sync for UnsafeCommandPool {}
 
-// transient pool. allocates one-time-use command buffers. free them individually.
-// transient pool. allocates one-time-use command buffers. individual reset.
-// transient pool. allocates one-time-use command buffers. pool reset.
+
 
 impl UnsafeCommandPool {
-    pub fn new(device: Arc<Device>, queue_family_index: u32, flags: vk::CommandPoolCreateFlags) {
+    pub fn new(device: Arc<Device>, queue_family_index: u32, flags: vk::CommandPoolCreateFlags) -> Self {
         let command_pool = unsafe {
             device.create_command_pool(&vk::CommandPoolCreateInfo {
                 queue_family_index,
                 flags,
                 ..Default::default()
-            }, None);
-        };
+            }, None)
+        }.unwrap();
+        Self {
+            device,
+            command_pool,
+        }
     }
     /// Marked unsafe because allocated command buffers won't be recycled automatically.
-    pub unsafe fn allocate_n<const N: usize>(&mut self, secondary: bool) -> [vk::CommandBuffer; N] {
+    pub unsafe fn allocate_n<const N: usize>(&self, secondary: bool) -> [vk::CommandBuffer; N] {
         unsafe {
             let mut command_buffer = [vk::CommandBuffer::null(); N];
             (self.device.fp_v1_0().allocate_command_buffers)(
@@ -42,7 +46,7 @@ impl UnsafeCommandPool {
         }
     }
     /// Marked unsafe because allocated command buffers won't be recycled automatically.
-    pub unsafe fn allocate_one(&mut self, secondary: bool) -> vk::CommandBuffer {
+    pub unsafe fn allocate_one(&self, secondary: bool) -> vk::CommandBuffer {
         let command_buffer: [vk::CommandBuffer; 1] = self.allocate_n(secondary);
         command_buffer[0]
     }
@@ -64,3 +68,90 @@ impl Drop for UnsafeCommandPool {
         }
     }
 }
+
+pub struct SharedCommandPool {
+    pool: UnsafeCommandPool,
+    command_buffers: Vec<vk::CommandBuffer>,
+    indice: usize,
+}
+impl HasDevice for SharedCommandPool {
+    fn device(&self) -> &Arc<Device> {
+        &self.pool.device
+    }
+}
+impl SharedCommandPool {
+    pub fn new(device: Arc<Device>, queue_family_index: u32) -> Self {
+        let pool = UnsafeCommandPool::new(device, queue_family_index, vk::CommandPoolCreateFlags::TRANSIENT);
+        Self {
+            pool,
+            command_buffers: Vec::new(),
+            indice: 0
+        }
+    }
+    pub fn allocate_one(&mut self) -> vk::CommandBuffer {
+        if self.indice >= self.command_buffers.len() {
+            let buffer = unsafe {
+                self.pool.allocate_one(false)
+            };
+            self.command_buffers.push(buffer);
+            self.indice += 1;
+            buffer
+        } else {
+            let raw_buffer = self.command_buffers[self.indice];
+            self.indice += 1;
+            raw_buffer
+        }
+    }
+}
+
+
+pub fn use_command_pool<'recycle>(
+    this: &'recycle mut Option<UnsafeCommandPool>,
+    device: &Arc<Device>,
+    queue_family_index: u32,
+) -> &'recycle mut UnsafeCommandPool {
+    let pool = this.get_or_insert_with(|| {
+        UnsafeCommandPool::new(device.clone(), queue_family_index, vk::CommandPoolCreateFlags::TRANSIENT)
+    });
+    pool.reset(false);
+    pool
+    
+}
+
+
+pub struct CommandBuffer<'a> {
+    buffer: vk::CommandBuffer,
+    _marker: PhantomData<&'a ()>
+}
+impl<'a> CommandBuffer<'a> {
+    pub(crate) unsafe fn new(buffer: vk::CommandBuffer) -> Self {
+        Self {
+            buffer,
+            _marker: PhantomData
+        }
+    }
+}
+impl<'a> CommandBufferLike for CommandBuffer<'a> {
+    fn raw_command_buffer(&self) -> vk::CommandBuffer {
+        self.buffer
+    }
+}
+pub fn use_command_buffer<'recycle>(
+    this: &'recycle mut Option<vk::CommandBuffer>,
+    pool: &'recycle mut UnsafeCommandPool
+) -> CommandBuffer<'recycle> {
+    let buffer= *this.get_or_insert_with(|| unsafe {
+        pool.allocate_one(false)
+    });
+    CommandBuffer { buffer, _marker: PhantomData }
+}
+
+
+pub trait CommandBufferLike {
+    fn raw_command_buffer(&self) -> vk::CommandBuffer;
+}
+
+
+// It will be safe as long as we don't destroy command buffers.
+// CommandPool: Send, but not Sync. RecycledState, reset on fetch.
+// CommandBuffer: Do nothing on drop. Also gets preserved in RecycledState. Upon allocation, do nothing.

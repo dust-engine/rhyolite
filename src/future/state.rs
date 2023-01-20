@@ -10,7 +10,7 @@ pub fn use_state<T>(this: &mut Option<T>, init: impl FnOnce() -> T, update: impl
     // TASK fors tomorrow: use_perframe_state
 }
 
-pub fn use_shared_state<T>(
+pub fn use_cached_state<T>(
     this: &mut Option<Arc<T>>,
     create: impl FnOnce() -> T,
     should_update: impl FnOnce(&T) -> bool,

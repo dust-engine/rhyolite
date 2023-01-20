@@ -10,10 +10,13 @@
 #![feature(trait_alias)]
 #![feature(let_chains)]
 #![feature(allocator_api)]
+#![feature(negative_impls)]
+
+pub use cstr::cstr;
 
 extern crate self as async_ash;
 
-mod debug;
+pub mod debug;
 mod device;
 pub mod future;
 mod instance;
@@ -24,9 +27,8 @@ mod semaphore;
 pub mod utils;
 pub mod commands;
 
-pub use debug::{DebugObject, DebugUtilsMessenger};
 pub use device::{Device, HasDevice};
-pub use instance::Instance;
+pub use instance::*;
 pub use physical_device::*;
 pub use queue::*;
 pub use resources::*;

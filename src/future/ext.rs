@@ -1,3 +1,5 @@
+use crate::{RunCommandsQueueFuture, QueueRef};
+
 use super::{CommandBufferRecordContext, GPUCommandFuture, StageContext};
 use pin_project::pin_project;
 use std::cell::{Cell, RefCell};
@@ -19,6 +21,12 @@ pub trait GPUCommandFutureExt: GPUCommandFuture + Sized {
             inner: self,
             mapper: Some(mapper),
         }
+    }
+    fn schedule_in_queue(self, queue: QueueRef) -> RunCommandsQueueFuture<Self> {
+        RunCommandsQueueFuture::new(self, queue)
+    }
+    fn schedule(self) -> RunCommandsQueueFuture<Self> {
+        RunCommandsQueueFuture::new(self, QueueRef::null())
     }
 }
 
@@ -49,9 +57,9 @@ where
     type RetainedState = (G1::RetainedState, G2::RetainedState);
     type RecycledState = (G1::RecycledState, G2::RecycledState);
     #[inline]
-    fn record(
+    fn record<'a, 'b: 'a>(
         self: Pin<&mut Self>,
-        command_buffer: &mut CommandBufferRecordContext,
+        command_buffer: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
@@ -94,7 +102,7 @@ where
         }
     }
 
-    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext,
+    fn init<'a, 'b: 'a>(self: Pin<&mut Self>, ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Self::RecycledState,) {
         let this = self.project();
         this.inner1.init(ctx, &mut recycled_state.0);
@@ -118,9 +126,9 @@ where
     type RetainedState = G::RetainedState;
     type RecycledState = G::RecycledState;
     #[inline]
-    fn record(
+    fn record<'a, 'b: 'a>(
         self: Pin<&mut Self>,
-        ctx: &mut CommandBufferRecordContext,
+        ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
@@ -138,7 +146,7 @@ where
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         self.project().inner.context(ctx);
     }
-    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext,
+    fn init<'a, 'b: 'a>(self: Pin<&mut Self>, ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Self::RecycledState) {
         let this = self.project();
         this.inner.init(ctx, recycled_state);
@@ -197,9 +205,9 @@ where
     type RetainedState = Option<G::RetainedState>;
     type RecycledState = G::RecycledState;
     #[inline]
-    fn record(
+    fn record<'fa, 'fb: 'fa>(
         self: Pin<&mut Self>,
-        ctx: &mut CommandBufferRecordContext,
+        ctx: &'fa mut CommandBufferRecordContext<'fb>,
         recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let mut this = &mut *self.project().inner.borrow_mut();
@@ -237,7 +245,7 @@ where
         }
         this.inner.as_mut().unwrap_pinned().context(ctx);
     }
-    fn init(self: Pin<&mut Self>, ctx: &mut CommandBufferRecordContext,
+    fn init<'fa, 'fb: 'fa>(self: Pin<&mut Self>, ctx: &'fa mut CommandBufferRecordContext<'fb>,
         recycled_state: &mut Self::RecycledState,) {
         // Noop. The inner command will be initialized when fork was called on it.
     }

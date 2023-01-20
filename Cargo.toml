@@ -9,10 +9,12 @@ edition = "2021"
 ash = "0.37"
 tracing = "0.1"
 futures-util = "0.3"
+futures = "*"
 async_ash_macro = { path = "./async_ash_macro" }
 vk-mem = { git = "https://github.com/dust-engine/vk-mem-rs" }
 blocking = "1.2"
 pin-project = "1.0"
+cstr = "0.2"
 
 [workspace]
 members = [

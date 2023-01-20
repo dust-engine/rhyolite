@@ -3,32 +3,20 @@ use std::borrow::Borrow;
 use syn::{parse::{Parse, ParseStream}, spanned::Spanned, punctuated::Punctuated};
 
 struct CommandsTransformState {
-    current_import_id: usize,
-    import_bindings: proc_macro2::TokenStream,
-    import_drops: proc_macro2::TokenStream,
-    import_retained_states: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
+    retained_state_count: usize,
+    retain_bindings: proc_macro2::TokenStream,
+    retained_states: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
 
-    current_await_index: usize,
-    await_bindings: proc_macro2::TokenStream,
-    await_drops: proc_macro2::TokenStream,
-    await_retained_states: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
-    
     recycled_state_count: usize,
 }
 impl Default for CommandsTransformState {
     fn default() -> Self {
         use proc_macro2::TokenStream;
-        use syn::punctuated::Punctuated;
         Self {
-            current_import_id: 0,
-            import_bindings: TokenStream::new(),
-            import_drops: TokenStream::new(),
-            import_retained_states: Punctuated::new(),
+            retained_state_count: 0,
+            retain_bindings: TokenStream::new(),
+            retained_states: Punctuated::new(),
 
-            current_await_index: 0,
-            await_bindings: TokenStream::new(),
-            await_drops: TokenStream::new(),
-            await_retained_states: Punctuated::new(),
             recycled_state_count: 0,
         }
     }
@@ -40,24 +28,23 @@ impl CommandsTransformer for CommandsTransformState {
         is_image: bool,
     ) -> proc_macro2::TokenStream {
         let global_res_variable_name =
-            quote::format_ident!("__future_res_{}", self.current_import_id);
-        self.current_import_id += 1;
+            quote::format_ident!("__future_retain_{}", self.retained_state_count);
+        self.retained_state_count += 1;
         let output_tokens = if is_image {
-            quote::quote! {{
-                unsafe{&mut *__fut_global_ctx}.add_image(&mut #global_res_variable_name)
+            quote::quote! {unsafe {
+                #global_res_variable_name = #input_tokens;
+                __fut_global_ctx.add_image(&mut #global_res_variable_name)
             }}
         } else {
-            quote::quote! {{
-                unsafe{&mut *__fut_global_ctx}.add_res(&mut #global_res_variable_name)
+            quote::quote! {unsafe {
+                #global_res_variable_name = #input_tokens;
+                __fut_global_ctx.add_res(&mut #global_res_variable_name)
             }}
         };
-        self.import_bindings.extend(quote::quote! {
-            let mut #global_res_variable_name = #input_tokens;
+        self.retain_bindings.extend(quote::quote! {
+            let mut #global_res_variable_name;
         });
-        self.import_drops.extend(quote::quote! {
-            drop(#global_res_variable_name);
-        });
-        self.import_retained_states
+        self.retained_states
             .push(syn::Expr::Verbatim(quote::quote! {
                 #global_res_variable_name
             }));
@@ -66,17 +53,14 @@ impl CommandsTransformer for CommandsTransformState {
     fn async_transform(&mut self, input: &syn::ExprAwait) -> syn::Expr {
         let index = syn::Index::from(self.recycled_state_count);
         let global_future_variable_name =
-            quote::format_ident!("__future_{}", self.current_await_index);
-        self.current_await_index += 1;
+            quote::format_ident!("__future_retain_{}", self.retained_state_count);
+        self.retained_state_count += 1;
         self.recycled_state_count += 1;
 
-        self.await_bindings.extend(quote::quote! {
+        self.retain_bindings.extend(quote::quote! {
             let mut #global_future_variable_name;
         });
-        self.await_drops.extend(quote::quote! {
-            drop(#global_future_variable_name);
-        });
-        self.await_retained_states
+        self.retained_states
             .push(syn::Expr::Verbatim(quote::quote! {
                 #global_future_variable_name
             }));
@@ -89,17 +73,23 @@ impl CommandsTransformer for CommandsTransformState {
         let tokens = quote::quote_spanned! {input.span()=>
             {
                 let mut fut = #base;
-                let mut fut_pinned = unsafe { std::pin::Pin::new_unchecked(&mut fut) };
-                ::async_ash::future::GPUCommandFuture::init(fut_pinned.as_mut(), unsafe{&mut *__fut_global_ctx}, &mut unsafe{&mut *__recycled_states}.#index);
-                (__fut_global_ctx, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
-                loop {
-                    match ::async_ash::future::GPUCommandFuture::record(fut_pinned.as_mut(), unsafe{&mut *__fut_global_ctx}, &mut unsafe{&mut *__recycled_states}.#index) {
-                        ::std::task::Poll::Ready((output, retained_state)) => {
-                            #global_future_variable_name = retained_state;
-                            break output
-                        },
-                        ::std::task::Poll::Pending => (__fut_global_ctx, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut()),
-                    };
+                unsafe {
+                    let mut fut_pinned = std::pin::Pin::new_unchecked(&mut fut);
+                    ::async_ash::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut unsafe{&mut *__recycled_states}.#index);
+                    (__fut_global_ctx_ptr, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
+                    __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
+                    loop {
+                        match ::async_ash::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut unsafe{&mut *__recycled_states}.#index) {
+                            ::std::task::Poll::Ready((output, retained_state)) => {
+                                #global_future_variable_name = retained_state;
+                                break output
+                            },
+                            ::std::task::Poll::Pending => {
+                                (__fut_global_ctx_ptr, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
+                                __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
+                            },
+                        };
+                    }
                 }
             }
         };
@@ -111,6 +101,7 @@ impl CommandsTransformer for CommandsTransformState {
             return syn::Expr::Macro(mac.clone());
         }
         match path.segments[0].ident.to_string().as_str() {
+            "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens)),
             "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
             "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
             "fork" => syn::Expr::Verbatim(self.fork_transform(&mac.mac.tokens)),
@@ -131,11 +122,10 @@ impl CommandsTransformer for CommandsTransformState {
             .as_ref()
             .map(|a| *a.clone())
             .unwrap_or(syn::Expr::Verbatim(quote::quote!(())));
-        let awaited_future_retained_states = &*self.await_retained_states.borrow();
-        let import_retained_states = &self.import_retained_states;
+        let retained_states = &self.retained_states;
         let token_stream = quote::quote!(
             {
-                return (#returned_item, ((#awaited_future_retained_states), (#import_retained_states)));
+                return (#returned_item, (#retained_states), __fut_global_ctx._marker);
             }
         );
         let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
@@ -143,6 +133,26 @@ impl CommandsTransformer for CommandsTransformState {
     }
 }
 impl CommandsTransformState {
+    fn retain(
+        &mut self,
+        input_tokens: &proc_macro2::TokenStream,
+    ) -> proc_macro2::TokenStream {
+        let global_res_variable_name =
+            quote::format_ident!("__future_retain_{}", self.retained_state_count);
+        self.retained_state_count += 1;
+        let output_tokens = quote::quote! {unsafe {
+            #global_res_variable_name = #input_tokens;
+            __fut_global_ctx.retain(&mut #global_res_variable_name)
+        }};
+        self.retain_bindings.extend(quote::quote! {
+            let mut #global_res_variable_name;
+        });
+        self.retained_states
+            .push(syn::Expr::Verbatim(quote::quote! {
+                #global_res_variable_name
+            }));
+        output_tokens
+    }
     fn using_transform(&mut self, input: &syn::Macro) -> proc_macro2::TokenStream {
         // Transform the use! macros. Input should be an expression that implements Default.
         // Returns a mutable reference to the value.
@@ -242,13 +252,12 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
 
     // Transform the final return
     if let Some(last) = inner_closure_stmts.last_mut() {
-        let import_retained_states = &*state.import_retained_states.borrow();
-        let awaited_future_retained_states = &*state.await_retained_states.borrow();
+        let retained_states = &state.retained_states;
 
         if let syn::Stmt::Expr(expr) = last {
             let token_stream = quote::quote!(
                 {
-                    return (#expr, ((#awaited_future_retained_states), (#import_retained_states)));
+                    return (#expr, (#retained_states), __fut_global_ctx._marker);
                 }
             );
             let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
@@ -256,7 +265,7 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
         } else {
             let token_stream = quote::quote!(
                 {
-                    return ((), ((#awaited_future_retained_states), (#import_retained_states)));
+                    return ((), (#retained_states), __fut_global_ctx._marker);
                 }
             );
             let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
@@ -264,8 +273,7 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
         }
     }
 
-    let import_bindings = state.import_bindings;
-    let awaited_future_bindings = state.await_bindings;
+    let retain_bindings = state.retain_bindings;
     let recycled_states_type = syn::Type::Tuple(syn::TypeTuple {
         paren_token: Default::default(),
         elems: {
@@ -281,9 +289,9 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
         },
     });
     quote::quote! {
-        async_ash::future::GPUCommandBlock::new(static |(mut __fut_global_ctx, mut __recycled_states): (*mut ::async_ash::future::CommandBufferRecordContext, *mut #recycled_states_type)| {
-            #import_bindings
-            #awaited_future_bindings
+        ::async_ash::future::GPUCommandBlock::new(static |(mut __fut_global_ctx_ptr, mut __recycled_states): (*mut (), *mut #recycled_states_type)| {
+            let mut __fut_global_ctx = unsafe{::async_ash::future::CommandBufferRecordContextInner::new(__fut_global_ctx_ptr)};
+            #retain_bindings
             #(#inner_closure_stmts)*
         })
     }

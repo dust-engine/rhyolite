@@ -1,12 +1,11 @@
 use crate::{
-    ImageLike,
+    ImageLike, commands::{CommandBufferLike, CommandBuffer, SharedCommandPool}, HasDevice,
 };
 use ash::vk;
 use std::{
-    alloc::Allocator,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap},
     pin::Pin,
-    task::Poll,
+    task::Poll, marker::PhantomData,
 };
 
 use super::GPUCommandFuture;
@@ -57,29 +56,77 @@ impl<'a, T> ResImage<'a, T> {
 
 /// One per command buffer record call. If multiple command buffers were merged together on the queue level,
 /// this would be the same.
-pub struct CommandBufferRecordContext {
+pub struct CommandBufferRecordContext<'a> {
     // perhaps also a reference to the command buffer allocator
-    pub(crate) stage_index: u32,
+    pub stage_index: u32,
+    pub command_buffers: &'a mut Vec<vk::CommandBuffer>,
+    pub recording_command_buffer: &'a mut Option<vk::CommandBuffer>,
+    pub command_pool: &'a mut SharedCommandPool
+}
+impl<'a> HasDevice for CommandBufferRecordContext<'a> {
+    fn device(&self) -> &std::sync::Arc<crate::Device> {
+        self.command_pool.device()
+    }
+}
+impl<'a> CommandBufferRecordContext<'a> {
+    /// Immediatly record a command buffer, allocated from the shared command pool.
+    pub fn record(&mut self, callback: impl FnOnce(&Self, vk::CommandBuffer) -> ()) {
+        let command_buffer = if let Some(command_buffer) = self.recording_command_buffer.take() {
+            command_buffer
+        } else {
+            self.command_pool.allocate_one()
+        };
+        callback(self, command_buffer);
+        *self.recording_command_buffer = Some(command_buffer);
+    }
+    pub fn add_command_buffer<T: CommandBufferLike + 'a>(&mut self, buffer: T) {
+        if let Some(command_buffer) = self.recording_command_buffer.take() {
+            self.command_buffers.push(command_buffer);
+        }
+        self.command_buffers.push(buffer.raw_command_buffer());
+    }
 }
 
-impl CommandBufferRecordContext {
-    pub fn new(stage_index: u32) -> Self {
-        Self {
-            stage_index
-        }
-    }
+pub struct CommandBufferRecordContextInner<'host, 'retain> {
+    pub ctx: &'host mut CommandBufferRecordContext<'host>,
+    pub _marker: PhantomData<&'retain ()>
+}
+
+impl<'host> CommandBufferRecordContext<'host> {
     pub fn current_stage_index(&self) -> u32 {
         self.stage_index
     }
-    pub fn add_res<'a, T>(&mut self, res: &'a mut T) -> Res<'a, T> {
-        Res::new(res)
+}
+impl<'host, 'retain> CommandBufferRecordContextInner<'host, 'retain> {
+    pub fn current_stage_index(&self) -> u32 {
+        self.ctx.stage_index
     }
-    pub fn add_image<'a, T: ImageLike>(
+    pub unsafe fn new(ptr: *mut (), ) -> Self {
+        Self {
+            ctx: &mut *(ptr as *mut _),
+            _marker: PhantomData
+        }
+    }
+    /// Perserve the lifetimes
+    pub unsafe fn update(old: Self, ptr: *mut ()) -> Self {
+        Self {
+            ctx: &mut *(ptr as *mut _),
+            _marker: old._marker
+        }
+    }
+    pub unsafe fn add_res<T>(&mut self, res: &mut T) -> Res<'retain, T> {
+        // Extend the lifetime of res so that it lives as long as 'retain
+        Res::new(std::mem::transmute(res))
+    }
+    pub unsafe fn add_image<T: ImageLike>(
         &mut self,
-        res: &'a mut T,
+        res: &mut T,
         initial_layout: vk::ImageLayout,
-    ) -> Res<'a, T> {
-        Res::new(res)
+    ) -> ResImage<'retain, T> {
+        ResImage::new(std::mem::transmute(res), initial_layout)
+    }
+    pub unsafe fn retain<T>(&mut self, res: &mut T) -> &'retain mut T {
+        std::mem::transmute(res)
     }
 }
 
@@ -256,16 +303,12 @@ impl StageContext {
         res.res.last_accessed_stage_index = self.stage_index;
         res.layout = layout;
     }
-    pub fn merge(&mut self, mut other: Self) {
-        todo!()
-        // TODO: Merge image accesses.
-    }
 }
 
-impl CommandBufferRecordContext {
+impl<'a> CommandBufferRecordContext<'a> {
     pub fn record_one_step<T: GPUCommandFuture>(
         &mut self,
-        mut fut: Pin<&mut T>,
+        mut fut: Pin<&'a mut T>,
         recycled_state: &mut T::RecycledState
     ) -> Poll<(T::Output, T::RetainedState)> {
         let mut next_stage = StageContext::new(self.stage_index);
@@ -275,7 +318,6 @@ impl CommandBufferRecordContext {
         });
 
         let ret = fut.as_mut().record(self, recycled_state);
-        self.stage_index += 1;
         ret
     }
     fn add_barrier(

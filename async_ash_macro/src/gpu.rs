@@ -5,6 +5,8 @@ struct State {
     dispose_forward_decl: proc_macro2::TokenStream,
     dispose_borrow_takes: proc_macro2::TokenStream,
     dispose_fn_body: proc_macro2::TokenStream,
+
+    recycled_state_count: usize,
 }
 impl Default for State {
     fn default() -> Self {
@@ -13,6 +15,7 @@ impl Default for State {
             dispose_borrow_takes: proc_macro2::TokenStream::new(),
             dispose_fn_body: proc_macro2::TokenStream::new(),
             current_dispose_index: 0,
+            recycled_state_count: 0,
         }
     }
 }
@@ -56,17 +59,27 @@ impl CommandsTransformer for State {
             let #dispose_token_name = #dispose_token_name.replace(None);
         });
 
+        let index = syn::Index::from(self.recycled_state_count);
+        self.recycled_state_count += 1;
         syn::Expr::Verbatim(quote::quote! {{
-            let mut fut_pinned = std::pin::pin!(#base);
-            fut_pinned.as_mut().init(unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)}, __current_queue);
+            let fut = #base;
+            let mut fut_pinned = std::pin::pin!(fut);
+            fut_pinned.as_mut().init(
+                unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)},
+                &mut unsafe{&mut *__recycled_states}.#index,
+                __current_queue
+            );
             let output = loop {
-                match fut_pinned.as_mut().record(unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)}) {
+                match fut_pinned.as_mut().record(
+                    unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)},
+                    &mut unsafe{&mut *__recycled_states}.#index
+                ) {
                     ::async_ash::queue::QueueFuturePoll::Ready { next_queue, output } => {
                         __current_queue = next_queue;
                         break output;
                     },
-                    ::async_ash::queue::QueueFuturePoll::Semaphore => yield true,
-                    ::async_ash::queue::QueueFuturePoll::Barrier => yield false,
+                    ::async_ash::queue::QueueFuturePoll::Semaphore => (__initial_queue, __ctx, __recycled_states) = yield true,
+                    ::async_ash::queue::QueueFuturePoll::Barrier => (__initial_queue, __ctx, __recycled_states) = yield false,
                 };
             };
             #dispose_token_name.replace(Some(fut_pinned.dispose()));
@@ -130,14 +143,27 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
             inner_closure_stmts.push(syn::Stmt::Expr(syn::Expr::Verbatim(token_stream)))
         }
     }
-
+    let recycled_states_type = syn::Type::Tuple(syn::TypeTuple {
+        paren_token: Default::default(),
+        elems: {
+            let mut elems = syn::punctuated::Punctuated::from_iter(
+                std::iter::repeat(syn::Type::Infer(syn::TypeInfer {
+                    underscore_token: Default::default()
+                })).take(state.recycled_state_count)
+            );
+            if state.recycled_state_count == 1 {
+                elems.push_punct(Default::default());
+            }
+            elems
+        },
+    });
     quote::quote! {
-        async_ash::queue::QueueFutureBlock::new(static |(__initial_queue, __ctx)| {
+        async_ash::queue::QueueFutureBlock::new(static |(mut __initial_queue, mut __ctx, mut __recycled_states):(_,_,*mut #recycled_states_type)| {
             #dispose_forward_decl
             let mut __dispose_fn_future = || {
                 #dispose_borrow_takes
                 async move {
-                    #dispose_fn_body
+                    //#dispose_fn_body
                 }
             };
             let mut __current_queue: ::async_ash::queue::QueueMask = __initial_queue;

@@ -1,4 +1,4 @@
-use crate::queue;
+use crate::{queue, Queues};
 
 use super::{Device, Instance};
 use ash::{prelude::VkResult, vk};
@@ -12,6 +12,23 @@ pub struct PhysicalDevice {
     physical_device: vk::PhysicalDevice,
     properties: Box<PhysicalDeviceProperties>,
     features: Box<PhysicalDeviceFeatures>,
+}
+
+pub struct DeviceCreateInfo<'a, F: Fn(u32) -> Vec<f32>> {
+    pub enabled_layer_names: &'a [*const c_char],
+    pub enabled_extension_names: &'a [*const c_char],
+    pub enabled_features: vk::PhysicalDeviceFeatures2,
+    pub queue_create_callback: F,
+}
+impl<'a, F: Fn(u32) -> Vec<f32>> DeviceCreateInfo<'a, F> {
+    pub fn with_queue_create_callback(callback: F) -> Self {
+        Self {
+            enabled_layer_names: &[],
+            enabled_extension_names: &[],
+            enabled_features: Default::default(),
+            queue_create_callback: callback
+        }
+    }
 }
 
 impl PhysicalDevice {
@@ -71,24 +88,46 @@ impl PhysicalDevice {
                 .get_physical_device_queue_family_properties(self.physical_device)
         }
     }
-    pub fn create_device(
+    pub fn create_device<'a>(
         self,
-        enabled_layers: &[*const c_char],
-        enabled_extensions: &[*const c_char],
-        enabled_features: &vk::PhysicalDeviceFeatures2,
-    ) -> VkResult<Arc<Device>> {
-        let queue_create_info = queue::QueuesCreateInfo::find(&self);
+        infos: &'a DeviceCreateInfo<'a, impl Fn(u32) -> Vec<f32>>
+    ) -> VkResult<(Arc<Device>, Queues)> {
+        let mut num_queue_families: u32 = 0;
+        unsafe {
+            (self.instance.fp_v1_0().get_physical_device_queue_family_properties)(
+                self.physical_device,
+                &mut num_queue_families,
+                std::ptr::null_mut(),
+            );
+        }
+        assert!(num_queue_families > 0);
+        let mut list_priorities = Vec::new();
+        let queue_create_infos: Vec<_> = (0..num_queue_families).filter_map(|queue_family_index| {
+            let priorities = (infos.queue_create_callback)(queue_family_index);
+            if priorities.is_empty() {
+                return None;
+            }
+            let queue_count = priorities.len() as u32;
+            let p_queue_priorities = priorities.as_ptr();
+            list_priorities.push(priorities);
+            Some(vk::DeviceQueueCreateInfo {
+                queue_family_index,
+                queue_count,
+                p_queue_priorities,
+                ..Default::default()
+            })
+        }).collect();
         let create_info = vk::DeviceCreateInfo {
-            p_next: enabled_features as *const vk::PhysicalDeviceFeatures2 as *const _,
-            queue_create_info_count: queue_create_info.create_infos.len() as u32,
-            p_queue_create_infos: queue_create_info.create_infos.as_ptr(),
+            p_next: &infos.enabled_features as *const vk::PhysicalDeviceFeatures2 as *const _,
+            queue_create_info_count: queue_create_infos.len() as u32,
+            p_queue_create_infos: queue_create_infos.as_ptr(),
 
-            enabled_layer_count: enabled_layers.len() as u32,
-            pp_enabled_layer_names: enabled_layers.as_ptr(),
+            enabled_layer_count: infos.enabled_layer_names.len() as u32,
+            pp_enabled_layer_names: infos.enabled_layer_names.as_ptr(),
 
-            enabled_extension_count: enabled_extensions.len() as u32,
-            pp_enabled_extension_names: enabled_extensions.as_ptr(),
-
+            enabled_extension_count: infos.enabled_extension_names.len() as u32,
+            pp_enabled_extension_names: infos.enabled_extension_names.as_ptr(),
+            // No need to specify this pointer with vk::PhysicalDeviceFeatures2 in the p_next chain
             p_enabled_features: std::ptr::null(),
             ..Default::default()
         };
@@ -100,8 +139,10 @@ impl PhysicalDevice {
                 .create_device(self.physical_device, &create_info, None)?
         };
         let device = Arc::new(Device::new(self, device));
+        drop(list_priorities);
 
-        Ok(device)
+        let queues = unsafe { Queues::new(&device,  num_queue_families, &queue_create_infos) };
+        Ok((device, queues))
     }
 }
 

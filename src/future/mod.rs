@@ -43,9 +43,9 @@ pub trait GPUCommandFuture {
     ///
     /// Futures alone are *inert*; they must be `record`ed into a command
     /// buffer and submitted to a queue in order to do work on the GPU.
-    fn record(
+    fn record<'a, 'b: 'a>(
         self: Pin<&mut Self>,
-        ctx: &mut CommandBufferRecordContext,
+        ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)>;
 
@@ -60,7 +60,7 @@ pub trait GPUCommandFuture {
     /// For executors, this method should be called once, and as soon as the future was pinnned.
     /// For implementations of `GPUCommandFuture`, this method can be ignored in most cases.
     /// For combinators, this method should be called recursively for all inner futures.
-    fn init(self: Pin<&mut Self>,
-        ctx: &mut CommandBufferRecordContext,
+    fn init<'a, 'b: 'a>(self: Pin<&mut Self>,
+        ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Self::RecycledState) {}
 }
