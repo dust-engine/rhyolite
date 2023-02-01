@@ -1,4 +1,3 @@
-use ash::vk;
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -62,8 +61,8 @@ pub trait GPUCommandFuture {
     /// For combinators, this method should be called recursively for all inner futures.
     fn init<'a, 'b: 'a>(
         self: Pin<&mut Self>,
-        ctx: &'a mut CommandBufferRecordContext<'b>,
-        recycled_state: &mut Self::RecycledState,
+        _ctx: &'a mut CommandBufferRecordContext<'b>,
+        _recycled_state: &mut Self::RecycledState,
     ) {
     }
 }

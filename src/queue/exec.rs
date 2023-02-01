@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fmt::{Debug, Write},
     marker::PhantomData,
@@ -10,12 +9,12 @@ use std::{
 };
 
 use ash::vk;
-use futures_util::future::OptionFuture;
+
 use pin_project::pin_project;
 
 use crate::{
     commands::SharedCommandPool,
-    future::{CommandBufferRecordContext, GPUCommandFuture, PerFrameState, StageContext},
+    future::{CommandBufferRecordContext, GPUCommandFuture},
     Device, TimelineSemaphore,
 };
 
@@ -208,7 +207,7 @@ impl Queues {
             queues: self
                 .queues
                 .iter()
-                .map(|(queue, queue_family_index)| QueueSubmissionContext {
+                .map(|(_queue, queue_family_index)| QueueSubmissionContext {
                     queue_family_index: *queue_family_index,
                     stage_index: 0,
                     timeline_index: 0,
@@ -263,7 +262,10 @@ impl Queues {
                         ctx.timeline_index += 1;
                     }
                 }
-                QueueFuturePoll::Ready { next_queue, output } => {
+                QueueFuturePoll::Ready {
+                    next_queue: _,
+                    output,
+                } => {
                     println!("Saw ready");
                     let mut last_stage = std::mem::replace(
                         &mut current_stage,
@@ -426,7 +428,7 @@ impl CachedStageSubmissions {
         submission_context: &SubmissionContext,
         semaphore_pool: &mut TimelineSemaphorePool,
     ) {
-        for (i, (ctx, cache)) in submission_context
+        for (_i, (ctx, cache)) in submission_context
             .queues
             .iter()
             .zip(self.queues.iter_mut())
@@ -440,7 +442,7 @@ impl CachedStageSubmissions {
     }
     /// Called on the current stage.
     fn apply_submissions(&mut self, submission_context: &SubmissionContext, prev_stage: &Self) {
-        for (i, (ctx, cache)) in submission_context
+        for (_i, (ctx, cache)) in submission_context
             .queues
             .iter()
             .zip(self.queues.iter_mut())
@@ -765,8 +767,8 @@ where
     type RetainedState = Retain;
     fn init(
         self: Pin<&mut Self>,
-        ctx: &mut SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
+        _ctx: &mut SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
         prev_queue: QueueMask,
     ) {
         *self.project().initial_queue_mask = prev_queue;
@@ -1050,7 +1052,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
         let poll = if q.stage_index == 0 {
             command_ctx.record_first_step(this.inner, recycled_state, |a| {
                 for (src_queue, dst_queue, src_stages, dst_stages) in &a.semaphore_transitions {
-                    let id = ctx.queues[src_queue.0 as usize].signals.len() as u32;
+                    let _id = ctx.queues[src_queue.0 as usize].signals.len() as u32;
                     ctx.queues[src_queue.0 as usize].signals.insert(*src_stages);
                     ctx.queues[dst_queue.0 as usize].waits.push((
                         *dst_stages,

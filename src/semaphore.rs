@@ -1,8 +1,7 @@
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use crate::Device;
 use ash::{prelude::VkResult, vk};
-use std::mem::ManuallyDrop;
 
 pub struct Semaphore {
     device: Arc<Device>,

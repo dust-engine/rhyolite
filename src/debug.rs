@@ -4,9 +4,7 @@ use std::ffi::{CStr, CString};
 use std::pin::Pin;
 
 use crate::future::GPUCommandFuture;
-use crate::{
-    HasDevice, Instance, QueueFuture, QueueFuturePoll, QueueMask, QueueRef, SubmissionContext,
-};
+use crate::{HasDevice, QueueFuture};
 
 pub struct DebugUtilsMessenger {
     pub(crate) debug_utils: ext::DebugUtils,
@@ -164,7 +162,7 @@ impl<'fut> GPUCommandFuture for CommandDebugFuture<'fut> {
     fn record<'a, 'b: 'a>(
         self: Pin<&mut Self>,
         ctx: &'a mut crate::future::CommandBufferRecordContext<'b>,
-        recycled_state: &mut Self::RecycledState,
+        _recycled_state: &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
         ctx.record(|ctx, buf| unsafe {
             ctx.device()
@@ -183,7 +181,7 @@ impl<'fut> GPUCommandFuture for CommandDebugFuture<'fut> {
         std::task::Poll::Ready(((), ()))
     }
 
-    fn context(self: Pin<&mut Self>, ctx: &mut crate::future::StageContext) {}
+    fn context(self: Pin<&mut Self>, _ctx: &mut crate::future::StageContext) {}
 }
 
 pub fn command_debug(name: &CStr) -> CommandDebugFuture {

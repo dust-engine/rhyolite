@@ -1,4 +1,4 @@
-use crate::{queue, Queues, Version};
+use crate::{Queues, Version};
 
 use super::{Device, Instance};
 use ash::{prelude::VkResult, vk};

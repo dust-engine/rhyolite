@@ -2,7 +2,7 @@ use crate::{QueueRef, RunCommandsQueueFuture};
 
 use super::{CommandBufferRecordContext, GPUCommandFuture, StageContext};
 use pin_project::pin_project;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -253,8 +253,8 @@ where
     }
     fn init<'fa, 'fb: 'fa>(
         self: Pin<&mut Self>,
-        ctx: &'fa mut CommandBufferRecordContext<'fb>,
-        recycled_state: &mut Self::RecycledState,
+        _ctx: &'fa mut CommandBufferRecordContext<'fb>,
+        _recycled_state: &mut Self::RecycledState,
     ) {
         // Noop. The inner command will be initialized when fork was called on it.
     }

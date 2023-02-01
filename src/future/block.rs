@@ -89,7 +89,7 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         next_ctx.call(ctx);
     }
     fn init<'a, 'b: 'a>(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Recycle,
     ) {

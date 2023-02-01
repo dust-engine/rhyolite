@@ -61,7 +61,7 @@ impl<
     fn record<'fa, 'fb: 'fa>(
         self: Pin<&mut Self>,
         ctx: &'fa mut CommandBufferRecordContext<'fb>,
-        recycled_state: &mut Self::RecycledState,
+        _recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         println!("{}, on stage {}", self.str, ctx.current_stage_index());
         let this = self.project();
@@ -73,7 +73,7 @@ impl<
             size: src.size().min(dst.size()),
             ..Default::default()
         };
-        let copy = vk::CopyBufferInfo2 {
+        let _copy = vk::CopyBufferInfo2 {
             src_buffer: src.raw_buffer(),
             dst_buffer: dst.raw_buffer(),
             region_count: 1,
@@ -82,7 +82,7 @@ impl<
         };
         Poll::Ready(((), ()))
     }
-    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
+    fn context(self: Pin<&mut Self>, _ctx: &mut StageContext) {
         /*
         let this = self.project();
         let src = this.src.deref();

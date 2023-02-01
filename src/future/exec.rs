@@ -1,5 +1,5 @@
 use crate::{
-    commands::{CommandBuffer, CommandBufferLike, SharedCommandPool},
+    commands::{CommandBufferLike, SharedCommandPool},
     HasDevice, ImageLike, QueueRef,
 };
 use ash::vk;
@@ -343,7 +343,7 @@ impl StageContext {
     ) where
         T: ImageLike,
     {
-        let (barrier, old_layout, new_layout) = self
+        let (barrier, _old_layout, _new_layout) = self
             .image_accesses
             .entry(StageContextImage {
                 image: res.inner().raw_image(),
@@ -426,7 +426,7 @@ impl StageContext {
     ) where
         T: ImageLike,
     {
-        let (barrier, old_layout, new_layout) = self
+        let (barrier, _old_layout, _new_layout) = self
             .image_accesses
             .entry(StageContextImage {
                 image: res.inner().raw_image(),

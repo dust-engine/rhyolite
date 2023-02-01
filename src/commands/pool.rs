@@ -1,16 +1,7 @@
-use crate::{
-    device,
-    future::{use_cached_state, use_per_frame_state, use_state, PerFrameContainer, PerFrameState},
-    queue, Device, HasDevice,
-};
+use crate::{Device, HasDevice};
 use ash::vk;
-use std::cell::UnsafeCell;
-use std::{
-    cell::Cell,
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
+
+use std::{marker::PhantomData, sync::Arc};
 
 /// An unsafe command pool. Command buffer lifecycles are unmanaged.
 pub struct UnsafeCommandPool {

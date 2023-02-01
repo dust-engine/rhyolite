@@ -11,27 +11,16 @@
 #![feature(type_alias_impl_trait)]
 #![feature(specialization)]
 
-use std::{
-    cell::RefCell,
-    ops::{Deref, DerefMut, Generator},
-    pin::Pin,
-    sync::Arc,
-    task::Poll,
-};
+use std::sync::Arc;
 
 use ash::vk::{self};
 use async_ash::{
-    commands::{use_command_buffer, use_command_pool},
-    cstr,
-    future::*,
-    Buffer, CopyBufferFuture, DeviceCreateInfo, FencePool, InstanceCreateInfo,
-    PhysicalDeviceFeatures, QueueFuture, QueueFuturePoll, QueueMask, QueueRef, QueueType,
-    QueuesRouter, SubmissionContext, TimelineSemaphorePool,
+    cstr, future::*, Buffer, DeviceCreateInfo, FencePool, InstanceCreateInfo,
+    PhysicalDeviceFeatures, QueueFuture, QueueType, QueuesRouter, TimelineSemaphorePool,
 };
-use pin_project::pin_project;
 
 fn main() {
-    use async_ash_macro::{commands, gpu, join};
+    use async_ash_macro::{commands, gpu};
     let entry = unsafe { ash::Entry::load().unwrap() };
     let instance = Arc::new(
         async_ash::Instance::create(Arc::new(entry), &InstanceCreateInfo::default()).unwrap(),
@@ -48,7 +37,7 @@ fn main() {
         physical_device.properties().api_version(),
         physical_device.properties().driver_version()
     );
-    let mut queues_router = QueuesRouter::new(&physical_device);
+    let queues_router = QueuesRouter::new(&physical_device);
 
     let (device, mut queues) = physical_device
         .create_device(DeviceCreateInfo {
@@ -73,9 +62,9 @@ fn main() {
     let mut shared_semaphore_pool = TimelineSemaphorePool::new(device.clone());
     let mut shared_fence_pool = FencePool::new(device.clone());
 
-    let src1 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(231_usize) });
-    let src2 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(232_usize) });
-    let src3 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(233_usize) });
+    let _src1 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(231_usize) });
+    let _src2 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(232_usize) });
+    let _src3 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(233_usize) });
 
     use async_ash::debug::command_debug;
     let mut state = Default::default();
