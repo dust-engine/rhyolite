@@ -2,7 +2,11 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
-pub fn use_state<T>(this: &mut Option<T>, init: impl FnOnce() -> T, update: impl FnOnce(&mut T)) -> &mut T {
+pub fn use_state<T>(
+    this: &mut Option<T>,
+    init: impl FnOnce() -> T,
+    update: impl FnOnce(&mut T),
+) -> &mut T {
     if let Some(inner) = this {
         update(inner)
     }
@@ -36,15 +40,12 @@ pub struct PerFrameState<T> {
 impl<T> Default for PerFrameState<T> {
     fn default() -> Self {
         let (sender, receiver) = mpsc::channel();
-        Self {
-            receiver,
-            sender
-        }
+        Self { receiver, sender }
     }
 }
 pub struct PerFrameContainer<T> {
     sender: mpsc::Sender<T>,
-    item: Option<T>
+    item: Option<T>,
 }
 impl<T> Deref for PerFrameContainer<T> {
     type Target = T;
@@ -68,15 +69,19 @@ pub fn use_per_frame_state<T>(
     create: impl FnOnce() -> T,
     reuse: impl FnOnce(&mut T),
 ) -> PerFrameContainer<T> {
-    let item = this.receiver.try_recv().map(|mut item| {
-        reuse(&mut item);
-        item
-    }).unwrap_or_else(|err| match err {
-        mpsc::TryRecvError::Empty => create(),
-        mpsc::TryRecvError::Disconnected => panic!(),
-    });
+    let item = this
+        .receiver
+        .try_recv()
+        .map(|mut item| {
+            reuse(&mut item);
+            item
+        })
+        .unwrap_or_else(|err| match err {
+            mpsc::TryRecvError::Empty => create(),
+            mpsc::TryRecvError::Disconnected => panic!(),
+        });
     PerFrameContainer {
         sender: this.sender.clone(),
-        item: Some(item)
+        item: Some(item),
     }
 }

@@ -1,4 +1,4 @@
-use crate::{RunCommandsQueueFuture, QueueRef};
+use crate::{QueueRef, RunCommandsQueueFuture};
 
 use super::{CommandBufferRecordContext, GPUCommandFuture, StageContext};
 use pin_project::pin_project;
@@ -22,7 +22,7 @@ pub trait GPUCommandFutureExt: GPUCommandFuture + Sized {
             mapper: Some(mapper),
         }
     }
-    fn schedule_in_queue(self, queue: QueueRef) -> RunCommandsQueueFuture<Self> {
+    fn schedule_on_queue(self, queue: QueueRef) -> RunCommandsQueueFuture<Self> {
         RunCommandsQueueFuture::new(self, queue)
     }
     fn schedule(self) -> RunCommandsQueueFuture<Self> {
@@ -102,8 +102,11 @@ where
         }
     }
 
-    fn init<'a, 'b: 'a>(self: Pin<&mut Self>, ctx: &'a mut CommandBufferRecordContext<'b>,
-        recycled_state: &mut Self::RecycledState,) {
+    fn init<'a, 'b: 'a>(
+        self: Pin<&mut Self>,
+        ctx: &'a mut CommandBufferRecordContext<'b>,
+        recycled_state: &mut Self::RecycledState,
+    ) {
         let this = self.project();
         this.inner1.init(ctx, &mut recycled_state.0);
         this.inner2.init(ctx, &mut recycled_state.1);
@@ -146,8 +149,11 @@ where
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         self.project().inner.context(ctx);
     }
-    fn init<'a, 'b: 'a>(self: Pin<&mut Self>, ctx: &'a mut CommandBufferRecordContext<'b>,
-        recycled_state: &mut Self::RecycledState) {
+    fn init<'a, 'b: 'a>(
+        self: Pin<&mut Self>,
+        ctx: &'a mut CommandBufferRecordContext<'b>,
+        recycled_state: &mut Self::RecycledState,
+    ) {
         let this = self.project();
         this.inner.init(ctx, recycled_state);
     }
@@ -245,8 +251,11 @@ where
         }
         this.inner.as_mut().unwrap_pinned().context(ctx);
     }
-    fn init<'fa, 'fb: 'fa>(self: Pin<&mut Self>, ctx: &'fa mut CommandBufferRecordContext<'fb>,
-        recycled_state: &mut Self::RecycledState,) {
+    fn init<'fa, 'fb: 'fa>(
+        self: Pin<&mut Self>,
+        ctx: &'fa mut CommandBufferRecordContext<'fb>,
+        recycled_state: &mut Self::RecycledState,
+    ) {
         // Noop. The inner command will be initialized when fork was called on it.
     }
 }

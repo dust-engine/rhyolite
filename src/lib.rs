@@ -10,12 +10,15 @@
 #![feature(trait_alias)]
 #![feature(let_chains)]
 #![feature(allocator_api)]
+#![feature(cstr_from_bytes_until_nul)]
 #![feature(negative_impls)]
+#![feature(array_zip)]
 
 pub use cstr::cstr;
 
 extern crate self as async_ash;
 
+pub mod commands;
 pub mod debug;
 mod device;
 pub mod future;
@@ -25,7 +28,6 @@ pub mod queue;
 mod resources;
 mod semaphore;
 pub mod utils;
-pub mod commands;
 
 pub use device::{Device, HasDevice};
 pub use instance::*;

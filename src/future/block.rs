@@ -12,13 +12,11 @@ pub struct GPUCommandGeneratorContextFetchPtr {
 impl GPUCommandGeneratorContextFetchPtr {
     pub fn new<T: GPUCommandFuture>(this: Pin<&mut T>) -> Self {
         Self {
-            this: unsafe {
-                this.get_unchecked_mut() as *mut T as *mut ()
-            },
+            this: unsafe { this.get_unchecked_mut() as *mut T as *mut () },
             fetch: |ptr, stage| unsafe {
                 let ptr = std::pin::Pin::new_unchecked(&mut *(ptr as *mut T));
                 T::context(ptr, stage)
-            }
+            },
         }
     }
     pub fn call(&mut self, ctx: &mut StageContext) {
@@ -45,7 +43,9 @@ pub struct GPUCommandBlock<R, State, Recycle: Default, G> {
     next_ctx: Option<GPUCommandGeneratorContextFetchPtr>,
     _marker: std::marker::PhantomData<fn(*mut Recycle) -> (R, State)>,
 }
-impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>> GPUCommandBlock<R, State, Recycle, G> {
+impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
+    GPUCommandBlock<R, State, Recycle, G>
+{
     pub fn new(inner: G) -> Self {
         Self {
             inner,
@@ -54,7 +54,9 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         }
     }
 }
-impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>> GPUCommandFuture for GPUCommandBlock<R, State, Recycle, G> {
+impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
+    GPUCommandFuture for GPUCommandBlock<R, State, Recycle, G>
+{
     type Output = R;
     type RetainedState = State;
     type RecycledState = Recycle;
@@ -64,7 +66,10 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         recycled_state: &mut Recycle,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
-        match this.inner.resume((ctx as *mut _ as *mut (), recycled_state)) {
+        match this
+            .inner
+            .resume((ctx as *mut _ as *mut (), recycled_state))
+        {
             GeneratorState::Yielded(ctx) => {
                 *this.next_ctx = Some(ctx);
                 Poll::Pending
@@ -83,16 +88,22 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
             .expect("Calling context without calling init");
         next_ctx.call(ctx);
     }
-    fn init<'a, 'b: 'a>(mut self: Pin<&mut Self>, ctx: &'a mut CommandBufferRecordContext<'b>,
-        recycled_state: &mut Recycle) {
+    fn init<'a, 'b: 'a>(
+        mut self: Pin<&mut Self>,
+        ctx: &'a mut CommandBufferRecordContext<'b>,
+        recycled_state: &mut Recycle,
+    ) {
         // Reach the first yield point to get the context of the first awaited future.
         assert!(self.next_ctx.is_none());
         let this = self.project();
-        match this.inner.resume((ctx as *mut _ as *mut (), recycled_state)) {
+        match this
+            .inner
+            .resume((ctx as *mut _ as *mut (), recycled_state))
+        {
             GeneratorState::Yielded(ctx) => {
                 *this.next_ctx = Some(ctx);
             }
-            GeneratorState::Complete(_) => unreachable!()
+            GeneratorState::Complete(_) => unreachable!(),
         }
     }
 }

@@ -60,7 +60,10 @@ pub trait GPUCommandFuture {
     /// For executors, this method should be called once, and as soon as the future was pinnned.
     /// For implementations of `GPUCommandFuture`, this method can be ignored in most cases.
     /// For combinators, this method should be called recursively for all inner futures.
-    fn init<'a, 'b: 'a>(self: Pin<&mut Self>,
+    fn init<'a, 'b: 'a>(
+        self: Pin<&mut Self>,
         ctx: &'a mut CommandBufferRecordContext<'b>,
-        recycled_state: &mut Self::RecycledState) {}
+        recycled_state: &mut Self::RecycledState,
+    ) {
+    }
 }

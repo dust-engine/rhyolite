@@ -37,7 +37,7 @@ impl Iterator for QueueTypeIterator {
         let t = self.0 & self.0.overflowing_neg().0;
         let r = self.0.trailing_zeros();
         self.0 ^= t;
-        Some(unsafe { std::mem::transmute(r as u8)})
+        Some(unsafe { std::mem::transmute(r as u8) })
     }
 }
 
@@ -52,30 +52,19 @@ impl QueueType {
     }
 }
 
-/// A collection of QueueDispatcher. It creates manages a number of QueueDispatcher based on the device-specific queue flags.
-/// On submission, it routes the submission to the queue with the minimal number of declared capabilities.
-///
-/// The current implementation creates at most one queue for each queue family.
-pub struct QueueTypes {
-    queue_type_to_index: [QueueRef; 4],
-}
-
-impl QueueTypes {
-    pub fn of(&self, ty: QueueType) -> QueueRef {
-        self.queue_type_to_index[ty as usize]
-    }
-}
-
-pub struct QueuesBuilder {
+pub struct QueuesRouter {
     queue_family_to_types: Vec<QueueTypeMask>,
-    queue_type_to_family: [u32; 4],
+    queue_type_to_index: [(QueueRef, u32); 4],
 }
 
 const QUEUE_PRIORITY_HIGH: f32 = 1.0;
 const QUEUE_PRIORITY_MID: f32 = 0.5;
 const QUEUE_PRIORITY_LOW: f32 = 0.1;
 
-impl QueuesBuilder {
+impl QueuesRouter {
+    pub fn of_type(&self, ty: QueueType) -> QueueRef {
+        self.queue_type_to_index[ty as usize].0
+    }
     pub fn priorities(&self, queue_family_index: u32) -> Vec<f32> {
         let types = self.queue_family_to_types[queue_family_index as usize];
         if !types.is_empty() {
@@ -104,7 +93,7 @@ impl QueuesBuilder {
                 if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
                     priority -= 1;
                 }
-                priority
+                (priority, family.timestamp_valid_bits)
             })
             .unwrap()
             .0 as u32;
@@ -122,7 +111,7 @@ impl QueuesBuilder {
                 if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
                     priority -= 1;
                 }
-                priority
+                (priority, family.timestamp_valid_bits)
             })
             .unwrap()
             .0 as u32;
@@ -145,7 +134,7 @@ impl QueuesBuilder {
                 if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
                     priority -= 1;
                 }
-                priority
+                (priority, family.timestamp_valid_bits)
             })
             .unwrap()
             .0 as u32;
@@ -165,7 +154,7 @@ impl QueuesBuilder {
                 if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
                     priority -= 20;
                 }
-                priority
+                (priority, family.timestamp_valid_bits)
             })
             .unwrap()
             .0 as u32;
@@ -184,31 +173,24 @@ impl QueuesBuilder {
             sparse_binding_queue_family,
         ];
 
-        Self {
-            queue_family_to_types,
-            queue_type_to_family,
-        }
-    }
-    pub fn queue_types(&self) -> QueueTypes {
         let mut queue_type_to_index: [QueueRef; 4] = [QueueRef(u8::MAX); 4];
-        for (i, ty) in  self.queue_family_to_types
+        for (i, ty) in queue_family_to_types
             .iter()
-            .filter_map(|x| if x.is_empty() {
-                None
-            } else {
-                Some(x)
-            })
-            .enumerate() {
-                for queue_type in ty.types() {
-                    queue_type_to_index[queue_type as usize] = QueueRef(i as u8);
-                }
+            .filter_map(|x| if x.is_empty() { None } else { Some(x) })
+            .enumerate()
+        {
+            for queue_type in ty.types() {
+                queue_type_to_index[queue_type as usize] = QueueRef(i as u8);
+            }
         }
         for i in queue_type_to_index.iter() {
             assert_ne!(i.0, u8::MAX, "All queue types should've been assigned")
         }
-        
-        QueueTypes {
-            queue_type_to_index
+        let queue_type_to_index = queue_type_to_index.zip(queue_type_to_family);
+
+        Self {
+            queue_family_to_types,
+            queue_type_to_index,
         }
     }
 }

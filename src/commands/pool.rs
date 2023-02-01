@@ -1,30 +1,47 @@
-use std::{sync::Arc, ops::{Deref, DerefMut}, marker::PhantomData, cell::Cell};
-use crate::{Device, future::{use_state, use_per_frame_state, PerFrameState, PerFrameContainer, use_cached_state}, device, queue, HasDevice};
+use crate::{
+    device,
+    future::{use_cached_state, use_per_frame_state, use_state, PerFrameContainer, PerFrameState},
+    queue, Device, HasDevice,
+};
 use ash::vk;
 use std::cell::UnsafeCell;
+use std::{
+    cell::Cell,
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 /// An unsafe command pool. Command buffer lifecycles are unmanaged.
 pub struct UnsafeCommandPool {
     device: Arc<Device>,
     command_pool: vk::CommandPool,
+    queue_family_index: u32,
 }
 unsafe impl Send for UnsafeCommandPool {}
 impl !Sync for UnsafeCommandPool {}
 
-
-
 impl UnsafeCommandPool {
-    pub fn new(device: Arc<Device>, queue_family_index: u32, flags: vk::CommandPoolCreateFlags) -> Self {
+    pub fn new(
+        device: Arc<Device>,
+        queue_family_index: u32,
+        flags: vk::CommandPoolCreateFlags,
+    ) -> Self {
         let command_pool = unsafe {
-            device.create_command_pool(&vk::CommandPoolCreateInfo {
-                queue_family_index,
-                flags,
-                ..Default::default()
-            }, None)
-        }.unwrap();
+            device.create_command_pool(
+                &vk::CommandPoolCreateInfo {
+                    queue_family_index,
+                    flags,
+                    ..Default::default()
+                },
+                None,
+            )
+        }
+        .unwrap();
         Self {
             device,
             command_pool,
+            queue_family_index,
         }
     }
     /// Marked unsafe because allocated command buffers won't be recycled automatically.
@@ -35,12 +52,18 @@ impl UnsafeCommandPool {
                 self.device.handle(),
                 &vk::CommandBufferAllocateInfo {
                     command_pool: self.command_pool,
-                    level: if secondary { vk::CommandBufferLevel::SECONDARY } else { vk::CommandBufferLevel::PRIMARY },
+                    level: if secondary {
+                        vk::CommandBufferLevel::SECONDARY
+                    } else {
+                        vk::CommandBufferLevel::PRIMARY
+                    },
                     command_buffer_count: N as u32,
                     ..Default::default()
                 },
-                command_buffer.as_mut_ptr()
-            ).result().unwrap();
+                command_buffer.as_mut_ptr(),
+            )
+            .result()
+            .unwrap();
             command_buffer
         }
     }
@@ -51,11 +74,16 @@ impl UnsafeCommandPool {
     }
     pub fn reset(&mut self, release_resources: bool) {
         unsafe {
-            self.device.reset_command_pool(self.command_pool, if release_resources {
-                vk::CommandPoolResetFlags::RELEASE_RESOURCES
-            } else {
-                vk::CommandPoolResetFlags::empty()
-            }).unwrap();
+            self.device
+                .reset_command_pool(
+                    self.command_pool,
+                    if release_resources {
+                        vk::CommandPoolResetFlags::RELEASE_RESOURCES
+                    } else {
+                        vk::CommandPoolResetFlags::empty()
+                    },
+                )
+                .unwrap();
         }
     }
 }
@@ -80,18 +108,23 @@ impl HasDevice for SharedCommandPool {
 }
 impl SharedCommandPool {
     pub fn new(device: Arc<Device>, queue_family_index: u32) -> Self {
-        let pool = UnsafeCommandPool::new(device, queue_family_index, vk::CommandPoolCreateFlags::TRANSIENT);
+        let pool = UnsafeCommandPool::new(
+            device,
+            queue_family_index,
+            vk::CommandPoolCreateFlags::TRANSIENT,
+        );
         Self {
             pool,
             command_buffers: Vec::new(),
-            indice: 0
+            indice: 0,
         }
+    }
+    pub fn queue_family_index(&self) -> u32 {
+        self.pool.queue_family_index
     }
     pub fn allocate_one(&mut self) -> vk::CommandBuffer {
         if self.indice >= self.command_buffers.len() {
-            let buffer = unsafe {
-                self.pool.allocate_one(false)
-            };
+            let buffer = unsafe { self.pool.allocate_one(false) };
             self.command_buffers.push(buffer);
             self.indice += 1;
             buffer
@@ -103,30 +136,31 @@ impl SharedCommandPool {
     }
 }
 
-
 pub fn use_command_pool<'recycle>(
     this: &'recycle mut Option<UnsafeCommandPool>,
     device: &Arc<Device>,
     queue_family_index: u32,
 ) -> &'recycle mut UnsafeCommandPool {
     let pool = this.get_or_insert_with(|| {
-        UnsafeCommandPool::new(device.clone(), queue_family_index, vk::CommandPoolCreateFlags::TRANSIENT)
+        UnsafeCommandPool::new(
+            device.clone(),
+            queue_family_index,
+            vk::CommandPoolCreateFlags::TRANSIENT,
+        )
     });
     pool.reset(false);
     pool
-    
 }
-
 
 pub struct CommandBuffer<'a> {
     buffer: vk::CommandBuffer,
-    _marker: PhantomData<&'a ()>
+    _marker: PhantomData<&'a ()>,
 }
 impl<'a> CommandBuffer<'a> {
     pub(crate) unsafe fn new(buffer: vk::CommandBuffer) -> Self {
         Self {
             buffer,
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 }
@@ -137,19 +171,18 @@ impl<'a> CommandBufferLike for CommandBuffer<'a> {
 }
 pub fn use_command_buffer<'recycle>(
     this: &'recycle mut Option<vk::CommandBuffer>,
-    pool: &'recycle mut UnsafeCommandPool
+    pool: &'recycle mut UnsafeCommandPool,
 ) -> CommandBuffer<'recycle> {
-    let buffer= *this.get_or_insert_with(|| unsafe {
-        pool.allocate_one(false)
-    });
-    CommandBuffer { buffer, _marker: PhantomData }
+    let buffer = *this.get_or_insert_with(|| unsafe { pool.allocate_one(false) });
+    CommandBuffer {
+        buffer,
+        _marker: PhantomData,
+    }
 }
-
 
 pub trait CommandBufferLike {
     fn raw_command_buffer(&self) -> vk::CommandBuffer;
 }
-
 
 // It will be safe as long as we don't destroy command buffers.
 // CommandPool: Send, but not Sync. RecycledState, reset on fetch.

@@ -4,7 +4,9 @@ use std::ffi::{CStr, CString};
 use std::pin::Pin;
 
 use crate::future::GPUCommandFuture;
-use crate::{QueueFuture, SubmissionContext, QueueMask, QueueFuturePoll, Instance, QueueRef, HasDevice};
+use crate::{
+    HasDevice, Instance, QueueFuture, QueueFuturePoll, QueueMask, QueueRef, SubmissionContext,
+};
 
 pub struct DebugUtilsMessenger {
     pub(crate) debug_utils: ext::DebugUtils,
@@ -165,22 +167,31 @@ impl<'fut> GPUCommandFuture for CommandDebugFuture<'fut> {
         recycled_state: &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
         ctx.record(|ctx, buf| unsafe {
-            ctx.device().instance().debug_utils().debug_utils.cmd_insert_debug_utils_label(buf, &vk::DebugUtilsLabelEXT {
-                p_label_name: self.label_name.as_ptr(),
-                color: self.color.clone(),
-                ..Default::default()
-            });
+            ctx.device()
+                .instance()
+                .debug_utils()
+                .debug_utils
+                .cmd_insert_debug_utils_label(
+                    buf,
+                    &vk::DebugUtilsLabelEXT {
+                        p_label_name: self.label_name.as_ptr(),
+                        color: self.color.clone(),
+                        ..Default::default()
+                    },
+                );
         });
         std::task::Poll::Ready(((), ()))
     }
 
-    fn context(self: Pin<&mut Self>, ctx: &mut crate::future::StageContext) {
-    }
+    fn context(self: Pin<&mut Self>, ctx: &mut crate::future::StageContext) {}
 }
 
 pub fn command_debug(name: &CStr) -> CommandDebugFuture {
     command_debug_colored(name, &[0.0, 0.0, 0.0, 1.0])
 }
 pub fn command_debug_colored<'a>(name: &'a CStr, color: &'a [f32; 4]) -> CommandDebugFuture<'a> {
-    CommandDebugFuture { label_name: name, color }
+    CommandDebugFuture {
+        label_name: name,
+        color,
+    }
 }

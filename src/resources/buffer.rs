@@ -1,25 +1,44 @@
 use std::{
     ops::{Deref, DerefMut},
     pin::Pin,
+    sync::Arc,
     task::Poll,
 };
 
 use ash::vk;
 use pin_project::pin_project;
 
-use crate::future::{CommandBufferRecordContext, GPUCommandFuture, Res, StageContext};
+use crate::{
+    future::{CommandBufferRecordContext, GPUCommandFuture, Res, StageContext},
+    Device,
+};
 
-pub trait BufferSlice {
+pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
     fn offset(&self) -> vk::DeviceSize;
     fn size(&self) -> vk::DeviceSize;
 }
 
+pub struct Buffer {
+    device: Arc<Device>,
+    raw: vk::Buffer,
+}
+impl Buffer {
+    pub fn from_raw(device: Arc<Device>, raw: vk::Buffer) -> Self {
+        Self { device, raw }
+    }
+}
+
+// Everyone wants a mutable refence to outer.
+// Some people wants a mutable reference to inner.
+// In the case of Fork. Each fork gets a & of the container. Container must be generic over &mut, and BorrowMut.
+// Inner product must be generic over &mut and RefCell as well.
+
 #[pin_project]
 pub struct CopyBufferFuture<
     'b,
-    S: BufferSlice + 'b,
-    T: BufferSlice + 'b,
+    S: BufferLike + 'b,
+    T: BufferLike + 'b,
     SRef: Deref<Target = Res<'b, S>>,
     TRef: DerefMut<Target = Res<'b, T>>,
 > {
@@ -29,18 +48,20 @@ pub struct CopyBufferFuture<
 }
 impl<
         'b,
-        S: BufferSlice,
-        T: BufferSlice,
+        S: BufferLike,
+        T: BufferLike,
         SRef: Deref<Target = Res<'b, S>>,
         TRef: DerefMut<Target = Res<'b, T>>,
     > GPUCommandFuture for CopyBufferFuture<'b, S, T, SRef, TRef>
 {
     type Output = ();
     type RetainedState = ();
+    type RecycledState = ();
     #[inline]
-    fn record(
+    fn record<'fa, 'fb: 'fa>(
         self: Pin<&mut Self>,
-        ctx: &mut CommandBufferRecordContext,
+        ctx: &'fa mut CommandBufferRecordContext<'fb>,
+        recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         println!("{}, on stage {}", self.str, ctx.current_stage_index());
         let this = self.project();
@@ -62,6 +83,7 @@ impl<
         Poll::Ready(((), ()))
     }
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
+        /*
         let this = self.project();
         let src = this.src.deref();
         let dst = this.dst.deref_mut();
@@ -75,5 +97,6 @@ impl<
             vk::PipelineStageFlags2::COPY,
             vk::AccessFlags2::TRANSFER_WRITE,
         );
+        */
     }
 }

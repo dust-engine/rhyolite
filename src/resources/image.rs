@@ -2,7 +2,7 @@ use ash::{prelude::VkResult, vk};
 use std::sync::Arc;
 
 use super::alloc::{Allocation, AllocationCreateFlags, Allocator, MemoryAllocScenario};
-use crate::{DebugObject, Device, HasDevice};
+use crate::{debug::DebugObject, Device, HasDevice};
 
 pub trait ImageLike: Send + Sync {
     fn raw_image(&self) -> vk::Image;

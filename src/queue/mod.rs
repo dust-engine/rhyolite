@@ -4,4 +4,4 @@ use ash::{prelude::VkResult, vk};
 pub use exec::*;
 use std::sync::Arc;
 mod router;
-pub use router::QueuesBuilder;
+pub use router::{QueueType, QueuesRouter};

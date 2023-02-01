@@ -1,9 +1,10 @@
-use crate::{queue, Queues};
+use crate::{queue, Queues, Version};
 
 use super::{Device, Instance};
 use ash::{prelude::VkResult, vk};
 use core::ffi::{c_char, c_void};
 use std::{
+    ffi::CStr,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
@@ -17,7 +18,7 @@ pub struct PhysicalDevice {
 pub struct DeviceCreateInfo<'a, F: Fn(u32) -> Vec<f32>> {
     pub enabled_layer_names: &'a [*const c_char],
     pub enabled_extension_names: &'a [*const c_char],
-    pub enabled_features: vk::PhysicalDeviceFeatures2,
+    pub enabled_features: PhysicalDeviceFeatures,
     pub queue_create_callback: F,
 }
 impl<'a, F: Fn(u32) -> Vec<f32>> DeviceCreateInfo<'a, F> {
@@ -26,7 +27,7 @@ impl<'a, F: Fn(u32) -> Vec<f32>> DeviceCreateInfo<'a, F> {
             enabled_layer_names: &[],
             enabled_extension_names: &[],
             enabled_features: Default::default(),
-            queue_create_callback: callback
+            queue_create_callback: callback,
         }
     }
 }
@@ -90,11 +91,14 @@ impl PhysicalDevice {
     }
     pub fn create_device<'a>(
         self,
-        infos: &'a DeviceCreateInfo<'a, impl Fn(u32) -> Vec<f32>>
+        mut infos: DeviceCreateInfo<'a, impl Fn(u32) -> Vec<f32>>,
     ) -> VkResult<(Arc<Device>, Queues)> {
         let mut num_queue_families: u32 = 0;
         unsafe {
-            (self.instance.fp_v1_0().get_physical_device_queue_family_properties)(
+            (self
+                .instance
+                .fp_v1_0()
+                .get_physical_device_queue_family_properties)(
                 self.physical_device,
                 &mut num_queue_families,
                 std::ptr::null_mut(),
@@ -102,35 +106,30 @@ impl PhysicalDevice {
         }
         assert!(num_queue_families > 0);
         let mut list_priorities = Vec::new();
-        let queue_create_infos: Vec<_> = (0..num_queue_families).filter_map(|queue_family_index| {
-            let priorities = (infos.queue_create_callback)(queue_family_index);
-            if priorities.is_empty() {
-                return None;
-            }
-            let queue_count = priorities.len() as u32;
-            let p_queue_priorities = priorities.as_ptr();
-            list_priorities.push(priorities);
-            Some(vk::DeviceQueueCreateInfo {
-                queue_family_index,
-                queue_count,
-                p_queue_priorities,
-                ..Default::default()
+        let queue_create_infos: Vec<_> = (0..num_queue_families)
+            .filter_map(|queue_family_index| {
+                let priorities = (infos.queue_create_callback)(queue_family_index);
+                if priorities.is_empty() {
+                    return None;
+                }
+                let queue_count = priorities.len() as u32;
+                let p_queue_priorities = priorities.as_ptr();
+                list_priorities.push(priorities);
+                Some(vk::DeviceQueueCreateInfo {
+                    queue_family_index,
+                    queue_count,
+                    p_queue_priorities,
+                    ..Default::default()
+                })
             })
-        }).collect();
-        let create_info = vk::DeviceCreateInfo {
-            p_next: &infos.enabled_features as *const vk::PhysicalDeviceFeatures2 as *const _,
-            queue_create_info_count: queue_create_infos.len() as u32,
-            p_queue_create_infos: queue_create_infos.as_ptr(),
-
-            enabled_layer_count: infos.enabled_layer_names.len() as u32,
-            pp_enabled_layer_names: infos.enabled_layer_names.as_ptr(),
-
-            enabled_extension_count: infos.enabled_extension_names.len() as u32,
-            pp_enabled_extension_names: infos.enabled_extension_names.as_ptr(),
-            // No need to specify this pointer with vk::PhysicalDeviceFeatures2 in the p_next chain
-            p_enabled_features: std::ptr::null(),
-            ..Default::default()
-        };
+            .collect();
+        infos.enabled_features.fix_links();
+        let create_info = vk::DeviceCreateInfo::builder()
+            .queue_create_infos(&queue_create_infos)
+            .enabled_layer_names(infos.enabled_layer_names)
+            .enabled_extension_names(infos.enabled_extension_names)
+            .push_next(&mut infos.enabled_features.inner)
+            .build();
 
         // Safety: No Host Syncronization rules for VkCreateDevice.
         // Device retains a reference to Instance, ensuring that Instance is dropped later than Device.
@@ -141,7 +140,7 @@ impl PhysicalDevice {
         let device = Arc::new(Device::new(self, device));
         drop(list_priorities);
 
-        let queues = unsafe { Queues::new(&device,  num_queue_families, &queue_create_infos) };
+        let queues = unsafe { Queues::new(&device, num_queue_families, &queue_create_infos) };
         Ok((device, queues))
     }
 }
@@ -179,6 +178,21 @@ impl PhysicalDeviceProperties {
         }
         std::pin::Pin::into_inner(this)
     }
+    pub fn device_name(&self) -> &CStr {
+        unsafe {
+            CStr::from_bytes_until_nul(std::slice::from_raw_parts(
+                self.inner.properties.device_name.as_ptr() as *const _,
+                self.inner.properties.device_name.len(),
+            ))
+            .unwrap()
+        }
+    }
+    pub fn api_version(&self) -> Version {
+        Version(self.inner.properties.api_version)
+    }
+    pub fn driver_version(&self) -> Version {
+        Version(self.inner.properties.driver_version)
+    }
 }
 impl Deref for PhysicalDeviceProperties {
     type Target = vk::PhysicalDeviceProperties;
@@ -192,6 +206,7 @@ impl DerefMut for PhysicalDeviceProperties {
     }
 }
 
+#[derive(Default, Clone)]
 pub struct PhysicalDeviceFeatures {
     pub inner: vk::PhysicalDeviceFeatures2,
     pub v11: vk::PhysicalDeviceVulkan11Features,
@@ -203,6 +218,13 @@ pub struct PhysicalDeviceFeatures {
 unsafe impl Send for PhysicalDeviceFeatures {}
 unsafe impl Sync for PhysicalDeviceFeatures {}
 impl PhysicalDeviceFeatures {
+    fn fix_links(&mut self) {
+        self.inner.p_next = &mut self.v11 as *mut _ as *mut c_void;
+        self.v11.p_next = &mut self.v12 as *mut _ as *mut c_void;
+        self.v12.p_next = &mut self.v13 as *mut _ as *mut c_void;
+        self.v13.p_next = &mut self.acceleration_structure as *mut _ as *mut c_void;
+        self.acceleration_structure.p_next = &mut self.ray_tracing as *mut _ as *mut c_void;
+    }
     fn new(
         instance: &ash::Instance,
         physical_device: vk::PhysicalDevice,
@@ -215,11 +237,7 @@ impl PhysicalDeviceFeatures {
             acceleration_structure: vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default(),
             ray_tracing: vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default(),
         });
-        this.inner.p_next = &mut this.v11 as *mut _ as *mut c_void;
-        this.v11.p_next = &mut this.v12 as *mut _ as *mut c_void;
-        this.v12.p_next = &mut this.v13 as *mut _ as *mut c_void;
-        this.v13.p_next = &mut this.acceleration_structure as *mut _ as *mut c_void;
-        this.acceleration_structure.p_next = &mut this.ray_tracing as *mut _ as *mut c_void;
+        this.fix_links();
         unsafe {
             instance.get_physical_device_features2(physical_device, &mut this.inner);
         }

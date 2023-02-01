@@ -1,6 +1,10 @@
 use crate::transformer::CommandsTransformer;
 use std::borrow::Borrow;
-use syn::{parse::{Parse, ParseStream}, spanned::Spanned, punctuated::Punctuated};
+use syn::{
+    parse::{Parse, ParseStream},
+    punctuated::Punctuated,
+    spanned::Spanned,
+};
 
 struct CommandsTransformState {
     retained_state_count: usize,
@@ -133,10 +137,7 @@ impl CommandsTransformer for CommandsTransformState {
     }
 }
 impl CommandsTransformState {
-    fn retain(
-        &mut self,
-        input_tokens: &proc_macro2::TokenStream,
-    ) -> proc_macro2::TokenStream {
+    fn retain(&mut self, input_tokens: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         let global_res_variable_name =
             quote::format_ident!("__future_retain_{}", self.retained_state_count);
         self.retained_state_count += 1;
@@ -156,7 +157,7 @@ impl CommandsTransformState {
     fn using_transform(&mut self, input: &syn::Macro) -> proc_macro2::TokenStream {
         // Transform the use! macros. Input should be an expression that implements Default.
         // Returns a mutable reference to the value.
-        
+
         let index = syn::Index::from(self.recycled_state_count);
         self.recycled_state_count += 1;
         quote::quote_spanned! {input.span()=>
@@ -279,8 +280,9 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
         elems: {
             let mut elems = syn::punctuated::Punctuated::from_iter(
                 std::iter::repeat(syn::Type::Infer(syn::TypeInfer {
-                    underscore_token: Default::default()
-                })).take(state.recycled_state_count)
+                    underscore_token: Default::default(),
+                }))
+                .take(state.recycled_state_count),
             );
             if state.recycled_state_count == 1 {
                 elems.push_punct(Default::default());

@@ -1,7 +1,12 @@
+use crate::cstr;
 use crate::debug::DebugUtilsMessenger;
 use ash::{prelude::VkResult, vk};
-use std::{ops::Deref, sync::Arc, ffi::{CStr, c_char}};
-use crate::cstr;
+use std::{
+    ffi::{c_char, CStr},
+    fmt::Debug,
+    ops::Deref,
+    sync::Arc,
+};
 
 pub struct Instance {
     entry: Arc<ash::Entry>,
@@ -9,7 +14,7 @@ pub struct Instance {
     debug_utils: DebugUtilsMessenger,
 }
 
-pub struct Version(u32);
+pub struct Version(pub(crate) u32);
 impl Version {
     pub fn new(variant: u32, major: u32, minor: u32, patch: u32) -> Self {
         let num = vk::make_api_version(variant, major, minor, patch);
@@ -33,6 +38,21 @@ impl Default for Version {
         Self::new(0, 0, 1, 0)
     }
 }
+impl Debug for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "Version({}.{}.{})",
+            self.major(),
+            self.minor(),
+            self.patch()
+        ))?;
+        let variant = self.variant();
+        if variant != 0 {
+            f.write_fmt(format_args!(" variant {}", variant))?;
+        }
+        Ok(())
+    }
+}
 
 pub struct InstanceCreateInfo<'a> {
     application_name: &'a CStr,
@@ -44,9 +64,8 @@ pub struct InstanceCreateInfo<'a> {
     enabled_extension_names: &'a [*const c_char],
 }
 
-const DEFAULT_INSTANCE_EXTENSIONS: &'static [*const c_char] = &[
-    ash::extensions::ext::DebugUtils::name().as_ptr()
-];
+const DEFAULT_INSTANCE_EXTENSIONS: &'static [*const c_char] =
+    &[ash::extensions::ext::DebugUtils::name().as_ptr()];
 impl<'a> Default for InstanceCreateInfo<'a> {
     fn default() -> Self {
         Self {
@@ -56,7 +75,7 @@ impl<'a> Default for InstanceCreateInfo<'a> {
             engine_version: Default::default(),
             api_version: Version::new(0, 1, 3, 0),
             enabled_layer_names: Default::default(),
-            enabled_extension_names: DEFAULT_INSTANCE_EXTENSIONS
+            enabled_extension_names: DEFAULT_INSTANCE_EXTENSIONS,
         }
     }
 }
