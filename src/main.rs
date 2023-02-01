@@ -13,19 +13,21 @@
 
 use std::sync::Arc;
 
-use ash::vk::{self};
-use async_ash::{
-    cstr, future::*, Buffer, DeviceCreateInfo, FencePool, InstanceCreateInfo,
+use async_ash_core::{
+    ash,
+    ash::vk,
+    cstr,
+    future::*,
+    macros::{commands, gpu},
+    Buffer, DeviceCreateInfo, FencePool, Instance, InstanceCreateInfo, PhysicalDevice,
     PhysicalDeviceFeatures, QueueFuture, QueueType, QueuesRouter, TimelineSemaphorePool,
 };
 
 fn main() {
-    use async_ash_macro::{commands, gpu};
     let entry = unsafe { ash::Entry::load().unwrap() };
-    let instance = Arc::new(
-        async_ash::Instance::create(Arc::new(entry), &InstanceCreateInfo::default()).unwrap(),
-    );
-    let physical_device = async_ash::PhysicalDevice::enumerate(&instance)
+    let instance =
+        Arc::new(Instance::create(Arc::new(entry), &InstanceCreateInfo::default()).unwrap());
+    let physical_device = PhysicalDevice::enumerate(&instance)
         .unwrap()
         .into_iter()
         .skip(1)
@@ -66,14 +68,14 @@ fn main() {
     let _src2 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(232_usize) });
     let _src3 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(233_usize) });
 
-    use async_ash::debug::command_debug;
+    use async_ash_core::debug::command_debug;
     let mut state = Default::default();
     let wait = queues.submit(
         gpu! {
             commands! {
                 command_debug(cstr!("hello")).await;
                 command_debug(cstr!("world")).await;
-            }.schedule_on_queue(queues_router.of_type(QueueType::Graphics)).await;
+            }.schedule_on_queue(queues_router.of_type(QueueType::Transfer)).await;
 
             commands! {
                 command_debug(cstr!("im")).await;

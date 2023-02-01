@@ -10,8 +10,6 @@ pub use exec::*;
 pub use ext::*;
 pub use state::*;
 
-pub use async_ash_macro::{commands, join};
-
 pub trait GPUCommandFuture {
     type Output;
 
