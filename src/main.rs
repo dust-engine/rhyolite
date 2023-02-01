@@ -73,7 +73,7 @@ fn main() {
             commands! {
                 command_debug(cstr!("hello")).await;
                 command_debug(cstr!("world")).await;
-            }.schedule().await;
+            }.schedule_on_queue(queues_router.of_type(QueueType::Graphics)).await;
 
             commands! {
                 command_debug(cstr!("im")).await;

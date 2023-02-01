@@ -94,7 +94,6 @@ pub struct QueueSubmissionContext {
     queue_family_index: u32,
     stage_index: u32,
     timeline_index: u32,
-    timeline_semaphore: TimelineSemaphore,
 
     /// Stages that the previous stage of the current queue needs to signal on.
     signals: BTreeSet<vk::PipelineStageFlags2>,
@@ -124,13 +123,16 @@ impl Default for QueueSubmissionType {
     }
 }
 impl QueueSubmissionType {
-    fn end(&mut self) {
+    fn end(&mut self, device: &crate::Device) {
         match self {
             QueueSubmissionType::Submit {
                 command_buffers,
                 recording_command_buffer,
             } => {
                 if let Some(cmd_buf) = recording_command_buffer.take() {
+                    unsafe {
+                        device.end_command_buffer(cmd_buf).unwrap();
+                    }
                     command_buffers.push(cmd_buf);
                 }
             }
@@ -211,7 +213,6 @@ impl Queues {
                     queue_family_index: *queue_family_index,
                     stage_index: 0,
                     timeline_index: 0,
-                    timeline_semaphore: TimelineSemaphore::new(self.device.clone(), 0).unwrap(),
                     signals: Default::default(),
                     waits: Default::default(),
                 })
@@ -252,7 +253,7 @@ impl Queues {
                         .iter_mut()
                         .zip(last_stage.queues.iter_mut())
                     {
-                        src.end();
+                        src.end(&self.device);
                         dst.ty = std::mem::replace(src, QueueSubmissionType::Unknown);
                     }
 
@@ -278,7 +279,7 @@ impl Queues {
                         .iter_mut()
                         .zip(last_stage.queues.iter_mut())
                     {
-                        src.end();
+                        src.end(&self.device);
                         dst.ty = std::mem::replace(src, QueueSubmissionType::Unknown);
                     }
                     submission_batch.add_stage(last_stage);
@@ -308,7 +309,7 @@ impl Queues {
         fence_pool: &mut FencePool,
     ) -> Vec<vk::Fence> {
         println!("{:?}", batch);
-        let fences: Vec<vk::Fence> = Vec::new();
+        let mut fences: Vec<vk::Fence> = Vec::new();
         for (queue, queue_batch) in self
             .queues
             .iter()
@@ -321,11 +322,14 @@ impl Queues {
                     self.device
                         .queue_submit2(queue, &queue_batch.submits, fence)
                         .unwrap();
+                    fences.push(fence);
                 }
                 if !queue_batch.sparse_binds.is_empty() {
+                    let fence = fence_pool.get();
                     self.device
-                        .queue_bind_sparse(queue, &queue_batch.sparse_binds, vk::Fence::null())
+                        .queue_bind_sparse(queue, &queue_batch.sparse_binds, fence)
                         .unwrap();
+                    fences.push(fence);
                 }
             }
         }
@@ -335,12 +339,14 @@ impl Queues {
 
 pub struct TimelineSemaphorePool {
     device: Arc<Device>,
+    all_semaphores: Vec<vk::Semaphore>,
     semaphore_ops: Vec<(vk::Semaphore, u64)>,
 }
 impl TimelineSemaphorePool {
     pub fn new(device: Arc<Device>) -> Self {
         Self {
             device,
+            all_semaphores: Vec::new(),
             semaphore_ops: Vec::new(),
         }
     }
@@ -354,12 +360,22 @@ impl TimelineSemaphorePool {
                 .push_next(&mut type_info)
                 .build();
             let semaphore = unsafe { self.device.create_semaphore(&create_info, None).unwrap() };
+            self.all_semaphores.push(semaphore);
             (semaphore, 0)
         });
         (semaphore, timeline + 1)
     }
     fn waited(&mut self, semaphore: vk::Semaphore, timeline: u64) {
         self.semaphore_ops.push((semaphore, timeline));
+    }
+}
+impl Drop for TimelineSemaphorePool {
+    fn drop(&mut self) {
+        for semaphore in self.all_semaphores.iter() {
+            unsafe {
+                self.device.destroy_semaphore(*semaphore, None);
+            }
+        }
     }
 }
 
@@ -398,6 +414,15 @@ impl FencePool {
             }
         }
         self.indice = 0;
+    }
+}
+impl Drop for FencePool {
+    fn drop(&mut self) {
+        for fence in self.all_fences.iter() {
+            unsafe {
+                self.device.destroy_fence(*fence, None);
+            }
+        }
     }
 }
 
@@ -483,7 +508,10 @@ impl Debug for SubmissionBatch {
                         "    Waits {} semaphores",
                         submit.wait_semaphore_info_count
                     ))?;
-                    f.write_fmt(format_args!("    {} command buffers, ", i))?;
+                    f.write_fmt(format_args!(
+                        "    {} command buffers, ",
+                        submit.command_buffer_info_count
+                    ))?;
                     f.write_fmt(format_args!(
                         "    Signal {} semaphores",
                         submit.signal_semaphore_info_count
@@ -942,7 +970,6 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
         recycled_state: &mut Self::RecycledState,
         prev_queue: QueueMask,
     ) {
-        println!("init");
         let this = self.project();
         if this.queue.is_null() {
             let mut iter = prev_queue.iter();
@@ -957,24 +984,20 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
                 *this.queue = QueueRef(0);
             }
         }
+        println!("init on {:?}", this.queue);
         *this.prev_queue = prev_queue;
         let mut r = &mut ctx.submission[this.queue.0 as usize];
-        match &r {
-            QueueSubmissionType::Unknown => {
-                *r = QueueSubmissionType::Submit {
-                    command_buffers: Vec::new(),
-                    recording_command_buffer: None,
-                };
-            }
-            QueueSubmissionType::Submit { .. } => (),
-            _ => panic!(),
-        };
+        let mut temp_command_buffers = Vec::new();
+        let mut temp_recording_command_buffers = None;
         let (command_buffers, recording_command_buffer) = match &mut r {
             QueueSubmissionType::Submit {
                 command_buffers,
                 recording_command_buffer,
             } => (command_buffers, recording_command_buffer),
-            _ => unreachable!(),
+            _ => (
+                &mut temp_command_buffers,
+                &mut temp_recording_command_buffers,
+            ),
         };
         let q = &mut ctx.queues[this.queue.0 as usize];
         let mut command_ctx = CommandBufferRecordContext {
@@ -988,6 +1011,8 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
             queue: *this.queue,
         };
         this.inner.init(&mut command_ctx, recycled_state);
+        assert!(temp_command_buffers.is_empty());
+        assert!(temp_recording_command_buffers.is_none());
     }
 
     fn record(
@@ -995,8 +1020,8 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
         ctx: &mut SubmissionContext,
         recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
-        println!("record");
         let this = self.project();
+        println!("record to {:?}", this.queue);
 
         let queue = {
             let mut mask = QueueMask::empty();
@@ -1013,9 +1038,6 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
             *this.prev_queue = QueueMask::empty();
             return ret;
         }
-        // Ok, let's reframework this.
-        // A queue future can signal any number of things.
-        // Wether we want to wait on that, depends on resource access conflicts.
 
         let mut r = &mut ctx.submission[this.queue.0 as usize];
 

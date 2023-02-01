@@ -86,13 +86,28 @@ impl<'a> CommandBufferRecordContext<'a> {
         let command_buffer = if let Some(command_buffer) = self.recording_command_buffer.take() {
             command_buffer
         } else {
-            self.command_pool.allocate_one()
+            let buffer = self.command_pool.allocate_one();
+            unsafe {
+                self.device()
+                    .begin_command_buffer(
+                        buffer,
+                        &vk::CommandBufferBeginInfo {
+                            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+            buffer
         };
         callback(self, command_buffer);
         *self.recording_command_buffer = Some(command_buffer);
     }
     pub fn add_command_buffer<T: CommandBufferLike + 'a>(&mut self, buffer: T) {
         if let Some(command_buffer) = self.recording_command_buffer.take() {
+            unsafe {
+                self.device().end_command_buffer(command_buffer).unwrap();
+            }
             self.command_buffers.push(command_buffer);
         }
         self.command_buffers.push(buffer.raw_command_buffer());
