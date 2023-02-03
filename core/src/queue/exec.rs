@@ -15,7 +15,7 @@ use pin_project::pin_project;
 use crate::{
     commands::SharedCommandPool,
     future::{CommandBufferRecordContext, GPUCommandFuture},
-    Device, TimelineSemaphore,
+    Device,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -124,19 +124,17 @@ impl Default for QueueSubmissionType {
 }
 impl QueueSubmissionType {
     fn end(&mut self, device: &crate::Device) {
-        match self {
-            QueueSubmissionType::Submit {
-                command_buffers,
-                recording_command_buffer,
-            } => {
-                if let Some(cmd_buf) = recording_command_buffer.take() {
-                    unsafe {
-                        device.end_command_buffer(cmd_buf).unwrap();
-                    }
-                    command_buffers.push(cmd_buf);
+        if let QueueSubmissionType::Submit {
+            command_buffers,
+            recording_command_buffer,
+        } = self
+        {
+            if let Some(cmd_buf) = recording_command_buffer.take() {
+                unsafe {
+                    device.end_command_buffer(cmd_buf).unwrap();
                 }
+                command_buffers.push(cmd_buf);
             }
-            _ => {}
         }
     }
 }
@@ -194,7 +192,7 @@ impl Queues {
             })
             .collect()
     }
-    
+
     pub fn submit<'a, F: QueueFuture + 'a>(
         &mut self,
         mut future: F,
@@ -292,7 +290,7 @@ impl Queues {
 
         let fences_to_wait = self.submit_batch(submission_batch, fence_pool);
 
-        drop(future_pinned); // No more touching of future! It's getting moved.
+        // No more touching of future! It's getting moved.
         let fut_dispose = future.dispose();
 
         let device = self.device.clone();
@@ -310,7 +308,7 @@ impl Queues {
         batch: SubmissionBatch,
         fence_pool: &mut FencePool,
     ) -> Vec<vk::Fence> {
-        println!("{:?}", batch);
+        println!("{batch:?}");
         let mut fences: Vec<vk::Fence> = Vec::new();
         for (queue, queue_batch) in self
             .queues
@@ -352,7 +350,7 @@ impl TimelineSemaphorePool {
             semaphore_ops: Vec::new(),
         }
     }
-    fn signal(&mut self) -> (vk::Semaphore, u64) {
+    pub fn signal(&mut self) -> (vk::Semaphore, u64) {
         let (semaphore, timeline) = self.semaphore_ops.pop().unwrap_or_else(|| {
             let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -367,7 +365,7 @@ impl TimelineSemaphorePool {
         });
         (semaphore, timeline + 1)
     }
-    fn waited(&mut self, semaphore: vk::Semaphore, timeline: u64) {
+    pub fn waited(&mut self, semaphore: vk::Semaphore, timeline: u64) {
         self.semaphore_ops.push((semaphore, timeline));
     }
 }
@@ -394,7 +392,7 @@ impl FencePool {
             indice: 0,
         }
     }
-    fn get(&mut self) -> vk::Fence {
+    pub fn get(&mut self) -> vk::Fence {
         if self.indice <= self.all_fences.len() {
             let fence = unsafe {
                 self.device
@@ -407,7 +405,7 @@ impl FencePool {
         self.indice += 1;
         fence
     }
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         if self.indice > 0 {
             unsafe {
                 self.device
@@ -501,9 +499,9 @@ impl Debug for SubmissionBatch {
         f.write_str("SubmissionBatch {")?;
 
         for (i, queue) in self.queues.iter().enumerate() {
-            if queue.submits.len() > 0 {
+            if !queue.submits.is_empty() {
                 f.write_char('\n')?;
-                f.write_fmt(format_args!("  Queue {} Submits:", i))?;
+                f.write_fmt(format_args!("  Queue {i} Submits:"))?;
                 for submit in queue.submits.iter() {
                     f.write_char('\n')?;
                     f.write_fmt(format_args!(

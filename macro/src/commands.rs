@@ -1,5 +1,4 @@
 use crate::transformer::CommandsTransformer;
-use std::borrow::Borrow;
 use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
@@ -172,7 +171,7 @@ impl CommandsTransformState {
         let ForkInput {
             forked_future,
             number_of_forks,
-            comma: _,
+            _comma: _,
             scope,
         } = match syn::parse2::<ForkInput>(input.clone()) {
             Ok(input) => input,
@@ -212,7 +211,7 @@ impl CommandsTransformState {
 struct ForkInput {
     forked_future: syn::Expr,
     number_of_forks: Option<(syn::Token![,], usize)>,
-    comma: syn::Token![,],
+    _comma: syn::Token![,],
     scope: syn::Block,
 }
 impl Parse for ForkInput {
@@ -228,14 +227,14 @@ impl Parse for ForkInput {
             Ok(ForkInput {
                 forked_future,
                 number_of_forks: Some((comma, number_of_forks)),
-                comma: input.parse()?,
+                _comma: input.parse()?,
                 scope: input.parse()?,
             })
         } else {
             Ok(ForkInput {
                 forked_future,
                 number_of_forks: None,
-                comma,
+                _comma: comma,
                 scope: input.parse()?,
             })
         }

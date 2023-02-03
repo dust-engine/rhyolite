@@ -176,7 +176,7 @@ impl QueuesRouter {
         let mut queue_type_to_index: [QueueRef; 4] = [QueueRef(u8::MAX); 4];
         for (i, ty) in queue_family_to_types
             .iter()
-            .filter_map(|x| if x.is_empty() { None } else { Some(x) })
+            .filter(|x| !x.is_empty())
             .enumerate()
         {
             for queue_type in ty.types() {

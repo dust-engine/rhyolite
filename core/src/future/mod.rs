@@ -55,7 +55,7 @@ pub trait GPUCommandFuture {
     /// yield point. `GPUCommandFutureBlock` would then yields the function pointer to its
     /// first future to be awaited, allowing us to call the `context` method to retrieve the
     /// context.
-    /// 
+    ///
     /// Returns a boolean indicating if this future should be run. If the implementation returns
     /// false, the entire future will be skipped, and no further calls to `record` or `context`
     /// will be made.

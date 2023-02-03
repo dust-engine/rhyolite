@@ -168,10 +168,7 @@ where
     ) -> Option<(Self::Output, Self::RetainedState)> {
         let this = self.project();
         this.inner.init(ctx, recycled_state).map(|(out, retain)| {
-            let mapper = this
-            .mapper
-            .take()
-            .unwrap();
+            let mapper = this.mapper.take().unwrap();
             ((mapper)(out), retain)
         })
     }

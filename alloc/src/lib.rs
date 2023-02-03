@@ -1,14 +1,13 @@
 #![feature(generators)]
 #![feature(new_uninit)]
 
-
 extern crate async_ash_core as async_ash;
 
 use std::sync::Arc;
 
-use async_ash_core::ash::{self, vk};
+use async_ash_core::ash::vk;
 use async_ash_core::{Device, HasDevice};
-mod buffer;
+pub mod buffer;
 
 struct AllocatorInner {
     device: Arc<Device>,

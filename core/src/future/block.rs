@@ -80,7 +80,9 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         match this.state {
             GPUCommandBlockState::Initial => panic!("Calling record without calling init"),
             GPUCommandBlockState::Continue { .. } => (),
-            GPUCommandBlockState::EarlyTerminated | GPUCommandBlockState::Terminated => panic!("Attempts to call record after ending"),
+            GPUCommandBlockState::EarlyTerminated | GPUCommandBlockState::Terminated => {
+                panic!("Attempts to call record after ending")
+            }
         }
 
         match this

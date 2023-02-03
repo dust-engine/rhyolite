@@ -1,15 +1,4 @@
-#![feature(min_specialization)]
-#![feature(array_methods)]
-#![feature(waker_getters)]
-#![feature(pin_macro)]
-#![feature(generators, generator_trait, generator_clone)]
-#![feature(return_position_impl_trait_in_trait)]
-#![feature(async_fn_in_trait)]
-#![feature(iter_from_generator)]
-#![feature(async_closure)]
-#![feature(trait_alias)]
-#![feature(type_alias_impl_trait)]
-#![feature(specialization)]
+#![feature(generators, generator_trait)]
 
 use std::sync::Arc;
 
@@ -17,9 +6,10 @@ use async_ash_alloc::Allocator;
 use async_ash_core::{
     ash,
     ash::vk,
-    copy_buffer, cstr,
+    copy_buffer,
     future::*,
-    macros::{commands, gpu}, DeviceCreateInfo, FencePool, Instance, InstanceCreateInfo, PhysicalDevice,
+    macros::{commands, gpu},
+    DeviceCreateInfo, FencePool, Instance, InstanceCreateInfo, PhysicalDevice,
     PhysicalDeviceFeatures, QueueFuture, QueueType, QueuesRouter, TimelineSemaphorePool,
 };
 
@@ -72,7 +62,7 @@ fn main() {
             vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
         )
         .unwrap();
-    let mut dst = allocator
+    let dst = allocator
         .create_device_buffer_uninit(
             4,
             vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
@@ -80,7 +70,6 @@ fn main() {
         .unwrap();
     let mut read_back = allocator.create_readback_buffer(4).unwrap();
 
-    use async_ash_core::debug::command_debug;
     let mut state = Default::default();
     let wait = queues.submit(
         gpu! {
@@ -102,8 +91,6 @@ fn main() {
     futures::executor::block_on(wait);
     drop(shared_command_pools);
 
-    
     let buf = read_back.contents().unwrap();
     println!("{:?}", buf);
 }
- 

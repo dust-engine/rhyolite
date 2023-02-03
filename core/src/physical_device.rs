@@ -101,7 +101,7 @@ impl PhysicalDevice {
                     properties,
                     features,
                     memory_model,
-                    memory_properties: Box::new(memory_properties)
+                    memory_properties: Box::new(memory_properties),
                 }
             })
             .collect();
@@ -145,9 +145,9 @@ impl PhysicalDevice {
                 .get_physical_device_queue_family_properties(self.physical_device)
         }
     }
-    pub fn create_device<'a>(
+    pub fn create_device(
         self,
-        mut infos: DeviceCreateInfo<'a, impl Fn(u32) -> Vec<f32>>,
+        mut infos: DeviceCreateInfo<'_, impl Fn(u32) -> Vec<f32>>,
     ) -> VkResult<(Arc<Device>, Queues)> {
         let mut num_queue_families: u32 = 0;
         unsafe {

@@ -1,7 +1,6 @@
 use std::{
     ops::{Deref, DerefMut},
     pin::Pin,
-    sync::Arc,
     task::Poll,
 };
 
@@ -10,7 +9,7 @@ use pin_project::pin_project;
 
 use crate::{
     future::{CommandBufferRecordContext, GPUCommandFuture, Res, StageContext},
-    Device, HasDevice,
+    HasDevice,
 };
 
 pub trait BufferLike {
@@ -20,42 +19,38 @@ pub trait BufferLike {
     }
     fn size(&self) -> vk::DeviceSize;
 }
-impl<T> BufferLike for &T where T: BufferLike {
+impl<T> BufferLike for &T
+where
+    T: BufferLike,
+{
     fn raw_buffer(&self) -> vk::Buffer {
-        let this: &T = *self;
+        let this: &T = self;
         this.raw_buffer()
     }
     fn offset(&self) -> vk::DeviceSize {
-        let this: &T = *self;
+        let this: &T = self;
         this.offset()
     }
     fn size(&self) -> vk::DeviceSize {
-        let this: &T = *self;
+        let this: &T = self;
         this.size()
     }
 }
-impl<T> BufferLike for &mut T where T: BufferLike {
+impl<T> BufferLike for &mut T
+where
+    T: BufferLike,
+{
     fn raw_buffer(&self) -> vk::Buffer {
-        let this: &T = *self;
+        let this: &T = self;
         this.raw_buffer()
     }
     fn offset(&self) -> vk::DeviceSize {
-        let this: &T = *self;
+        let this: &T = self;
         this.offset()
     }
     fn size(&self) -> vk::DeviceSize {
-        let this: &T = *self;
+        let this: &T = self;
         this.size()
-    }
-}
-
-pub struct Buffer {
-    device: Arc<Device>,
-    raw: vk::Buffer,
-}
-impl Buffer {
-    pub fn from_raw(device: Arc<Device>, raw: vk::Buffer) -> Self {
-        Self { device, raw }
     }
 }
 

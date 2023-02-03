@@ -87,7 +87,7 @@ impl<'a> CommandBufferRecordContext<'a> {
         self.command_pool.queue_family_index()
     }
     /// Immediatly record a command buffer, allocated from the shared command pool.
-    pub fn record(&mut self, callback: impl FnOnce(&Self, vk::CommandBuffer) -> ()) {
+    pub fn record(&mut self, callback: impl FnOnce(&Self, vk::CommandBuffer)) {
         let command_buffer = if let Some(command_buffer) = self.recording_command_buffer.take() {
             command_buffer
         } else {
@@ -172,7 +172,7 @@ impl ImageLike for StageContextImage {
     }
 
     fn subresource_range(&self) -> vk::ImageSubresourceRange {
-        self.subresource_range.clone()
+        self.subresource_range
     }
 }
 
@@ -315,8 +315,7 @@ impl StageContext {
         );
         let mut tracking = res.tracking_info.borrow_mut();
         if tracking.last_accessed_stage_index < self.stage_index {
-            tracking.prev_stage_access =
-                std::mem::replace(&mut tracking.current_stage_access, Default::default());
+            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
         }
         get_memory_access(
             &mut self.global_access,
@@ -345,8 +344,7 @@ impl StageContext {
         );
         let mut tracking = res.tracking_info.borrow_mut();
         if tracking.last_accessed_stage_index < self.stage_index {
-            tracking.prev_stage_access =
-                std::mem::replace(&mut tracking.current_stage_access, Default::default());
+            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
         }
         get_memory_access(
             &mut self.global_access,
@@ -381,8 +379,7 @@ impl StageContext {
 
         let mut tracking = res.res.tracking_info.borrow_mut();
         if tracking.last_accessed_stage_index < self.stage_index {
-            tracking.prev_stage_access =
-                std::mem::replace(&mut tracking.current_stage_access, Default::default());
+            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
             res.old_layout = std::mem::replace(&mut res.layout, layout);
         } else {
             assert_eq!(
@@ -467,8 +464,7 @@ impl StageContext {
         if tracking.last_accessed_stage_index < self.stage_index {
             res.res.prev_queue_family =
                 std::mem::replace(&mut res.res.queue_family, self.queue_family_index);
-            tracking.prev_stage_access =
-                std::mem::replace(&mut tracking.current_stage_access, Default::default());
+            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
             res.old_layout = std::mem::replace(&mut res.layout, layout);
         } else {
             assert_eq!(
@@ -528,7 +524,8 @@ impl<'a> CommandBufferRecordContext<'a> {
         assert_eq!(next_stage.semaphore_transitions.len(), 0);
         Self::add_barrier(&next_stage, |dependency_info| {
             self.record(|ctx, command_buffer| unsafe {
-                ctx.device().cmd_pipeline_barrier2(command_buffer, dependency_info);
+                ctx.device()
+                    .cmd_pipeline_barrier2(command_buffer, dependency_info);
             });
         });
 
@@ -537,9 +534,9 @@ impl<'a> CommandBufferRecordContext<'a> {
     }
     fn add_barrier(
         next_stage: &StageContext,
-        cmd_pipeline_barrier: impl FnOnce(&vk::DependencyInfo) -> (),
+        cmd_pipeline_barrier: impl FnOnce(&vk::DependencyInfo),
     ) {
-        let mut global_memory_barrier = next_stage.global_access.clone();
+        let mut global_memory_barrier = next_stage.global_access;
         let mut image_barrier: Vec<vk::ImageMemoryBarrier2> = Vec::new();
 
         // Set the global memory barrier.
@@ -668,7 +665,6 @@ mod tests {
         Read(vk::PipelineStageFlags2, vk::AccessFlags2),
         Write(vk::PipelineStageFlags2, vk::AccessFlags2),
         ReadWrite(Access),
-        None,
     }
     impl ReadWrite {
         fn stage<T>(&self, stage_ctx: &mut StageContext, res: &mut Res<T>) {
@@ -679,7 +675,6 @@ mod tests {
                     stage_ctx.read(res, access.read_stages, access.read_access);
                     stage_ctx.write(res, access.write_stages, access.write_access);
                 }
-                ReadWrite::None => (),
             }
         }
     }

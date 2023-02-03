@@ -1,7 +1,7 @@
 use crate::{Device, HasDevice};
 use ash::vk;
 
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 /// An unsafe command pool. Command buffer lifecycles are unmanaged.
 pub struct UnsafeCommandPool {
@@ -126,55 +126,3 @@ impl SharedCommandPool {
         }
     }
 }
-
-pub fn use_command_pool<'recycle>(
-    this: &'recycle mut Option<UnsafeCommandPool>,
-    device: &Arc<Device>,
-    queue_family_index: u32,
-) -> &'recycle mut UnsafeCommandPool {
-    let pool = this.get_or_insert_with(|| {
-        UnsafeCommandPool::new(
-            device.clone(),
-            queue_family_index,
-            vk::CommandPoolCreateFlags::TRANSIENT,
-        )
-    });
-    pool.reset(false);
-    pool
-}
-
-pub struct CommandBuffer<'a> {
-    buffer: vk::CommandBuffer,
-    _marker: PhantomData<&'a ()>,
-}
-impl<'a> CommandBuffer<'a> {
-    pub(crate) unsafe fn new(buffer: vk::CommandBuffer) -> Self {
-        Self {
-            buffer,
-            _marker: PhantomData,
-        }
-    }
-}
-impl<'a> CommandBufferLike for CommandBuffer<'a> {
-    fn raw_command_buffer(&self) -> vk::CommandBuffer {
-        self.buffer
-    }
-}
-pub fn use_command_buffer<'recycle>(
-    this: &'recycle mut Option<vk::CommandBuffer>,
-    pool: &'recycle mut UnsafeCommandPool,
-) -> CommandBuffer<'recycle> {
-    let buffer = *this.get_or_insert_with(|| unsafe { pool.allocate_one(false) });
-    CommandBuffer {
-        buffer,
-        _marker: PhantomData,
-    }
-}
-
-pub trait CommandBufferLike {
-    fn raw_command_buffer(&self) -> vk::CommandBuffer;
-}
-
-// It will be safe as long as we don't destroy command buffers.
-// CommandPool: Send, but not Sync. RecycledState, reset on fetch.
-// CommandBuffer: Do nothing on drop. Also gets preserved in RecycledState. Upon allocation, do nothing.

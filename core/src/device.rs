@@ -9,7 +9,7 @@ pub trait HasDevice {
         &self.device().physical_device
     }
     fn instance(&self) -> &Arc<Instance> {
-        &self.device().physical_device.instance()
+        self.device().physical_device.instance()
     }
 }
 

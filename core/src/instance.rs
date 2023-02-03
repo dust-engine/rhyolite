@@ -48,7 +48,7 @@ impl Debug for Version {
         ))?;
         let variant = self.variant();
         if variant != 0 {
-            f.write_fmt(format_args!(" variant {}", variant))?;
+            f.write_fmt(format_args!(" variant {variant}"))?;
         }
         Ok(())
     }
@@ -64,7 +64,7 @@ pub struct InstanceCreateInfo<'a> {
     enabled_extension_names: &'a [*const c_char],
 }
 
-const DEFAULT_INSTANCE_EXTENSIONS: &'static [*const c_char] =
+const DEFAULT_INSTANCE_EXTENSIONS: &[*const c_char] =
     &[ash::extensions::ext::DebugUtils::name().as_ptr()];
 impl<'a> Default for InstanceCreateInfo<'a> {
     fn default() -> Self {

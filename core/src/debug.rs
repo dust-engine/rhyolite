@@ -4,7 +4,7 @@ use std::ffi::{CStr, CString};
 use std::pin::Pin;
 
 use crate::future::GPUCommandFuture;
-use crate::{HasDevice, QueueFuture};
+use crate::HasDevice;
 
 pub struct DebugUtilsMessenger {
     pub(crate) debug_utils: ext::DebugUtils,
@@ -111,7 +111,7 @@ pub trait DebugObject: crate::HasDevice {
                 .instance()
                 .debug_utils()
                 .debug_utils
-                .debug_utils_set_object_name(
+                .set_debug_utils_object_name(
                     raw_device,
                     &vk::DebugUtilsObjectNameInfoEXT {
                         object_type: Self::OBJECT_TYPE,
@@ -136,7 +136,7 @@ pub trait DebugObject: crate::HasDevice {
                 .instance()
                 .debug_utils()
                 .debug_utils
-                .debug_utils_set_object_name(
+                .set_debug_utils_object_name(
                     raw_device,
                     &vk::DebugUtilsObjectNameInfoEXT {
                         object_type: Self::OBJECT_TYPE,
@@ -173,7 +173,7 @@ impl<'fut> GPUCommandFuture for CommandDebugFuture<'fut> {
                     buf,
                     &vk::DebugUtilsLabelEXT {
                         p_label_name: self.label_name.as_ptr(),
-                        color: self.color.clone(),
+                        color: *self.color,
                         ..Default::default()
                     },
                 );

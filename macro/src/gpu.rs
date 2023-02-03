@@ -6,7 +6,6 @@ use crate::transformer::CommandsTransformer;
 struct State {
     current_dispose_index: u32,
     dispose_forward_decl: proc_macro2::TokenStream,
-    dispose_borrow_takes: proc_macro2::TokenStream,
     dispose_ret_expr: Punctuated<syn::Expr, syn::Token![,]>,
 
     recycled_state_count: usize,
@@ -15,7 +14,6 @@ impl Default for State {
     fn default() -> Self {
         Self {
             dispose_forward_decl: proc_macro2::TokenStream::new(),
-            dispose_borrow_takes: proc_macro2::TokenStream::new(),
             dispose_ret_expr: Punctuated::new(),
             current_dispose_index: 0,
             recycled_state_count: 0,
@@ -26,8 +24,8 @@ impl Default for State {
 impl CommandsTransformer for State {
     fn import(
         &mut self,
-        input_tokens: &proc_macro2::TokenStream,
-        is_image: bool,
+        _input_tokens: &proc_macro2::TokenStream,
+        _is_image: bool,
     ) -> proc_macro2::TokenStream {
         todo!()
     }
@@ -54,12 +52,6 @@ impl CommandsTransformer for State {
         // the dispose future.
         self.dispose_ret_expr
             .push(syn::Expr::Verbatim(dispose_token_name.to_token_stream()));
-        // __dispose_fn_future borrows #dispose_token_name ahead of time. We move out the values
-        // from the cell when __dispose_fn_future was invoked so that we can return a Future with
-        // 'static lifetime.
-        self.dispose_borrow_takes.extend(quote::quote! {
-            let #dispose_token_name = #dispose_token_name.replace(None);
-        });
 
         let index = syn::Index::from(self.recycled_state_count);
         self.recycled_state_count += 1;
@@ -131,7 +123,6 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
 
     let dispose_forward_decl = state.dispose_forward_decl;
     let dispose_ret_expr = state.dispose_ret_expr;
-    let dispose_borrow_takes = state.dispose_borrow_takes;
 
     if let Some(last) = inner_closure_stmts.last_mut() {
         if let syn::Stmt::Expr(expr) = last {

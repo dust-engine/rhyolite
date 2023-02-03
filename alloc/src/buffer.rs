@@ -1,8 +1,6 @@
-use std::mem::MaybeUninit;
-
 use async_ash::{
     future::{GPUCommandFuture, Res},
-    BufferLike,
+    BufferLike, SharingMode,
 };
 use async_ash_core::{
     ash::{prelude::VkResult, vk},
@@ -28,15 +26,13 @@ impl ResidentBuffer {
             None
         } else {
             unsafe {
-                Some(std::slice::from_raw_parts(info.mapped_data as *mut u8, info.size as usize))
+                Some(std::slice::from_raw_parts(
+                    info.mapped_data as *mut u8,
+                    info.size as usize,
+                ))
             }
         }
     }
-}
-
-pub enum ReadbackBuffer {
-    Immediate(Box<[u8]>),
-    Transfered(ResidentBuffer)
 }
 
 impl BufferLike for ResidentBuffer {
@@ -56,16 +52,6 @@ impl Drop for ResidentBuffer {
                 .inner()
                 .destroy_buffer(self.buffer, &mut self.allocation);
         }
-    }
-}
-
-pub enum SharingMode<'a> {
-    Exclusive,
-    Concurrent { queue_family_indices: &'a [u32] },
-}
-impl<'a> Default for SharingMode<'a> {
-    fn default() -> Self {
-        Self::Exclusive
     }
 }
 
@@ -111,17 +97,15 @@ impl Allocator {
     }
 
     /// Create uninitialized, cached buffer on the host-side
-    pub fn create_readback_buffer(
-        &self,
-        size: vk::DeviceSize
-    ) -> VkResult<ResidentBuffer> {
+    pub fn create_readback_buffer(&self, size: vk::DeviceSize) -> VkResult<ResidentBuffer> {
         let buffer_create_info = vk::BufferCreateInfo {
             size,
             usage: vk::BufferUsageFlags::TRANSFER_DST,
             ..Default::default()
         };
         let alloc_info = vk_mem::AllocationCreateInfo {
-            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM | vk_mem::AllocationCreateFlags::MAPPED,
+            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM
+                | vk_mem::AllocationCreateFlags::MAPPED,
             usage: vk_mem::MemoryUsage::AutoPreferHost,
             ..Default::default()
         };
