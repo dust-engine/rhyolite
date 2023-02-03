@@ -13,6 +13,8 @@ pub struct PhysicalDevice {
     physical_device: vk::PhysicalDevice,
     properties: Box<PhysicalDeviceProperties>,
     features: Box<PhysicalDeviceFeatures>,
+    memory_properties: Box<vk::PhysicalDeviceMemoryProperties>,
+    memory_model: PhysicalDeviceMemoryModel,
 }
 
 pub struct DeviceCreateInfo<'a, F: Fn(u32) -> Vec<f32>> {
@@ -32,6 +34,14 @@ impl<'a, F: Fn(u32) -> Vec<f32>> DeviceCreateInfo<'a, F> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum PhysicalDeviceMemoryModel {
+    Discrete,
+    Bar,
+    ResizableBar,
+    UMA,
+}
+
 impl PhysicalDevice {
     pub fn instance(&self) -> &Arc<Instance> {
         &self.instance
@@ -46,13 +56,53 @@ impl PhysicalDevice {
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
         let results = physical_devices
             .into_iter()
-            .map(|pdevice| PhysicalDevice {
-                instance: instance.clone(), // Retain reference to Instance here
-                physical_device: pdevice,   // Borrow VkPhysicalDevice from Instance
-                // Borrow is safe because we retain a reference to Instance here,
-                // ensuring that Instance wouldn't be dropped as long as the borrow is still there.
-                properties: PhysicalDeviceProperties::new(instance, pdevice),
-                features: PhysicalDeviceFeatures::new(instance, pdevice),
+            .map(|pdevice| {
+                let properties = PhysicalDeviceProperties::new(instance, pdevice);
+                let features = PhysicalDeviceFeatures::new(instance, pdevice);
+                let memory_properties =
+                    unsafe { instance.get_physical_device_memory_properties(pdevice) };
+                let types = &memory_properties.memory_types
+                    [0..memory_properties.memory_type_count as usize];
+                let heaps = &memory_properties.memory_heaps
+                    [0..memory_properties.memory_heap_count as usize];
+
+                let memory_model =
+                    if properties.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU {
+                        PhysicalDeviceMemoryModel::UMA
+                    } else {
+                        let bar_heap = types
+                            .iter()
+                            .find(|ty| {
+                                ty.property_flags.contains(
+                                    vk::MemoryPropertyFlags::DEVICE_LOCAL
+                                        | vk::MemoryPropertyFlags::HOST_VISIBLE,
+                                ) && heaps[ty.heap_index as usize]
+                                    .flags
+                                    .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+                            })
+                            .map(|a| &heaps[a.heap_index as usize]);
+                        if let Some(bar_heap) = bar_heap {
+                            if bar_heap.size <= 256 * 1024 * 1024 {
+                                // regular 256MB bar
+                                PhysicalDeviceMemoryModel::Bar
+                            } else {
+                                PhysicalDeviceMemoryModel::ResizableBar
+                            }
+                        } else {
+                            // Can't find a BAR heap
+                            PhysicalDeviceMemoryModel::Discrete
+                        }
+                    };
+                PhysicalDevice {
+                    instance: instance.clone(), // Retain reference to Instance here
+                    physical_device: pdevice,   // Borrow VkPhysicalDevice from Instance
+                    // Borrow is safe because we retain a reference to Instance here,
+                    // ensuring that Instance wouldn't be dropped as long as the borrow is still there.
+                    properties,
+                    features,
+                    memory_model,
+                    memory_properties: Box::new(memory_properties)
+                }
             })
             .collect();
         Ok(results)
@@ -63,8 +113,14 @@ impl PhysicalDevice {
     pub fn features(&self) -> &PhysicalDeviceFeatures {
         &self.features
     }
-    pub fn integrated(&self) -> bool {
-        self.properties.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU
+    pub fn memory_model(&self) -> PhysicalDeviceMemoryModel {
+        self.memory_model
+    }
+    pub fn memory_types(&self) -> &[vk::MemoryType] {
+        &self.memory_properties.memory_types[0..self.memory_properties.memory_type_count as usize]
+    }
+    pub fn memory_heaps(&self) -> &[vk::MemoryHeap] {
+        &self.memory_properties.memory_heaps[0..self.memory_properties.memory_heap_count as usize]
     }
     pub fn image_format_properties(
         &self,
@@ -266,38 +322,4 @@ pub struct MemoryHeap {
     pub flags: vk::MemoryHeapFlags,
     pub budget: vk::DeviceSize,
     pub usage: vk::DeviceSize,
-}
-
-impl PhysicalDevice {
-    pub fn get_memory_properties(&self) -> (Box<[MemoryHeap]>, Box<[MemoryType]>) {
-        let mut out = vk::PhysicalDeviceMemoryProperties2::default();
-        let mut budget_out = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
-        out.p_next = &mut budget_out as *mut _ as *mut c_void;
-        unsafe {
-            self.instance
-                .get_physical_device_memory_properties2(self.physical_device, &mut out)
-        }
-        let heaps = out.memory_properties.memory_heaps
-            [0..out.memory_properties.memory_heap_count as usize]
-            .iter()
-            .enumerate()
-            .map(|(i, heap)| MemoryHeap {
-                size: heap.size,
-                flags: heap.flags,
-                budget: budget_out.heap_budget[i],
-                usage: budget_out.heap_usage[i],
-            })
-            .collect::<Vec<MemoryHeap>>()
-            .into_boxed_slice();
-        let tys = out.memory_properties.memory_types
-            [0..out.memory_properties.memory_type_count as usize]
-            .iter()
-            .map(|ty| MemoryType {
-                property_flags: ty.property_flags,
-                heap_index: ty.heap_index,
-            })
-            .collect::<Vec<MemoryType>>()
-            .into_boxed_slice();
-        (heaps, tys)
-    }
 }

@@ -10,13 +10,43 @@ use pin_project::pin_project;
 
 use crate::{
     future::{CommandBufferRecordContext, GPUCommandFuture, Res, StageContext},
-    Device,
+    Device, HasDevice,
 };
 
 pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
-    fn offset(&self) -> vk::DeviceSize;
+    fn offset(&self) -> vk::DeviceSize {
+        0
+    }
     fn size(&self) -> vk::DeviceSize;
+}
+impl<T> BufferLike for &T where T: BufferLike {
+    fn raw_buffer(&self) -> vk::Buffer {
+        let this: &T = *self;
+        this.raw_buffer()
+    }
+    fn offset(&self) -> vk::DeviceSize {
+        let this: &T = *self;
+        this.offset()
+    }
+    fn size(&self) -> vk::DeviceSize {
+        let this: &T = *self;
+        this.size()
+    }
+}
+impl<T> BufferLike for &mut T where T: BufferLike {
+    fn raw_buffer(&self) -> vk::Buffer {
+        let this: &T = *self;
+        this.raw_buffer()
+    }
+    fn offset(&self) -> vk::DeviceSize {
+        let this: &T = *self;
+        this.offset()
+    }
+    fn size(&self) -> vk::DeviceSize {
+        let this: &T = *self;
+        this.size()
+    }
 }
 
 pub struct Buffer {
@@ -67,36 +97,50 @@ impl<
         let this = self.project();
         let src = this.src.deref().inner();
         let dst = this.dst.deref_mut().inner_mut();
-        let region = vk::BufferCopy2 {
+        let region = vk::BufferCopy {
             src_offset: src.offset(),
             dst_offset: dst.offset(),
             size: src.size().min(dst.size()),
-            ..Default::default()
         };
-        let _copy = vk::CopyBufferInfo2 {
-            src_buffer: src.raw_buffer(),
-            dst_buffer: dst.raw_buffer(),
-            region_count: 1,
-            p_regions: &region,
-            ..Default::default()
-        };
+        ctx.record(|ctx, command_buffer| unsafe {
+            ctx.device().cmd_copy_buffer(
+                command_buffer,
+                src.raw_buffer(),
+                dst.raw_buffer(),
+                &[region],
+            );
+        });
         Poll::Ready(((), ()))
     }
-    fn context(self: Pin<&mut Self>, _ctx: &mut StageContext) {
-        /*
+    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         let this = self.project();
-        let src = this.src.deref();
-        let dst = this.dst.deref_mut();
         ctx.read(
-            src,
+            this.src,
             vk::PipelineStageFlags2::COPY,
             vk::AccessFlags2::TRANSFER_READ,
         );
+
         ctx.write(
-            dst,
+            this.dst,
             vk::PipelineStageFlags2::COPY,
             vk::AccessFlags2::TRANSFER_WRITE,
         );
-        */
+    }
+}
+
+pub fn copy_buffer<
+    'b,
+    S: BufferLike + 'b,
+    T: BufferLike + 'b,
+    SRef: Deref<Target = Res<'b, S>>,
+    TRef: DerefMut<Target = Res<'b, T>>,
+>(
+    dst: TRef,
+    src: SRef,
+) -> CopyBufferFuture<'b, S, T, SRef, TRef> {
+    CopyBufferFuture {
+        str: "aaa",
+        src,
+        dst,
     }
 }

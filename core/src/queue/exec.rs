@@ -503,7 +503,7 @@ impl Debug for SubmissionBatch {
                 f.write_char('\n')?;
                 f.write_fmt(format_args!("  Queue {} Submits:", i))?;
                 for submit in queue.submits.iter() {
-                    f.write_char('\n');
+                    f.write_char('\n')?;
                     f.write_fmt(format_args!(
                         "    Waits {} semaphores",
                         submit.wait_semaphore_info_count

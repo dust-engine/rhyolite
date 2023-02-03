@@ -13,13 +13,13 @@
 
 use std::sync::Arc;
 
+use async_ash_alloc::Allocator;
 use async_ash_core::{
     ash,
     ash::vk,
-    cstr,
+    copy_buffer, cstr,
     future::*,
-    macros::{commands, gpu},
-    Buffer, DeviceCreateInfo, FencePool, Instance, InstanceCreateInfo, PhysicalDevice,
+    macros::{commands, gpu}, DeviceCreateInfo, FencePool, Instance, InstanceCreateInfo, PhysicalDevice,
     PhysicalDeviceFeatures, QueueFuture, QueueType, QueuesRouter, TimelineSemaphorePool,
 };
 
@@ -50,6 +50,7 @@ fn main() {
                 },
                 v12: vk::PhysicalDeviceVulkan12Features {
                     timeline_semaphore: vk::TRUE,
+                    buffer_device_address: vk::TRUE,
                     ..Default::default()
                 },
                 ..Default::default()
@@ -59,27 +60,38 @@ fn main() {
             })
         })
         .unwrap();
+    let allocator = Allocator::new(device.clone());
 
     let mut shared_command_pools = queues.make_shared_command_pools();
     let mut shared_semaphore_pool = TimelineSemaphorePool::new(device.clone());
     let mut shared_fence_pool = FencePool::new(device.clone());
 
-    let _src1 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(231_usize) });
-    let _src2 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(232_usize) });
-    let _src3 = Buffer::from_raw(device.clone(), unsafe { std::mem::transmute(233_usize) });
+    let src = allocator
+        .create_device_buffer_with_data(
+            &[10, 0, 2, 2],
+            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+        )
+        .unwrap();
+    let mut dst = allocator
+        .create_device_buffer_uninit(
+            4,
+            vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+        )
+        .unwrap();
+    let mut read_back = allocator.create_readback_buffer(4).unwrap();
 
     use async_ash_core::debug::command_debug;
     let mut state = Default::default();
     let wait = queues.submit(
         gpu! {
             commands! {
-                command_debug(cstr!("hello")).await;
-                command_debug(cstr!("world")).await;
-            }.schedule_on_queue(queues_router.of_type(QueueType::Transfer)).await;
+                let src_buffer = src.await;
+                let  mut dst_buffer = import!(dst);
+                copy_buffer(&mut dst_buffer, &src_buffer).await;
 
-            commands! {
-                command_debug(cstr!("im")).await;
-                command_debug(cstr!("coming")).await;
+
+                let mut read_back = import!(&mut read_back);
+                copy_buffer(&mut read_back, &dst_buffer).await;
             }.schedule_on_queue(queues_router.of_type(QueueType::Transfer)).await;
         },
         &mut shared_command_pools,
@@ -87,6 +99,11 @@ fn main() {
         &mut shared_fence_pool,
         &mut state,
     );
-
     futures::executor::block_on(wait);
+
+    
+    let buf = read_back.contents().unwrap();
+    println!("{:?}", buf);
 }
+ 
+// TODO: Add ability to skip empty stages.

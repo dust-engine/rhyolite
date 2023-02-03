@@ -36,17 +36,17 @@ impl CommandsTransformer for CommandsTransformState {
         self.retained_state_count += 1;
         let output_tokens = if is_image {
             quote::quote! {unsafe {
-                #global_res_variable_name = #input_tokens;
-                __fut_global_ctx.add_image(&mut #global_res_variable_name)
+                #global_res_variable_name = Some(#input_tokens);
+                __fut_global_ctx.add_image(#global_res_variable_name.as_mut().unwrap())
             }}
         } else {
             quote::quote! {unsafe {
-                #global_res_variable_name = #input_tokens;
-                __fut_global_ctx.add_res(&mut #global_res_variable_name)
+                #global_res_variable_name = Some(#input_tokens);
+                __fut_global_ctx.add_res(#global_res_variable_name.as_mut().unwrap())
             }}
         };
         self.retain_bindings.extend(quote::quote! {
-            let mut #global_res_variable_name;
+            let mut #global_res_variable_name = None;
         });
         self.retained_states
             .push(syn::Expr::Verbatim(quote::quote! {
@@ -62,7 +62,7 @@ impl CommandsTransformer for CommandsTransformState {
         self.recycled_state_count += 1;
 
         self.retain_bindings.extend(quote::quote! {
-            let mut #global_future_variable_name;
+            let mut #global_future_variable_name = None;
         });
         self.retained_states
             .push(syn::Expr::Verbatim(quote::quote! {
@@ -79,17 +79,17 @@ impl CommandsTransformer for CommandsTransformState {
                 let mut fut = #base;
                 unsafe {
                     let mut fut_pinned = std::pin::Pin::new_unchecked(&mut fut);
-                    ::async_ash::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut unsafe{&mut *__recycled_states}.#index);
-                    (__fut_global_ctx_ptr, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
+                    ::async_ash::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index);
+                    (__fut_global_ctx_ptr, __recycled_states) = yield ::async_ash::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
                     __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
                     loop {
-                        match ::async_ash::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut unsafe{&mut *__recycled_states}.#index) {
+                        match ::async_ash::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
                             ::std::task::Poll::Ready((output, retained_state)) => {
-                                #global_future_variable_name = retained_state;
+                                #global_future_variable_name = Some(retained_state);
                                 break output
                             },
                             ::std::task::Poll::Pending => {
-                                (__fut_global_ctx_ptr, __recycled_states) = yield GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
+                                (__fut_global_ctx_ptr, __recycled_states) = yield ::async_ash::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
                                 __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
                             },
                         };

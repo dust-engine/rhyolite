@@ -36,12 +36,26 @@ pub trait GPUCommandGenerator<'retain, R, State, Recycle: Default> = Generator<
     Return = (R, State, PhantomData<&'retain ()>),
 >;
 
+enum GPUCommandBlockState<Retain, Output> {
+    /// The initial state. After init() was called, the future is guaranteed not to be in this state.
+    Initial,
+    /// The "normal" state. Call the attached `next_ctx` to fetch the context for the next stage.
+    Continue {
+        next_ctx: GPUCommandGeneratorContextFetchPtr,
+    },
+    /// Only occurs when the generator returns without yielding anything during init.
+    EarlyTerminated {
+        output: Output,
+        retain: Retain,
+    },
+    Terminated,
+}
 #[pin_project]
-pub struct GPUCommandBlock<R, State, Recycle: Default, G> {
+pub struct GPUCommandBlock<R, Retain, Recycle: Default, G> {
     #[pin]
     inner: G,
-    next_ctx: Option<GPUCommandGeneratorContextFetchPtr>,
-    _marker: std::marker::PhantomData<fn(*mut Recycle) -> (R, State)>,
+    state: GPUCommandBlockState<Retain, R>,
+    _marker: std::marker::PhantomData<fn(*mut Recycle) -> (R, Retain)>,
 }
 impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
     GPUCommandBlock<R, State, Recycle, G>
@@ -49,7 +63,7 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
     pub fn new(inner: G) -> Self {
         Self {
             inner,
-            next_ctx: None,
+            state: GPUCommandBlockState::Initial,
             _marker: PhantomData,
         }
     }
@@ -66,44 +80,71 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         recycled_state: &mut Recycle,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
+        match this.state {
+            GPUCommandBlockState::Initial => panic!("Calling record without calling init"),
+            GPUCommandBlockState::Continue { .. } => (),
+            GPUCommandBlockState::EarlyTerminated { .. } => {
+                let out = std::mem::replace(this.state, GPUCommandBlockState::Terminated);
+                match out {
+                    GPUCommandBlockState::EarlyTerminated { output, retain } => {
+                        return Poll::Ready((output, retain));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            GPUCommandBlockState::Terminated => panic!("Attempts to call record after ending"),
+        }
+
         match this
             .inner
             .resume((ctx as *mut _ as *mut (), recycled_state))
         {
             GeneratorState::Yielded(ctx) => {
-                *this.next_ctx = Some(ctx);
+                *this.state = GPUCommandBlockState::Continue { next_ctx: ctx };
                 Poll::Pending
             }
             GeneratorState::Complete((ret, state, _)) => {
-                *this.next_ctx = None;
+                *this.state = GPUCommandBlockState::Terminated;
                 Poll::Ready((ret, state))
             }
         }
     }
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
-        let next_ctx = self
-            .project()
-            .next_ctx
-            .as_mut()
-            .expect("Calling context without calling init");
-        next_ctx.call(ctx);
+        let this = self.project();
+        match this.state {
+            GPUCommandBlockState::Initial => panic!("Calling context without calling init"),
+            GPUCommandBlockState::Continue { ref mut next_ctx } => next_ctx.call(ctx),
+            GPUCommandBlockState::EarlyTerminated { output, retain } => (),
+            GPUCommandBlockState::Terminated => {
+                panic!("Attempts to call context after generator ending")
+            }
+        }
     }
     fn init<'a, 'b: 'a>(
         self: Pin<&mut Self>,
         ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Recycle,
     ) {
-        // Reach the first yield point to get the context of the first awaited future.
-        assert!(self.next_ctx.is_none());
+        match self.state {
+            GPUCommandBlockState::Initial => (),
+            _ => unreachable!(),
+        };
         let this = self.project();
+
+        // Reach the first yield point to get the context of the first awaited future.
         match this
             .inner
             .resume((ctx as *mut _ as *mut (), recycled_state))
         {
             GeneratorState::Yielded(ctx) => {
-                *this.next_ctx = Some(ctx);
+                *this.state = GPUCommandBlockState::Continue { next_ctx: ctx };
             }
-            GeneratorState::Complete(_) => unreachable!(),
+            GeneratorState::Complete((output, retain, _)) => {
+                // We're pretty sure that this should be the first time we pull the generator.
+                // However, it's already completed. This indicates that nothing was awaited ever
+                // in the future.
+                *this.state = GPUCommandBlockState::EarlyTerminated { output, retain }
+            }
         }
     }
 }

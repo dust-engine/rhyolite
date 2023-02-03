@@ -7,10 +7,12 @@ edition = "2021"
 
 [dependencies]
 async_ash_core = { path = "./core" }
+async_ash_alloc = { path = "./alloc" }
 futures = "*"
 
 [workspace]
 members = [
     "macro",
     "core",
+    "alloc"
 ]

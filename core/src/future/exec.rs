@@ -3,19 +3,26 @@ use crate::{
     HasDevice, ImageLike, QueueRef,
 };
 use ash::vk;
-use std::{collections::BTreeMap, marker::PhantomData, ops::Range, pin::Pin, task::Poll};
+use std::{
+    cell::RefCell, collections::BTreeMap, marker::PhantomData, ops::Range, pin::Pin, task::Poll,
+};
 
 use super::GPUCommandFuture;
+
+#[derive(Default)]
+struct ResTrackingInfo {
+    prev_stage_access: Access,
+    current_stage_access: Access,
+    last_accessed_stage_index: u32,
+}
 
 pub struct Res<'a, T> {
     queue_family: u32,
     queue_index: QueueRef,
     prev_queue_family: u32,
     prev_queue_index: QueueRef,
-    last_accessed_stage_index: u32,
     last_accessed_timeline: u32,
-    prev_stage_access: Access,
-    current_stage_access: Access,
+    tracking_info: RefCell<ResTrackingInfo>,
     inner: &'a mut T,
 }
 impl<'a, T> Res<'a, T> {
@@ -25,10 +32,8 @@ impl<'a, T> Res<'a, T> {
             queue_index: QueueRef::null(),
             prev_queue_index: QueueRef::null(),
             prev_queue_family: vk::QUEUE_FAMILY_IGNORED,
-            last_accessed_stage_index: 0,
             last_accessed_timeline: 0,
-            prev_stage_access: Access::default(),
-            current_stage_access: Access::default(),
+            tracking_info: Default::default(),
             inner,
         }
     }
@@ -304,49 +309,57 @@ impl StageContext {
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
     ) {
-        assert_eq!(res.queue_family, self.queue_family_index);
-        if res.last_accessed_stage_index < self.stage_index {
-            res.prev_stage_access =
-                std::mem::replace(&mut res.current_stage_access, Default::default());
+        assert!(
+            res.queue_family == self.queue_family_index
+                || res.queue_family == vk::QUEUE_FAMILY_IGNORED
+        );
+        let mut tracking = res.tracking_info.borrow_mut();
+        if tracking.last_accessed_stage_index < self.stage_index {
+            tracking.prev_stage_access =
+                std::mem::replace(&mut tracking.current_stage_access, Default::default());
         }
         get_memory_access(
             &mut self.global_access,
-            &res.prev_stage_access,
+            &tracking.prev_stage_access,
             &Access {
                 write_access: accesses,
                 write_stages: stages,
                 ..Default::default()
             },
         );
-        res.current_stage_access.write_access |= accesses;
-        res.current_stage_access.write_stages |= stages;
-        res.last_accessed_stage_index = self.stage_index;
+        tracking.current_stage_access.write_access |= accesses;
+        tracking.current_stage_access.write_stages |= stages;
+        tracking.last_accessed_stage_index = self.stage_index;
     }
     /// Declare a global memory read
     #[inline]
     pub fn read<T>(
         &mut self,
-        res: &mut Res<T>,
+        res: &Res<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
     ) {
-        assert_eq!(res.queue_family, self.queue_family_index);
-        if res.last_accessed_stage_index < self.stage_index {
-            res.prev_stage_access =
-                std::mem::replace(&mut res.current_stage_access, Default::default());
+        assert!(
+            res.queue_family == self.queue_family_index
+                || res.queue_family == vk::QUEUE_FAMILY_IGNORED
+        );
+        let mut tracking = res.tracking_info.borrow_mut();
+        if tracking.last_accessed_stage_index < self.stage_index {
+            tracking.prev_stage_access =
+                std::mem::replace(&mut tracking.current_stage_access, Default::default());
         }
         get_memory_access(
             &mut self.global_access,
-            &res.prev_stage_access,
+            &tracking.prev_stage_access,
             &Access {
                 read_access: accesses,
                 read_stages: stages,
                 ..Default::default()
             },
         );
-        res.current_stage_access.read_access |= accesses;
-        res.current_stage_access.read_stages |= stages;
-        res.last_accessed_stage_index = self.stage_index;
+        tracking.current_stage_access.read_access |= accesses;
+        tracking.current_stage_access.read_stages |= stages;
+        tracking.last_accessed_stage_index = self.stage_index;
     }
     #[inline]
     pub fn write_image<T>(
@@ -366,9 +379,10 @@ impl StageContext {
             })
             .or_insert((Default::default(), res.old_layout, layout));
 
-        if res.res.last_accessed_stage_index < self.stage_index {
-            res.res.prev_stage_access =
-                std::mem::replace(&mut res.res.current_stage_access, Default::default());
+        let mut tracking = res.res.tracking_info.borrow_mut();
+        if tracking.last_accessed_stage_index < self.stage_index {
+            tracking.prev_stage_access =
+                std::mem::replace(&mut tracking.current_stage_access, Default::default());
             res.old_layout = std::mem::replace(&mut res.layout, layout);
         } else {
             assert_eq!(
@@ -396,7 +410,7 @@ impl StageContext {
             let mut barrier = vk::MemoryBarrier2::default();
             get_memory_access(
                 &mut barrier,
-                &res.res.prev_stage_access,
+                &tracking.prev_stage_access,
                 &Access {
                     write_access: accesses,
                     write_stages: stages,
@@ -418,7 +432,7 @@ impl StageContext {
 
         get_memory_access(
             barrier,
-            &res.res.prev_stage_access,
+            &tracking.prev_stage_access,
             &Access {
                 write_access: accesses,
                 write_stages: stages,
@@ -426,9 +440,9 @@ impl StageContext {
             },
         );
 
-        res.res.current_stage_access.write_access |= accesses;
-        res.res.current_stage_access.write_stages |= stages;
-        res.res.last_accessed_stage_index = self.stage_index;
+        tracking.current_stage_access.write_access |= accesses;
+        tracking.current_stage_access.write_stages |= stages;
+        tracking.last_accessed_stage_index = self.stage_index;
     }
     /// Declare a global memory read
     #[inline]
@@ -449,11 +463,12 @@ impl StageContext {
             })
             .or_insert((Default::default(), res.old_layout, layout));
 
-        if res.res.last_accessed_stage_index < self.stage_index {
+        let mut tracking = res.res.tracking_info.borrow_mut();
+        if tracking.last_accessed_stage_index < self.stage_index {
             res.res.prev_queue_family =
                 std::mem::replace(&mut res.res.queue_family, self.queue_family_index);
-            res.res.prev_stage_access =
-                std::mem::replace(&mut res.res.current_stage_access, Default::default());
+            tracking.prev_stage_access =
+                std::mem::replace(&mut tracking.current_stage_access, Default::default());
             res.old_layout = std::mem::replace(&mut res.layout, layout);
         } else {
             assert_eq!(
@@ -464,7 +479,7 @@ impl StageContext {
         }
         get_memory_access(
             barrier,
-            &res.res.prev_stage_access,
+            &tracking.prev_stage_access,
             &Access {
                 read_access: accesses,
                 read_stages: stages,
@@ -472,9 +487,9 @@ impl StageContext {
             },
         );
 
-        res.res.current_stage_access.read_access |= accesses;
-        res.res.current_stage_access.read_stages |= stages;
-        res.res.last_accessed_stage_index = self.stage_index;
+        tracking.current_stage_access.read_access |= accesses;
+        tracking.current_stage_access.read_stages |= stages;
+        tracking.last_accessed_stage_index = self.stage_index;
     }
 }
 
