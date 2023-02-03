@@ -194,15 +194,17 @@ impl Queues {
             })
             .collect()
     }
-    pub fn submit<F: QueueFuture>(
+    
+    pub fn submit<'a, F: QueueFuture + 'a>(
         &mut self,
         mut future: F,
-        // These two pools are passed in as argument so that they can be cleaned on a regular basis (per frame) externally
-        shared_command_pools: &mut [Option<SharedCommandPool>],
-        semaphore_pool: &mut TimelineSemaphorePool,
-        fence_pool: &mut FencePool,
-        recycled_state: &mut F::RecycledState,
-    ) -> impl std::future::Future<Output = F::Output> {
+        // These pools are passed in as argument so that they can be cleaned on a regular basis (per frame) externally.
+        // The lifetime parameter prevents the caller from dropping the polls before awaiting the returned future.
+        shared_command_pools: &'a mut [Option<SharedCommandPool>],
+        semaphore_pool: &'a mut TimelineSemaphorePool,
+        fence_pool: &'a mut FencePool,
+        recycled_state: &'a mut F::RecycledState,
+    ) -> impl std::future::Future<Output = F::Output> + 'a {
         let mut future_pinned = unsafe { std::pin::Pin::new_unchecked(&mut future) };
         let mut submission_context = SubmissionContext {
             shared_command_pools,
@@ -296,7 +298,7 @@ impl Queues {
         let device = self.device.clone();
         async {
             blocking::unblock(move || unsafe {
-                device.wait_for_fences(&fences_to_wait, true, !0);
+                device.wait_for_fences(&fences_to_wait, true, !0).unwrap();
             })
             .await;
             drop(fut_dispose);
