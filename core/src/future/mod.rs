@@ -51,8 +51,14 @@ pub trait GPUCommandFuture {
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext);
 
     /// Initialize the pinned future.
-    /// This method is mostly a hook for `GPUCommandFutureBlock` to initialize
-    /// the context in a pinned future.
+    /// This method is mostly a hook for `GPUCommandFutureBlock` to move forward to its first
+    /// yield point. `GPUCommandFutureBlock` would then yields the function pointer to its
+    /// first future to be awaited, allowing us to call the `context` method to retrieve the
+    /// context.
+    /// 
+    /// Returns a boolean indicating if this future should be run. If the implementation returns
+    /// false, the entire future will be skipped, and no further calls to `record` or `context`
+    /// will be made.
     ///
     /// For executors, this method should be called once, and as soon as the future was pinnned.
     /// For implementations of `GPUCommandFuture`, this method can be ignored in most cases.
@@ -61,6 +67,7 @@ pub trait GPUCommandFuture {
         self: Pin<&mut Self>,
         _ctx: &'a mut CommandBufferRecordContext<'b>,
         _recycled_state: &mut Self::RecycledState,
-    ) {
+    ) -> Option<(Self::Output, Self::RetainedState)> {
+        None
     }
 }

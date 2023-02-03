@@ -526,8 +526,10 @@ impl<'a> CommandBufferRecordContext<'a> {
         );
         fut.as_mut().context(&mut next_stage);
         assert_eq!(next_stage.semaphore_transitions.len(), 0);
-        Self::add_barrier(&next_stage, |_| {
-            // TODO: noop for now
+        Self::add_barrier(&next_stage, |dependency_info| {
+            self.record(|ctx, command_buffer| unsafe {
+                ctx.device().cmd_pipeline_barrier2(command_buffer, dependency_info);
+            });
         });
 
         let ret = fut.as_mut().record(self, recycled_state);

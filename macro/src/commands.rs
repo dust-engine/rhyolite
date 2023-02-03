@@ -79,20 +79,24 @@ impl CommandsTransformer for CommandsTransformState {
                 let mut fut = #base;
                 unsafe {
                     let mut fut_pinned = std::pin::Pin::new_unchecked(&mut fut);
-                    ::async_ash::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index);
-                    (__fut_global_ctx_ptr, __recycled_states) = yield ::async_ash::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
-                    __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
-                    loop {
-                        match ::async_ash::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
-                            ::std::task::Poll::Ready((output, retained_state)) => {
-                                #global_future_variable_name = Some(retained_state);
-                                break output
-                            },
-                            ::std::task::Poll::Pending => {
-                                (__fut_global_ctx_ptr, __recycled_states) = yield ::async_ash::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
-                                __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
-                            },
-                        };
+                    if let Some((out, retain)) = ::async_ash::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
+                        #global_future_variable_name = Some(retain);
+                        out
+                    } else {
+                        (__fut_global_ctx_ptr, __recycled_states) = yield ::async_ash::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
+                        __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
+                        loop {
+                            match ::async_ash::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
+                                ::std::task::Poll::Ready((output, retained_state)) => {
+                                    #global_future_variable_name = Some(retained_state);
+                                    break output
+                                },
+                                ::std::task::Poll::Pending => {
+                                    (__fut_global_ctx_ptr, __recycled_states) = yield ::async_ash::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
+                                    __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
+                                },
+                            };
+                        }
                     }
                 }
             }

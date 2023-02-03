@@ -100,10 +100,10 @@ fn main() {
         &mut state,
     );
     futures::executor::block_on(wait);
+    drop(shared_command_pools);
 
     
     let buf = read_back.contents().unwrap();
     println!("{:?}", buf);
 }
  
-// TODO: Add ability to skip empty stages.

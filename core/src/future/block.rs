@@ -36,7 +36,7 @@ pub trait GPUCommandGenerator<'retain, R, State, Recycle: Default> = Generator<
     Return = (R, State, PhantomData<&'retain ()>),
 >;
 
-enum GPUCommandBlockState<Retain, Output> {
+enum GPUCommandBlockState {
     /// The initial state. After init() was called, the future is guaranteed not to be in this state.
     Initial,
     /// The "normal" state. Call the attached `next_ctx` to fetch the context for the next stage.
@@ -44,17 +44,14 @@ enum GPUCommandBlockState<Retain, Output> {
         next_ctx: GPUCommandGeneratorContextFetchPtr,
     },
     /// Only occurs when the generator returns without yielding anything during init.
-    EarlyTerminated {
-        output: Output,
-        retain: Retain,
-    },
+    EarlyTerminated,
     Terminated,
 }
 #[pin_project]
 pub struct GPUCommandBlock<R, Retain, Recycle: Default, G> {
     #[pin]
     inner: G,
-    state: GPUCommandBlockState<Retain, R>,
+    state: GPUCommandBlockState,
     _marker: std::marker::PhantomData<fn(*mut Recycle) -> (R, Retain)>,
 }
 impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
@@ -83,16 +80,7 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         match this.state {
             GPUCommandBlockState::Initial => panic!("Calling record without calling init"),
             GPUCommandBlockState::Continue { .. } => (),
-            GPUCommandBlockState::EarlyTerminated { .. } => {
-                let out = std::mem::replace(this.state, GPUCommandBlockState::Terminated);
-                match out {
-                    GPUCommandBlockState::EarlyTerminated { output, retain } => {
-                        return Poll::Ready((output, retain));
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            GPUCommandBlockState::Terminated => panic!("Attempts to call record after ending"),
+            GPUCommandBlockState::EarlyTerminated | GPUCommandBlockState::Terminated => panic!("Attempts to call record after ending"),
         }
 
         match this
@@ -101,6 +89,7 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         {
             GeneratorState::Yielded(ctx) => {
                 *this.state = GPUCommandBlockState::Continue { next_ctx: ctx };
+                // continue here.
                 Poll::Pending
             }
             GeneratorState::Complete((ret, state, _)) => {
@@ -114,8 +103,7 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         match this.state {
             GPUCommandBlockState::Initial => panic!("Calling context without calling init"),
             GPUCommandBlockState::Continue { ref mut next_ctx } => next_ctx.call(ctx),
-            GPUCommandBlockState::EarlyTerminated { output, retain } => (),
-            GPUCommandBlockState::Terminated => {
+            GPUCommandBlockState::EarlyTerminated | GPUCommandBlockState::Terminated => {
                 panic!("Attempts to call context after generator ending")
             }
         }
@@ -124,7 +112,7 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         self: Pin<&mut Self>,
         ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Recycle,
-    ) {
+    ) -> Option<(Self::Output, Self::RetainedState)> {
         match self.state {
             GPUCommandBlockState::Initial => (),
             _ => unreachable!(),
@@ -143,8 +131,10 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
                 // We're pretty sure that this should be the first time we pull the generator.
                 // However, it's already completed. This indicates that nothing was awaited ever
                 // in the future.
-                *this.state = GPUCommandBlockState::EarlyTerminated { output, retain }
+                *this.state = GPUCommandBlockState::EarlyTerminated;
+                return Some((output, retain));
             }
         }
+        None
     }
 }

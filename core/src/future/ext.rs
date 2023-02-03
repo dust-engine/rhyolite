@@ -106,10 +106,22 @@ where
         self: Pin<&mut Self>,
         ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Self::RecycledState,
-    ) {
+    ) -> Option<(Self::Output, Self::RetainedState)> {
         let this = self.project();
-        this.inner1.init(ctx, &mut recycled_state.0);
-        this.inner2.init(ctx, &mut recycled_state.1);
+        if let Some(r) = this.inner1.init(ctx, &mut recycled_state.0) {
+            *this.inner1_result = Some(r);
+        }
+        if let Some(r) = this.inner2.init(ctx, &mut recycled_state.1) {
+            *this.inner2_result = Some(r);
+        }
+        if this.inner1_result.is_some() && this.inner2_result.is_some() {
+            let (r1_ret, r1_retained_state) = this.inner1_result.take().unwrap();
+            let (r2_ret, r2_retained_state) = this.inner2_result.take().unwrap();
+            *this.results_taken = true;
+            Some(((r1_ret, r2_ret), (r1_retained_state, r2_retained_state)))
+        } else {
+            None
+        }
     }
 }
 
@@ -153,9 +165,15 @@ where
         self: Pin<&mut Self>,
         ctx: &'a mut CommandBufferRecordContext<'b>,
         recycled_state: &mut Self::RecycledState,
-    ) {
+    ) -> Option<(Self::Output, Self::RetainedState)> {
         let this = self.project();
-        this.inner.init(ctx, recycled_state);
+        this.inner.init(ctx, recycled_state).map(|(out, retain)| {
+            let mapper = this
+            .mapper
+            .take()
+            .unwrap();
+            ((mapper)(out), retain)
+        })
     }
 }
 
@@ -255,7 +273,8 @@ where
         self: Pin<&mut Self>,
         _ctx: &'fa mut CommandBufferRecordContext<'fb>,
         _recycled_state: &mut Self::RecycledState,
-    ) {
+    ) -> Option<(Self::Output, Self::RetainedState)> {
         // Noop. The inner command will be initialized when fork was called on it.
+        None
     }
 }
