@@ -24,10 +24,28 @@ impl Default for State {
 impl CommandsTransformer for State {
     fn import(
         &mut self,
-        _input_tokens: &proc_macro2::TokenStream,
-        _is_image: bool,
+        input_tokens: &proc_macro2::TokenStream,
+        is_image: bool,
     ) -> proc_macro2::TokenStream {
-        todo!()
+        let res_token_name =
+            quote::format_ident!("__future_res_{}", self.current_dispose_index);
+        self.current_dispose_index += 1;
+        self.dispose_forward_decl.extend(quote::quote! {
+            let mut #res_token_name = None;
+        });
+        self.dispose_ret_expr
+            .push(syn::Expr::Verbatim(res_token_name.to_token_stream()));
+        if is_image {
+            quote::quote! {unsafe {
+                #res_token_name = Some(#input_tokens);
+                ::async_ash::future::ResImage::new(#res_token_name.as_mut().unwrap())
+            }}
+        } else {
+            quote::quote! {unsafe {
+                #res_token_name = Some(#input_tokens);
+                ::async_ash::future::Res::new(#res_token_name.as_mut().unwrap())
+            }}
+        }
     }
 
     fn async_transform(&mut self, input: &syn::ExprAwait) -> syn::Expr {
@@ -88,7 +106,15 @@ impl CommandsTransformer for State {
     // inner block yields. outer block needs to give inner block the current queue, and the inner block choose to yield or not.
 
     fn macro_transform(&mut self, mac: &syn::ExprMacro) -> syn::Expr {
-        syn::Expr::Macro(mac.clone())
+        let path = &mac.mac.path;
+        if path.segments.len() != 1 {
+            return syn::Expr::Macro(mac.clone());
+        }
+        match path.segments[0].ident.to_string().as_str() {
+            "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
+            "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
+            _ => syn::Expr::Macro(mac.clone()),
+        }
     }
 
     fn return_transform(&mut self, ret: &syn::ExprReturn) -> Option<syn::Expr> {

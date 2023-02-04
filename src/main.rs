@@ -73,9 +73,9 @@ fn main() {
     let mut state = Default::default();
     let wait = queues.submit(
         gpu! {
+            let mut dst_buffer = import!(dst);
             commands! {
                 let src_buffer = src.await;
-                let  mut dst_buffer = import!(dst);
                 copy_buffer(&mut dst_buffer, &src_buffer).await;
 
 
