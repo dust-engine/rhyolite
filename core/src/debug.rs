@@ -182,6 +182,13 @@ impl<'fut> GPUCommandFuture for CommandDebugFuture<'fut> {
     }
 
     fn context(self: Pin<&mut Self>, _ctx: &mut crate::future::StageContext) {}
+    fn init<'a, 'b: 'a>(
+        self: Pin<&mut Self>,
+        _ctx: &'a mut crate::future::CommandBufferRecordContext<'b>,
+        _recycled_state: &mut Self::RecycledState,
+    ) -> Option<(Self::Output, Self::RetainedState)> {
+        Some(((), ()))
+    }
 }
 
 pub fn command_debug(name: &CStr) -> CommandDebugFuture {

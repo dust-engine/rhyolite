@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use async_ash::{cstr, debug::command_debug};
 use async_ash_alloc::Allocator;
 use async_ash_core::{
     ash,
@@ -77,11 +78,14 @@ fn main() {
             commands! {
                 let src_buffer = src.await;
                 copy_buffer(&mut dst_buffer, &src_buffer).await;
+                command_debug(cstr!("jd")).await;
 
+            }.schedule_on_queue(queues_router.of_type(QueueType::Transfer)).await;
+            commands! {
 
                 let mut read_back = import!(&mut read_back);
                 copy_buffer(&mut read_back, &dst_buffer).await;
-            }.schedule_on_queue(queues_router.of_type(QueueType::Transfer)).await;
+            }.schedule_on_queue(queues_router.of_type(QueueType::Compute)).await;
         },
         &mut shared_command_pools,
         &mut shared_semaphore_pool,

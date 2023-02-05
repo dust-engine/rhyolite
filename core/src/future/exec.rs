@@ -9,30 +9,40 @@ use std::{
 
 use super::GPUCommandFuture;
 
-#[derive(Default)]
 struct ResTrackingInfo {
     prev_stage_access: Access,
     current_stage_access: Access,
     last_accessed_stage_index: u32,
-}
 
-pub struct Res<'a, T> {
     queue_family: u32,
     queue_index: QueueRef,
     prev_queue_family: u32,
     prev_queue_index: QueueRef,
     last_accessed_timeline: u32,
+}
+impl Default for ResTrackingInfo {
+    fn default() -> Self {
+        Self {
+            prev_stage_access: Access::default(),
+            current_stage_access: Access::default(),
+            last_accessed_stage_index: 0,
+
+            queue_family: vk::QUEUE_FAMILY_IGNORED,
+            queue_index: QueueRef::null(),
+            prev_queue_index: QueueRef::null(),
+            prev_queue_family: vk::QUEUE_FAMILY_IGNORED,
+            last_accessed_timeline: 0,
+        }
+    }
+}
+
+pub struct Res<'a, T> {
     tracking_info: RefCell<ResTrackingInfo>,
     inner: &'a mut T,
 }
 impl<'a, T> Res<'a, T> {
     pub fn new(inner: &'a mut T) -> Self {
         Self {
-            queue_family: vk::QUEUE_FAMILY_IGNORED,
-            queue_index: QueueRef::null(),
-            prev_queue_index: QueueRef::null(),
-            prev_queue_family: vk::QUEUE_FAMILY_IGNORED,
-            last_accessed_timeline: 0,
             tracking_info: Default::default(),
             inner,
         }
@@ -301,6 +311,45 @@ impl StageContext {
             semaphore_transitions: Vec::new(),
         }
     }
+    fn add_barrier_tracking(&mut self, tracking: &mut ResTrackingInfo, access: &Access) {
+        if tracking.last_accessed_timeline < self.timeline_index {
+            tracking.prev_queue_family =
+                std::mem::replace(&mut tracking.queue_family, self.queue_family_index);
+            tracking.prev_queue_index =
+                std::mem::replace(&mut tracking.queue_index, self.queue_index);
+            // Need semaphore sync
+            // queue, timeline: signal at pipeline barrier.
+            // If an earlier stage was already signaled we need to make another signal.
+            // If a later stage was already signaled, we can
+            // ok this is very problematic.
+
+            // In the binary semaphore model, each semaphore can only be waited on once.
+            // This is great for our purpose.
+            // We can say unconditionally: This queue, signal on this stage. (what is "this stage?")
+            tracking.last_accessed_timeline = self.timeline_index;
+
+            if tracking.prev_queue_family != vk::QUEUE_FAMILY_IGNORED {
+                // queue: please signal xxx on stage
+                let mut barrier = vk::MemoryBarrier2::default();
+                get_memory_access(&mut barrier, &tracking.prev_stage_access, access);
+                println!(
+                    "Adding with before {:?}, after {:?}",
+                    tracking.prev_stage_access, access
+                );
+                // signal on barrier.src_stage_mask
+                // wait on barrier.dst_stage_mask
+                self.semaphore_transitions.push((
+                    tracking.prev_queue_index,
+                    tracking.queue_index,
+                    barrier.src_stage_mask,
+                    barrier.dst_stage_mask,
+                ));
+            }
+        }
+        if tracking.prev_queue_family != self.queue_family_index {
+            // Need queue family transfer.
+        }
+    }
     /// Declare a global memory write
     #[inline]
     pub fn write<T>(
@@ -309,22 +358,23 @@ impl StageContext {
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
     ) {
-        assert!(
-            res.queue_family == self.queue_family_index
-                || res.queue_family == vk::QUEUE_FAMILY_IGNORED
-        );
+        let access = Access {
+            write_access: accesses,
+            write_stages: stages,
+            ..Default::default()
+        };
+
         let mut tracking = res.tracking_info.borrow_mut();
-        if tracking.last_accessed_stage_index < self.stage_index {
+        if tracking.last_accessed_stage_index < self.stage_index
+            || tracking.last_accessed_timeline < self.timeline_index
+        {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
         }
+        self.add_barrier_tracking(&mut tracking, &access);
         get_memory_access(
             &mut self.global_access,
             &tracking.prev_stage_access,
-            &Access {
-                write_access: accesses,
-                write_stages: stages,
-                ..Default::default()
-            },
+            &access,
         );
         tracking.current_stage_access.write_access |= accesses;
         tracking.current_stage_access.write_stages |= stages;
@@ -338,22 +388,22 @@ impl StageContext {
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
     ) {
-        assert!(
-            res.queue_family == self.queue_family_index
-                || res.queue_family == vk::QUEUE_FAMILY_IGNORED
-        );
+        let access = Access {
+            read_access: accesses,
+            read_stages: stages,
+            ..Default::default()
+        };
         let mut tracking = res.tracking_info.borrow_mut();
-        if tracking.last_accessed_stage_index < self.stage_index {
+        if tracking.last_accessed_stage_index < self.stage_index
+            || tracking.last_accessed_timeline < self.timeline_index
+        {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
         }
+        self.add_barrier_tracking(&mut tracking, &access);
         get_memory_access(
             &mut self.global_access,
             &tracking.prev_stage_access,
-            &Access {
-                read_access: accesses,
-                read_stages: stages,
-                ..Default::default()
-            },
+            &access,
         );
         tracking.current_stage_access.read_access |= accesses;
         tracking.current_stage_access.read_stages |= stages;
@@ -369,6 +419,27 @@ impl StageContext {
     ) where
         T: ImageLike,
     {
+        let access = Access {
+            write_access: accesses,
+            write_stages: stages,
+            ..Default::default()
+        };
+
+        let mut tracking = res.res.tracking_info.borrow_mut();
+        if tracking.last_accessed_stage_index < self.stage_index
+            || tracking.last_accessed_timeline < self.timeline_index
+        {
+            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
+            res.old_layout = std::mem::replace(&mut res.layout, layout);
+        } else {
+            assert_eq!(
+                tracking.queue_family, self.queue_family_index,
+                "Layout mismatch."
+            );
+            assert_eq!(res.layout, layout, "Layout mismatch.");
+        }
+        self.add_barrier_tracking(&mut tracking, &access);
+
         let (barrier, _old_layout, _new_layout) = self
             .image_accesses
             .entry(StageContextImage {
@@ -376,66 +447,7 @@ impl StageContext {
                 subresource_range: res.inner().subresource_range(),
             })
             .or_insert((Default::default(), res.old_layout, layout));
-
-        let mut tracking = res.res.tracking_info.borrow_mut();
-        if tracking.last_accessed_stage_index < self.stage_index {
-            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
-            res.old_layout = std::mem::replace(&mut res.layout, layout);
-        } else {
-            assert_eq!(
-                res.res.queue_family, self.queue_family_index,
-                "Layout mismatch."
-            );
-            assert_eq!(res.layout, layout, "Layout mismatch.");
-        }
-        if res.res.last_accessed_timeline != self.timeline_index {
-            res.res.prev_queue_family =
-                std::mem::replace(&mut res.res.queue_family, self.queue_family_index);
-            res.res.prev_queue_index =
-                std::mem::replace(&mut res.res.queue_index, self.queue_index);
-            // Need semaphore sync
-            // queue, timeline: signal at pipeline barrier.
-            // If an earlier stage was already signaled we need to make another signal.
-            // If a later stage was already signaled, we can
-            // ok this is very problematic.
-
-            // In the binary semaphore model, each semaphore can only be waited on once.
-            // This is great for our purpose.
-            // We can say unconditionally: This queue, signal on this stage. (what is "this stage?")
-            res.res.last_accessed_timeline = self.timeline_index;
-            // queue: please signal xxx on stage
-            let mut barrier = vk::MemoryBarrier2::default();
-            get_memory_access(
-                &mut barrier,
-                &tracking.prev_stage_access,
-                &Access {
-                    write_access: accesses,
-                    write_stages: stages,
-                    ..Default::default()
-                },
-            );
-            // signal on barrier.src_stage_mask
-            // wait on barrier.dst_stage_mask
-            self.semaphore_transitions.push((
-                res.res.prev_queue_index,
-                res.res.queue_index,
-                barrier.src_stage_mask,
-                barrier.dst_stage_mask,
-            ));
-        }
-        if res.res.prev_queue_family != self.queue_family_index {
-            // Need queue family transfer.
-        }
-
-        get_memory_access(
-            barrier,
-            &tracking.prev_stage_access,
-            &Access {
-                write_access: accesses,
-                write_stages: stages,
-                ..Default::default()
-            },
-        );
+        get_memory_access(barrier, &tracking.prev_stage_access, &access);
 
         tracking.current_stage_access.write_access |= accesses;
         tracking.current_stage_access.write_stages |= stages;
@@ -452,6 +464,28 @@ impl StageContext {
     ) where
         T: ImageLike,
     {
+        let access = Access {
+            read_access: accesses,
+            read_stages: stages,
+            ..Default::default()
+        };
+        let mut tracking = res.res.tracking_info.borrow_mut();
+        if tracking.last_accessed_stage_index < self.stage_index
+            || tracking.last_accessed_timeline < self.timeline_index
+        {
+            tracking.prev_queue_family =
+                std::mem::replace(&mut tracking.queue_family, self.queue_family_index);
+            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
+            res.old_layout = std::mem::replace(&mut res.layout, layout);
+        } else {
+            assert_eq!(
+                tracking.queue_family, self.queue_family_index,
+                "Queue family mismatch."
+            );
+            assert_eq!(res.layout, layout, "Layout mismatch.");
+        }
+        self.add_barrier_tracking(&mut tracking, &access);
+
         let (barrier, _old_layout, _new_layout) = self
             .image_accesses
             .entry(StageContextImage {
@@ -459,29 +493,7 @@ impl StageContext {
                 subresource_range: res.inner().subresource_range(),
             })
             .or_insert((Default::default(), res.old_layout, layout));
-
-        let mut tracking = res.res.tracking_info.borrow_mut();
-        if tracking.last_accessed_stage_index < self.stage_index {
-            res.res.prev_queue_family =
-                std::mem::replace(&mut res.res.queue_family, self.queue_family_index);
-            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
-            res.old_layout = std::mem::replace(&mut res.layout, layout);
-        } else {
-            assert_eq!(
-                res.res.queue_family, self.queue_family_index,
-                "Queue family mismatch."
-            );
-            assert_eq!(res.layout, layout, "Layout mismatch.");
-        }
-        get_memory_access(
-            barrier,
-            &tracking.prev_stage_access,
-            &Access {
-                read_access: accesses,
-                read_stages: stages,
-                ..Default::default()
-            },
-        );
+        get_memory_access(barrier, &tracking.prev_stage_access, &access);
 
         tracking.current_stage_access.read_access |= accesses;
         tracking.current_stage_access.read_stages |= stages;
@@ -558,6 +570,8 @@ impl<'a> CommandBufferRecordContext<'a> {
                     subresource_range: image.subresource_range,
                     old_layout: *old_layout,
                     new_layout: *new_layout,
+                    src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
                     ..Default::default()
                 };
                 if barrier.src_access_mask.is_empty() {
@@ -593,7 +607,7 @@ impl<'a> CommandBufferRecordContext<'a> {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 struct Access {
     read_stages: vk::PipelineStageFlags2,
     read_access: vk::AccessFlags2,

@@ -27,8 +27,7 @@ impl CommandsTransformer for State {
         input_tokens: &proc_macro2::TokenStream,
         is_image: bool,
     ) -> proc_macro2::TokenStream {
-        let res_token_name =
-            quote::format_ident!("__future_res_{}", self.current_dispose_index);
+        let res_token_name = quote::format_ident!("__future_res_{}", self.current_dispose_index);
         self.current_dispose_index += 1;
         self.dispose_forward_decl.extend(quote::quote! {
             let mut #res_token_name = None;

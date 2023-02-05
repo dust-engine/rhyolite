@@ -28,6 +28,11 @@ impl QueueRef {
         self.0 == u8::MAX
     }
 }
+impl Default for QueueRef {
+    fn default() -> Self {
+        Self::null()
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct QueueMask(u64);
@@ -93,6 +98,9 @@ impl<'a> SubmissionContext<'a> {
 pub struct QueueSubmissionContext {
     queue_family_index: u32,
     stage_index: u32,
+
+    /// Timeline index is defined as the timeline value signaled at the end of the stage.
+    /// Therefore, it begins at 1.
     timeline_index: u32,
 
     /// Stages that the previous stage of the current queue needs to signal on.
@@ -212,7 +220,7 @@ impl Queues {
                 .map(|(_queue, queue_family_index)| QueueSubmissionContext {
                     queue_family_index: *queue_family_index,
                     stage_index: 0,
-                    timeline_index: 0,
+                    timeline_index: 1,
                     signals: Default::default(),
                     waits: Default::default(),
                 })
@@ -251,7 +259,7 @@ impl Queues {
                     for (src, dst) in submission_context
                         .submission
                         .iter_mut()
-                        .zip(last_stage.queues.iter_mut())
+                        .zip(current_stage.queues.iter_mut())
                     {
                         src.end(&self.device);
                         dst.ty = std::mem::replace(src, QueueSubmissionType::Unknown);
@@ -273,16 +281,18 @@ impl Queues {
                         CachedStageSubmissions::new(self.queues.len()),
                     );
                     last_stage.apply_signals(&submission_context, semaphore_pool);
+                    current_stage.apply_submissions(&submission_context, &last_stage);
 
                     for (src, dst) in submission_context
                         .submission
                         .iter_mut()
-                        .zip(last_stage.queues.iter_mut())
+                        .zip(current_stage.queues.iter_mut())
                     {
                         src.end(&self.device);
                         dst.ty = std::mem::replace(src, QueueSubmissionType::Unknown);
                     }
                     submission_batch.add_stage(last_stage);
+                    submission_batch.add_stage(current_stage);
                     break output;
                 }
             }
@@ -496,30 +506,53 @@ pub struct SubmissionBatch {
 }
 impl Debug for SubmissionBatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct FormatStages(vk::PipelineStageFlags2);
+        impl Debug for FormatStages {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                if self.0.is_empty() {
+                    f.write_str("<empty>")
+                } else {
+                    Debug::fmt(&self.0, f)
+                }
+            }
+        }
         f.write_str("SubmissionBatch {")?;
 
         for (i, queue) in self.queues.iter().enumerate() {
             if !queue.submits.is_empty() {
                 f.write_char('\n')?;
-                f.write_fmt(format_args!("  Queue {i} Submits:"))?;
+                f.write_fmt(format_args!("  Queue {i} Submits:\n"))?;
                 for submit in queue.submits.iter() {
-                    f.write_char('\n')?;
+                    unsafe {
+                        for i in 0..submit.wait_semaphore_info_count {
+                            let semaphore = &*submit.p_wait_semaphore_infos.add(i as usize);
+                            f.write_fmt(format_args!(
+                                "    Stages {:?} wait semaphore {:?} on {:?}\n",
+                                FormatStages(semaphore.stage_mask),
+                                semaphore.semaphore,
+                                semaphore.value
+                            ))?;
+                        }
+                    }
                     f.write_fmt(format_args!(
-                        "    Waits {} semaphores",
-                        submit.wait_semaphore_info_count
-                    ))?;
-                    f.write_fmt(format_args!(
-                        "    {} command buffers, ",
+                        "    Submit {} command buffers\n",
                         submit.command_buffer_info_count
                     ))?;
-                    f.write_fmt(format_args!(
-                        "    Signal {} semaphores",
-                        submit.signal_semaphore_info_count
-                    ))?;
+                    unsafe {
+                        for i in 0..submit.signal_semaphore_info_count {
+                            let semaphore = &*submit.p_signal_semaphore_infos.add(i as usize);
+                            f.write_fmt(format_args!(
+                                "    Stages {:?} signal semaphore {:?} on {:?}\n",
+                                FormatStages(semaphore.stage_mask),
+                                semaphore.semaphore,
+                                semaphore.value
+                            ))?;
+                        }
+                    }
                 }
             }
         }
-        f.write_str("\n}")?;
+        f.write_str("}")?;
         Ok(())
     }
 }
@@ -984,7 +1017,6 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
                 *this.queue = QueueRef(0);
             }
         }
-        println!("init on {:?}", this.queue);
         *this.prev_queue = prev_queue;
         let mut r = &mut ctx.submission[this.queue.0 as usize];
         let mut temp_command_buffers = Vec::new();
@@ -1021,7 +1053,6 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
         recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
-        println!("record to {:?}", this.queue);
 
         let queue = {
             let mut mask = QueueMask::empty();
