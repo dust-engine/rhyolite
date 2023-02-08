@@ -57,13 +57,13 @@ fn main() {
     let mut shared_semaphore_pool = TimelineSemaphorePool::new(device.clone());
     let mut shared_fence_pool = FencePool::new(device.clone());
 
-    let src = allocator
+    let mut src = allocator
         .create_device_buffer_with_data(
             &[10, 0, 2, 2],
             vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
         )
         .unwrap();
-    let dst = allocator
+    let mut dst = allocator
         .create_device_buffer_uninit(
             4,
             vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
@@ -74,14 +74,15 @@ fn main() {
     let mut state = Default::default();
     let wait = queues.submit(
         gpu! {
-            let mut dst_buffer = import!(dst);
+            let mut dst_buffer = Res::new(&mut dst);
             commands! {
                 let src_buffer = src.await;
                 copy_buffer(&mut dst_buffer, &src_buffer).await;
                 command_debug(cstr!("jd")).await;
+                retain!(src_buffer);
             }.schedule_on_queue(queues_router.of_type(QueueType::Transfer)).await;
             commands! {
-                let mut read_back = import!(&mut read_back);
+                let mut read_back = Res::new(&mut read_back);
                 copy_buffer(&mut read_back, &dst_buffer).await;
             }.schedule_on_queue(queues_router.of_type(QueueType::Compute)).await;
         },

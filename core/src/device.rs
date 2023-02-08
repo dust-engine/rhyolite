@@ -41,39 +41,42 @@ impl Device {
     pub(crate) fn new(
         instance: Arc<Instance>,
         physical_device: PhysicalDevice,
-        create_info: vk::DeviceCreateInfo
+        create_info: vk::DeviceCreateInfo,
     ) -> VkResult<Self> {
-        
         // Safety: No Host Syncronization rules for VkCreateDevice.
         // Device retains a reference to Instance, ensuring that Instance is dropped later than Device.
-        let device = unsafe {
-            instance
-                .create_device(physical_device.raw(), &create_info, None)
-        }?;
-        let extensions: BTreeSet<&CStr>
-         = unsafe {
-            std::slice::from_raw_parts(create_info.pp_enabled_extension_names, create_info.enabled_extension_count as usize)
+        let device = unsafe { instance.create_device(physical_device.raw(), &create_info, None) }?;
+        let extensions: BTreeSet<&CStr> = unsafe {
+            std::slice::from_raw_parts(
+                create_info.pp_enabled_extension_names,
+                create_info.enabled_extension_count as usize,
+            )
             .iter()
-            .map(|a| {
-                CStr::from_ptr(*a)
-            })
+            .map(|a| CStr::from_ptr(*a))
             .collect()
         };
         let swapchain_loader = if extensions.contains(ash::extensions::khr::Swapchain::name()) {
-            Some(Box::new(ash::extensions::khr::Swapchain::new(&instance, &device)))
+            Some(Box::new(ash::extensions::khr::Swapchain::new(
+                &instance, &device,
+            )))
         } else {
             None
         };
         let rtx_loader = if extensions.contains(ash::extensions::khr::RayTracingPipeline::name()) {
-            Some(Box::new(ash::extensions::khr::RayTracingPipeline::new(&instance, &device)))
+            Some(Box::new(ash::extensions::khr::RayTracingPipeline::new(
+                &instance, &device,
+            )))
         } else {
             None
         };
-        let accel_struct_loader = if extensions.contains(ash::extensions::khr::AccelerationStructure::name()) {
-            Some(Box::new(ash::extensions::khr::AccelerationStructure::new(&instance, &device)))
-        } else {
-            None
-        };
+        let accel_struct_loader =
+            if extensions.contains(ash::extensions::khr::AccelerationStructure::name()) {
+                Some(Box::new(ash::extensions::khr::AccelerationStructure::new(
+                    &instance, &device,
+                )))
+            } else {
+                None
+            };
 
         Ok(Self {
             instance,
@@ -81,7 +84,7 @@ impl Device {
             device,
             swapchain_loader,
             rtx_loader,
-            accel_struct_loader
+            accel_struct_loader,
         })
     }
     pub fn instance(&self) -> &Arc<Instance> {

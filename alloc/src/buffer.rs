@@ -187,10 +187,11 @@ impl Allocator {
         };
 
         Ok(commands! {
-            let mut dst_buffer = import!(dst_buffer);
+            let mut dst_buffer = Res::new(dst_buffer);
             if let Some(staging_buffer) = staging_buffer {
-                let staging_buffer = import!(staging_buffer);
+                let staging_buffer = Res::new(staging_buffer);
                 copy_buffer(&mut dst_buffer, &staging_buffer).await;
+                retain!(staging_buffer);
             }
             dst_buffer
         })

@@ -17,8 +17,8 @@ mod instance;
 mod physical_device;
 pub mod queue;
 mod resources;
-pub mod swapchain;
 mod semaphore;
+pub mod swapchain;
 pub mod utils;
 
 pub use device::{Device, HasDevice};
@@ -27,6 +27,5 @@ pub use physical_device::*;
 pub use queue::*;
 pub use resources::*;
 pub use semaphore::*;
-
 
 // TODO: Test two consequtive reads, with different image layouts.

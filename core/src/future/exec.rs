@@ -4,10 +4,11 @@ use crate::{
 };
 use ash::vk;
 use std::{
-    cell::RefCell, collections::BTreeMap, marker::PhantomData, ops::Range, pin::Pin, task::Poll,
+    cell::RefCell, collections::BTreeMap, marker::PhantomData, mem::ManuallyDrop, ops::Range,
+    pin::Pin, task::Poll,
 };
 
-use super::GPUCommandFuture;
+use super::{Disposable, GPUCommandFuture};
 
 pub struct ResTrackingInfo {
     pub prev_stage_access: Access,
@@ -20,7 +21,7 @@ pub struct ResTrackingInfo {
     pub prev_queue_index: QueueRef,
     pub last_accessed_timeline: u32,
 
-    pub untracked_semaphore: Option<vk::Semaphore>
+    pub untracked_semaphore: Option<vk::Semaphore>,
 }
 impl Default for ResTrackingInfo {
     fn default() -> Self {
@@ -35,37 +36,59 @@ impl Default for ResTrackingInfo {
             prev_queue_family: vk::QUEUE_FAMILY_IGNORED,
             last_accessed_timeline: 0,
 
-            untracked_semaphore: None
+            untracked_semaphore: None,
         }
     }
 }
 
-pub struct Res<'a, T> {
-    pub tracking_info: RefCell<ResTrackingInfo>,
-    pub inner: &'a mut T,
+pub struct Res<T> {
+    pub tracking_info: ManuallyDrop<RefCell<ResTrackingInfo>>,
+    pub inner: ManuallyDrop<T>,
 }
-impl<'a, T> Res<'a, T> {
-    pub fn new(inner: &'a mut T) -> Self {
+impl<T> Disposable for Res<T> {
+    fn dispose(mut self) {
+        unsafe {
+            ManuallyDrop::drop(&mut self.tracking_info);
+            ManuallyDrop::drop(&mut self.inner);
+            std::mem::forget(self)
+        }
+    }
+}
+impl<T> Drop for Res<T> {
+    fn drop(&mut self) {
+        if std::mem::needs_drop::<T>() {
+            panic!("Res<{}> must be disposed!", std::any::type_name::<T>());
+        }
+    }
+}
+// TODO: Make Res error out when not retained / disposed properly.
+impl<T> Res<T> {
+    pub fn new(inner: T) -> Self {
         Self {
             tracking_info: Default::default(),
-            inner,
+            inner: ManuallyDrop::new(inner),
         }
     }
     pub fn inner(&self) -> &T {
-        self.inner
+        &self.inner
     }
     pub fn inner_mut(&mut self) -> &mut T {
-        self.inner
+        &mut self.inner
     }
 }
 
-pub struct ResImage<'a, T> {
-    res: Res<'a, T>,
+pub struct ResImage<T> {
+    res: Res<T>,
     old_layout: vk::ImageLayout,
     layout: vk::ImageLayout,
 }
-impl<'a, T> ResImage<'a, T> {
-    pub fn new(inner: &'a mut T, initial_layout: vk::ImageLayout) -> Self {
+impl<T> Disposable for ResImage<T> {
+    fn dispose(self) {
+        self.res.dispose()
+    }
+}
+impl<T> ResImage<T> {
+    pub fn new(inner: T, initial_layout: vk::ImageLayout) -> Self {
         Self {
             res: Res::new(inner),
             layout: initial_layout,
@@ -73,10 +96,10 @@ impl<'a, T> ResImage<'a, T> {
         }
     }
     pub fn inner(&self) -> &T {
-        self.res.inner
+        &self.res.inner
     }
     pub fn inner_mut(&mut self) -> &mut T {
-        self.res.inner
+        &mut self.res.inner
     }
 }
 
@@ -160,19 +183,16 @@ impl<'host, 'retain> CommandBufferRecordContextInner<'host, 'retain> {
             _marker: old._marker,
         }
     }
-    pub unsafe fn add_res<T>(&mut self, res: &mut T) -> Res<'retain, T> {
+    pub unsafe fn add_res<T>(&mut self, res: T) -> Res<T> {
         // Extend the lifetime of res so that it lives as long as 'retain
-        Res::new(std::mem::transmute(res))
+        Res::new(res)
     }
     pub unsafe fn add_image<T: ImageLike>(
         &mut self,
-        res: &mut T,
+        res: T,
         initial_layout: vk::ImageLayout,
-    ) -> ResImage<'retain, T> {
-        ResImage::new(std::mem::transmute(res), initial_layout)
-    }
-    pub unsafe fn retain<T>(&mut self, res: &mut T) -> &'retain mut T {
-        std::mem::transmute(res)
+    ) -> ResImage<T> {
+        ResImage::new(res, initial_layout)
     }
 }
 
@@ -290,8 +310,8 @@ pub enum StageContextSemaphoreTransition {
     Untracked {
         semaphore: vk::Semaphore,
         dst_queue: QueueRef,
-        dst_stages: vk::PipelineStageFlags2
-    }
+        dst_stages: vk::PipelineStageFlags2,
+    },
 }
 
 pub struct StageContext {
@@ -345,28 +365,28 @@ impl StageContext {
                 if *untracked_semaphore == vk::Semaphore::null() {
                     panic!("Attempts to wait on vk::AcquireNextImageKHR twice.");
                 }
-                
+
                 let mut barrier = vk::MemoryBarrier2::default();
                 get_memory_access(&mut barrier, &tracking.prev_stage_access, access);
 
-                self.semaphore_transitions.push(StageContextSemaphoreTransition::Untracked {
-                    semaphore: *untracked_semaphore,
-                    dst_queue: tracking.queue_index,
-                    dst_stages: barrier.dst_stage_mask
-                });
-    
+                self.semaphore_transitions
+                    .push(StageContextSemaphoreTransition::Untracked {
+                        semaphore: *untracked_semaphore,
+                        dst_queue: tracking.queue_index,
+                        dst_stages: barrier.dst_stage_mask,
+                    });
+
                 *untracked_semaphore = vk::Semaphore::null();
             } else if tracking.prev_queue_family != vk::QUEUE_FAMILY_IGNORED {
                 let mut barrier = vk::MemoryBarrier2::default();
                 get_memory_access(&mut barrier, &tracking.prev_stage_access, access);
-                self.semaphore_transitions.push(StageContextSemaphoreTransition::Managed
-                    {
+                self.semaphore_transitions
+                    .push(StageContextSemaphoreTransition::Managed {
                         src_queue: tracking.prev_queue_index,
                         dst_queue: tracking.queue_index,
                         src_stages: barrier.src_stage_mask,
-                        dst_stages: barrier.dst_stage_mask
-                    }
-                );
+                        dst_stages: barrier.dst_stage_mask,
+                    });
             }
         }
         if tracking.prev_queue_family != self.queue_family_index {

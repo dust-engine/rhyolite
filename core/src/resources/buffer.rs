@@ -61,23 +61,21 @@ where
 
 #[pin_project]
 pub struct CopyBufferFuture<
-    'b,
-    S: BufferLike + 'b,
-    T: BufferLike + 'b,
-    SRef: Deref<Target = Res<'b, S>>,
-    TRef: DerefMut<Target = Res<'b, T>>,
+    S: BufferLike,
+    T: BufferLike,
+    SRef: Deref<Target = Res<S>>,
+    TRef: DerefMut<Target = Res<T>>,
 > {
     pub str: &'static str,
     pub src: SRef,
     pub dst: TRef,
 }
 impl<
-        'b,
         S: BufferLike,
         T: BufferLike,
-        SRef: Deref<Target = Res<'b, S>>,
-        TRef: DerefMut<Target = Res<'b, T>>,
-    > GPUCommandFuture for CopyBufferFuture<'b, S, T, SRef, TRef>
+        SRef: Deref<Target = Res<S>>,
+        TRef: DerefMut<Target = Res<T>>,
+    > GPUCommandFuture for CopyBufferFuture<S, T, SRef, TRef>
 {
     type Output = ();
     type RetainedState = ();
@@ -124,15 +122,14 @@ impl<
 }
 
 pub fn copy_buffer<
-    'b,
-    S: BufferLike + 'b,
-    T: BufferLike + 'b,
-    SRef: Deref<Target = Res<'b, S>>,
-    TRef: DerefMut<Target = Res<'b, T>>,
+    S: BufferLike,
+    T: BufferLike,
+    SRef: Deref<Target = Res<S>>,
+    TRef: DerefMut<Target = Res<T>>,
 >(
     dst: TRef,
     src: SRef,
-) -> CopyBufferFuture<'b, S, T, SRef, TRef> {
+) -> CopyBufferFuture<S, T, SRef, TRef> {
     CopyBufferFuture {
         str: "aaa",
         src,

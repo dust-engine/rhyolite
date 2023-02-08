@@ -10,6 +10,20 @@ struct State {
 
     recycled_state_count: usize,
 }
+impl State {
+    fn retain(&mut self, input_tokens: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let res_token_name = quote::format_ident!("__future_res_{}", self.current_dispose_index);
+        self.current_dispose_index += 1;
+        self.dispose_forward_decl.extend(quote::quote! {
+            let mut #res_token_name = None;
+        });
+        self.dispose_ret_expr
+            .push(syn::Expr::Verbatim(res_token_name.to_token_stream()));
+        quote::quote! {unsafe {
+            #res_token_name = Some(#input_tokens)
+        }}
+    }
+}
 impl Default for State {
     fn default() -> Self {
         Self {
@@ -61,7 +75,7 @@ impl CommandsTransformer for State {
         // This needs to be a cell because __dispose_fn_future "pre-mutably-borrows" the value.
         // This value also needs to be written by the .await statement, creating a double borrow.
         self.dispose_forward_decl.extend(quote::quote! {
-            let mut #dispose_token_name = ::std::cell::Cell::new(None);
+            let mut #dispose_token_name = None;
         });
         // The program may return at different locations, and upon return, not all futures may have
         // been awaited. We should only await the dispose futures for those actually awaited so far
@@ -111,6 +125,7 @@ impl CommandsTransformer for State {
         }
         match path.segments[0].ident.to_string().as_str() {
             "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
+            "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens)),
             "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
             _ => syn::Expr::Macro(mac.clone()),
         }

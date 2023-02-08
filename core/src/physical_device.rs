@@ -190,7 +190,8 @@ impl PhysicalDevice {
         let device = Arc::new(Device::new(self.instance.clone(), self, create_info)?);
         drop(list_priorities);
 
-        let queues = unsafe { Queues::new(device.clone(), num_queue_families, &queue_create_infos) };
+        let queues =
+            unsafe { Queues::new(device.clone(), num_queue_families, &queue_create_infos) };
         Ok((device, queues))
     }
 }

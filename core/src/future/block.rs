@@ -1,4 +1,4 @@
-use super::{CommandBufferRecordContext, GPUCommandFuture, StageContext};
+use super::{CommandBufferRecordContext, Disposable, GPUCommandFuture, StageContext};
 use pin_project::pin_project;
 use std::marker::PhantomData;
 use std::ops::{Generator, GeneratorState};
@@ -65,8 +65,13 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
         }
     }
 }
-impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
-    GPUCommandFuture for GPUCommandBlock<R, State, Recycle, G>
+impl<
+        'retain,
+        R,
+        State: Disposable,
+        Recycle: Default,
+        G: GPUCommandGenerator<'retain, R, State, Recycle>,
+    > GPUCommandFuture for GPUCommandBlock<R, State, Recycle, G>
 {
     type Output = R;
     type RetainedState = State;

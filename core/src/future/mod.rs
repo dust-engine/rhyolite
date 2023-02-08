@@ -10,11 +10,65 @@ pub use exec::*;
 pub use ext::*;
 pub use state::*;
 
+pub trait Disposable {
+    fn dispose(self);
+}
+impl Disposable for () {
+    fn dispose(self) {}
+}
+impl<T1, T2> Disposable for (T1, T2)
+where
+    T1: Disposable,
+    T2: Disposable,
+{
+    fn dispose(self) {
+        self.0.dispose();
+        self.1.dispose();
+    }
+}
+impl<T1, T2, T3> Disposable for (T1, T2, T3)
+where
+    T1: Disposable,
+    T2: Disposable,
+    T3: Disposable,
+{
+    fn dispose(self) {
+        self.0.dispose();
+        self.1.dispose();
+        self.2.dispose();
+    }
+}
+impl<T1, T2, T3, T4> Disposable for (T1, T2, T3, T4)
+where
+    T1: Disposable,
+    T2: Disposable,
+    T3: Disposable,
+    T4: Disposable,
+{
+    fn dispose(self) {
+        self.0.dispose();
+        self.1.dispose();
+        self.2.dispose();
+        self.3.dispose();
+    }
+}
+
+impl<T> Disposable for Option<T>
+where
+    T: Disposable,
+{
+    fn dispose(self) {
+        if let Some(this) = self {
+            this.dispose()
+        }
+    }
+}
+
 pub trait GPUCommandFuture {
     type Output;
 
     /// Objects with lifetimes that need to be extended until the future was executed on the GPU.
-    type RetainedState;
+    type RetainedState: Disposable;
 
     /// Optional object to be passed in at record time that collects reused states.
     type RecycledState: Default;

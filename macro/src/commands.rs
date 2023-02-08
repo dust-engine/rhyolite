@@ -144,18 +144,16 @@ impl CommandsTransformState {
         let global_res_variable_name =
             quote::format_ident!("__future_retain_{}", self.retained_state_count);
         self.retained_state_count += 1;
-        let output_tokens = quote::quote! {unsafe {
-            #global_res_variable_name = #input_tokens;
-            __fut_global_ctx.retain(&mut #global_res_variable_name)
-        }};
         self.retain_bindings.extend(quote::quote! {
-            let mut #global_res_variable_name;
+            let mut #global_res_variable_name = None;
         });
         self.retained_states
             .push(syn::Expr::Verbatim(quote::quote! {
                 #global_res_variable_name
             }));
-        output_tokens
+        quote::quote! {unsafe {
+            #global_res_variable_name = Some(#input_tokens)
+        }}
     }
     fn using_transform(&mut self, input: &syn::Macro) -> proc_macro2::TokenStream {
         // Transform the use! macros. Input should be an expression that implements Default.

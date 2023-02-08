@@ -8,9 +8,10 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{ops::Deref, pin::Pin};
 
-use crate::future::{Res, Access};
+use crate::future::{Access, Res};
 use crate::{
-    Device, ImageLike, QueueFuture, QueueFuturePoll, QueueRef, QueueSubmissionType, QueueMask, QueueSubmissionContextSemaphoreWait,
+    Device, ImageLike, QueueFuture, QueueFuturePoll, QueueMask, QueueRef,
+    QueueSubmissionContextSemaphoreWait, QueueSubmissionType,
 };
 
 pub struct SwapchainLoader {
@@ -58,7 +59,6 @@ impl Drop for SwapchainInner {
     }
 }
 
-
 /// Unsafe APIs for Swapchain
 impl Swapchain {
     /// # Safety
@@ -77,12 +77,11 @@ impl Swapchain {
                 generation: 0,
             };
             Ok(Self {
-                inner: Arc::new(inner)
+                inner: Arc::new(inner),
             })
         }
     }
 
-    
     pub fn recreate(&mut self, info: &vk::SwapchainCreateInfoKHR) -> VkResult<()> {
         unsafe {
             let swapchain = self.inner.loader.create_swapchain(info, None)?;
@@ -91,7 +90,7 @@ impl Swapchain {
                 loader: self.inner.loader.clone(),
                 swapchain,
                 images,
-                generation: self.inner.generation.wrapping_add(1)
+                generation: self.inner.generation.wrapping_add(1),
             };
             self.inner = Arc::new(inner);
         }
@@ -100,8 +99,14 @@ impl Swapchain {
 
     pub fn acquire_next_image(&mut self, semaphore: vk::Semaphore) -> AcquireFuture {
         let (image_indice, suboptimal) = unsafe {
-            self.inner.loader.acquire_next_image(self.inner.swapchain, !0, semaphore, vk::Fence::null())
-        }.unwrap();
+            self.inner.loader.acquire_next_image(
+                self.inner.swapchain,
+                !0,
+                semaphore,
+                vk::Fence::null(),
+            )
+        }
+        .unwrap();
         let image = self.inner.images[image_indice as usize];
         let swapchain_image = SwapchainImage {
             swapchain: self.inner.swapchain,
@@ -111,12 +116,10 @@ impl Swapchain {
             generation: self.inner.generation,
         };
         AcquireFuture {
-            image: swapchain_image,
+            image: Some(swapchain_image),
             semaphore,
-            _marker: PhantomData
         }
     }
-
 }
 
 pub struct SwapchainImage {
@@ -149,13 +152,13 @@ impl ImageLike for SwapchainImage {
 }
 
 #[pin_project]
-pub struct PresentFuture<'b> {
+pub struct PresentFuture {
     queue: QueueRef,
     prev_queue: QueueMask,
-    swapchain: Vec<Res<'b, SwapchainImage>>,
+    swapchain: Vec<Res<SwapchainImage>>,
 }
 
-impl<'b> QueueFuture for PresentFuture<'b> {
+impl QueueFuture for PresentFuture {
     type Output = ();
 
     type RecycledState = ();
@@ -193,20 +196,31 @@ impl<'b> QueueFuture for PresentFuture<'b> {
             let tracking = swapchain.tracking_info.borrow_mut();
 
             // If we consider the queue present operation as a read, then we only need to syncronize with previous writes.
-            ctx.queues[tracking.queue_index.0 as usize].signals.insert((tracking.current_stage_access.write_stages, true));
-            ctx.queues[this.queue.0 as usize].waits.push(QueueSubmissionContextSemaphoreWait::WaitForSignal {
-                dst_stages: vk::PipelineStageFlags2::empty(),
-                queue: tracking.queue_index,
-                src_stages: tracking.current_stage_access.write_stages,
-            });
+            ctx.queues[tracking.queue_index.0 as usize]
+                .signals
+                .insert((tracking.current_stage_access.write_stages, true));
+            ctx.queues[this.queue.0 as usize].waits.push(
+                QueueSubmissionContextSemaphoreWait::WaitForSignal {
+                    dst_stages: vk::PipelineStageFlags2::empty(),
+                    queue: tracking.queue_index,
+                    src_stages: tracking.current_stage_access.write_stages,
+                },
+            );
         }
-        assert!(matches!(ctx.submission[this.queue.0 as usize], QueueSubmissionType::Unknown));
+        assert!(matches!(
+            ctx.submission[this.queue.0 as usize],
+            QueueSubmissionType::Unknown
+        ));
         ctx.submission[this.queue.0 as usize] = QueueSubmissionType::Present(
-            this.swapchain.iter().map(|a| {
-                (a.inner.swapchain, a.inner.indice)
-            }).collect()
+            this.swapchain
+                .iter()
+                .map(|a| (a.inner.swapchain, a.inner.indice))
+                .collect(),
         );
-        QueueFuturePoll::Ready { next_queue: QueueMask::empty(), output: () }
+        QueueFuturePoll::Ready {
+            next_queue: QueueMask::empty(),
+            output: (),
+        }
     }
 
     fn dispose(self) -> Self::RetainedState {
@@ -216,13 +230,12 @@ impl<'b> QueueFuture for PresentFuture<'b> {
 
 #[pin_project]
 
-pub struct AcquireFuture<'a> {
-    image: SwapchainImage,
+pub struct AcquireFuture {
+    image: Option<SwapchainImage>,
     semaphore: vk::Semaphore,
-    _marker: PhantomData<&'a ()>
 }
-impl<'a> QueueFuture for AcquireFuture<'a> {
-    type Output = SwapchainImage;
+impl QueueFuture for AcquireFuture {
+    type Output = Res<SwapchainImage>;
 
     type RecycledState = ();
 
@@ -242,15 +255,16 @@ impl<'a> QueueFuture for AcquireFuture<'a> {
         recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
-        let mut output = Res::new(this.image);
-        let mut tracking = output.tracking_info.borrow_mut();
-        tracking.untracked_semaphore = Some(*this.semaphore);
+        let mut output = Res::new(this.image.take().unwrap());
+        {
+            let mut tracking = output.tracking_info.borrow_mut();
+            tracking.untracked_semaphore = Some(*this.semaphore);
+        }
         QueueFuturePoll::Ready {
             next_queue: QueueMask::empty(),
-            output: this.image.take().unwrap()
+            output,
         }
     }
 
-    fn dispose(self) -> Self::RetainedState {
-    }
+    fn dispose(self) -> Self::RetainedState {}
 }
