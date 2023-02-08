@@ -9,16 +9,18 @@ use std::{
 
 use super::GPUCommandFuture;
 
-struct ResTrackingInfo {
-    prev_stage_access: Access,
-    current_stage_access: Access,
-    last_accessed_stage_index: u32,
+pub struct ResTrackingInfo {
+    pub prev_stage_access: Access,
+    pub current_stage_access: Access,
+    pub last_accessed_stage_index: u32,
 
-    queue_family: u32,
-    queue_index: QueueRef,
-    prev_queue_family: u32,
-    prev_queue_index: QueueRef,
-    last_accessed_timeline: u32,
+    pub queue_family: u32,
+    pub queue_index: QueueRef,
+    pub prev_queue_family: u32,
+    pub prev_queue_index: QueueRef,
+    pub last_accessed_timeline: u32,
+
+    pub untracked_semaphore: Option<vk::Semaphore>
 }
 impl Default for ResTrackingInfo {
     fn default() -> Self {
@@ -32,13 +34,15 @@ impl Default for ResTrackingInfo {
             prev_queue_index: QueueRef::null(),
             prev_queue_family: vk::QUEUE_FAMILY_IGNORED,
             last_accessed_timeline: 0,
+
+            untracked_semaphore: None
         }
     }
 }
 
 pub struct Res<'a, T> {
-    tracking_info: RefCell<ResTrackingInfo>,
-    inner: &'a mut T,
+    pub tracking_info: RefCell<ResTrackingInfo>,
+    pub inner: &'a mut T,
 }
 impl<'a, T> Res<'a, T> {
     pub fn new(inner: &'a mut T) -> Self {
@@ -276,6 +280,20 @@ impl Ord for StageContextBuffer {
     }
 }
 
+pub enum StageContextSemaphoreTransition {
+    Managed {
+        src_queue: QueueRef,
+        dst_queue: QueueRef,
+        src_stages: vk::PipelineStageFlags2,
+        dst_stages: vk::PipelineStageFlags2,
+    },
+    Untracked {
+        semaphore: vk::Semaphore,
+        dst_queue: QueueRef,
+        dst_stages: vk::PipelineStageFlags2
+    }
+}
+
 pub struct StageContext {
     stage_index: u32,
     timeline_index: u32,
@@ -286,12 +304,7 @@ pub struct StageContext {
         BTreeMap<StageContextImage, (vk::MemoryBarrier2, vk::ImageLayout, vk::ImageLayout)>,
 
     // Queue, srcQueue, dstQueue, srcStages, dstStages
-    pub semaphore_transitions: Vec<(
-        QueueRef,
-        QueueRef,
-        vk::PipelineStageFlags2,
-        vk::PipelineStageFlags2,
-    )>,
+    pub semaphore_transitions: Vec<StageContextSemaphoreTransition>,
 }
 
 impl StageContext {
@@ -328,22 +341,32 @@ impl StageContext {
             // We can say unconditionally: This queue, signal on this stage. (what is "this stage?")
             tracking.last_accessed_timeline = self.timeline_index;
 
-            if tracking.prev_queue_family != vk::QUEUE_FAMILY_IGNORED {
-                // queue: please signal xxx on stage
+            if let Some(untracked_semaphore) = tracking.untracked_semaphore.as_mut() {
+                if *untracked_semaphore == vk::Semaphore::null() {
+                    panic!("Attempts to wait on vk::AcquireNextImageKHR twice.");
+                }
+                
                 let mut barrier = vk::MemoryBarrier2::default();
                 get_memory_access(&mut barrier, &tracking.prev_stage_access, access);
-                println!(
-                    "Adding with before {:?}, after {:?}",
-                    tracking.prev_stage_access, access
+
+                self.semaphore_transitions.push(StageContextSemaphoreTransition::Untracked {
+                    semaphore: *untracked_semaphore,
+                    dst_queue: tracking.queue_index,
+                    dst_stages: barrier.dst_stage_mask
+                });
+    
+                *untracked_semaphore = vk::Semaphore::null();
+            } else if tracking.prev_queue_family != vk::QUEUE_FAMILY_IGNORED {
+                let mut barrier = vk::MemoryBarrier2::default();
+                get_memory_access(&mut barrier, &tracking.prev_stage_access, access);
+                self.semaphore_transitions.push(StageContextSemaphoreTransition::Managed
+                    {
+                        src_queue: tracking.prev_queue_index,
+                        dst_queue: tracking.queue_index,
+                        src_stages: barrier.src_stage_mask,
+                        dst_stages: barrier.dst_stage_mask
+                    }
                 );
-                // signal on barrier.src_stage_mask
-                // wait on barrier.dst_stage_mask
-                self.semaphore_transitions.push((
-                    tracking.prev_queue_index,
-                    tracking.queue_index,
-                    barrier.src_stage_mask,
-                    barrier.dst_stage_mask,
-                ));
             }
         }
         if tracking.prev_queue_family != self.queue_family_index {
@@ -608,11 +631,11 @@ impl<'a> CommandBufferRecordContext<'a> {
 }
 
 #[derive(Clone, Default, Debug)]
-struct Access {
-    read_stages: vk::PipelineStageFlags2,
-    read_access: vk::AccessFlags2,
-    write_stages: vk::PipelineStageFlags2,
-    write_access: vk::AccessFlags2,
+pub struct Access {
+    pub read_stages: vk::PipelineStageFlags2,
+    pub read_access: vk::AccessFlags2,
+    pub write_stages: vk::PipelineStageFlags2,
+    pub write_access: vk::AccessFlags2,
 }
 
 impl Access {

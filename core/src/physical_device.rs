@@ -187,16 +187,10 @@ impl PhysicalDevice {
             .push_next(&mut infos.enabled_features.inner)
             .build();
 
-        // Safety: No Host Syncronization rules for VkCreateDevice.
-        // Device retains a reference to Instance, ensuring that Instance is dropped later than Device.
-        let device = unsafe {
-            self.instance
-                .create_device(self.physical_device, &create_info, None)?
-        };
-        let device = Arc::new(Device::new(self, device));
+        let device = Arc::new(Device::new(self.instance.clone(), self, create_info)?);
         drop(list_priorities);
 
-        let queues = unsafe { Queues::new(&device, num_queue_families, &queue_create_infos) };
+        let queues = unsafe { Queues::new(device.clone(), num_queue_families, &queue_create_infos) };
         Ok((device, queues))
     }
 }

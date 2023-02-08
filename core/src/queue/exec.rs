@@ -8,13 +8,13 @@ use std::{
     task::Poll,
 };
 
-use ash::vk;
+use ash::vk::{self, SwapchainKHR};
 
 use pin_project::pin_project;
 
 use crate::{
     commands::SharedCommandPool,
-    future::{CommandBufferRecordContext, GPUCommandFuture},
+    future::{CommandBufferRecordContext, GPUCommandFuture, StageContextSemaphoreTransition},
     Device,
 };
 
@@ -81,11 +81,11 @@ impl Iterator for QueueMaskIterator {
 /// One for each submission.
 pub struct SubmissionContext<'a> {
     // Indexed by queue family.
-    shared_command_pools: &'a mut [Option<SharedCommandPool>],
+    pub shared_command_pools: &'a mut [Option<SharedCommandPool>],
     // Indexed by queue id.
-    queues: Vec<QueueSubmissionContext>,
+    pub queues: Vec<QueueSubmissionContext>,
     // Indexed by queue id.
-    submission: Vec<QueueSubmissionType>,
+    pub submission: Vec<QueueSubmissionType>,
 }
 
 impl<'a> SubmissionContext<'a> {
@@ -94,24 +94,40 @@ impl<'a> SubmissionContext<'a> {
     }
 }
 
+pub enum QueueSubmissionContextSemaphoreWait {
+    /// `dst_stages` of the current queue, must wait on the `src_stages` of `queue`.
+    WaitForSignal {
+        dst_stages: vk::PipelineStageFlags2,
+        queue: QueueRef,
+        src_stages: vk::PipelineStageFlags2,
+    },
+    /// `dst_stages` of the current queue must wait on the `acquire_semaphore`
+    WaitForAcquire {
+        dst_stages: vk::PipelineStageFlags2,
+        acquire_semaphore: vk::Semaphore
+    }
+}
+
 /// One per queue per submission
 pub struct QueueSubmissionContext {
-    queue_family_index: u32,
-    stage_index: u32,
+    pub queue_family_index: u32,
+    pub stage_index: u32,
 
     /// Timeline index is defined as the timeline value signaled at the end of the stage.
     /// Therefore, it begins at 1.
-    timeline_index: u32,
+    pub timeline_index: u32,
 
     /// Stages that the previous stage of the current queue needs to signal on.
-    signals: BTreeSet<vk::PipelineStageFlags2>,
+    /// A list of (src_stages, force_binary)
+    pub signals: BTreeSet<(vk::PipelineStageFlags2, bool)>,
 
     /// Stages that the current stage needs to wait on.
-    waits: Vec<(vk::PipelineStageFlags2, QueueRef, vk::PipelineStageFlags2)>, // the last u32 indexes into the first signals array.
+    /// A list of (dst_stage, src_queue, src_stage)
+    pub waits: Vec<QueueSubmissionContextSemaphoreWait>,
 }
 
 #[derive(Debug)]
-enum QueueSubmissionType {
+pub enum QueueSubmissionType {
     Submit {
         command_buffers: Vec<vk::CommandBuffer>,
         recording_command_buffer: Option<vk::CommandBuffer>,
@@ -122,7 +138,7 @@ enum QueueSubmissionType {
         image_binds: Vec<vk::SparseImageMemoryBindInfo>,
     },
     Acquire,
-    Present,
+    Present(Vec<(vk::SwapchainKHR, u32)>),
     Unknown,
 }
 impl Default for QueueSubmissionType {
@@ -160,7 +176,7 @@ pub struct Queues {
 impl Queues {
     /// This function can only be called once per device.
     pub(crate) unsafe fn new(
-        device: &Arc<Device>,
+        device: Arc<Device>,
         num_queue_family: u32,
         queue_create_infos: &[vk::DeviceQueueCreateInfo],
     ) -> Self {
@@ -254,7 +270,7 @@ impl Queues {
                         CachedStageSubmissions::new(self.queues.len()),
                     );
                     last_stage.apply_signals(&submission_context, semaphore_pool);
-                    current_stage.apply_submissions(&submission_context, &last_stage);
+                    current_stage.apply_submissions(&submission_context, &last_stage, semaphore_pool);
 
                     for (src, dst) in submission_context
                         .submission
@@ -281,7 +297,7 @@ impl Queues {
                         CachedStageSubmissions::new(self.queues.len()),
                     );
                     last_stage.apply_signals(&submission_context, semaphore_pool);
-                    current_stage.apply_submissions(&submission_context, &last_stage);
+                    current_stage.apply_submissions(&submission_context, &last_stage, semaphore_pool);
 
                     for (src, dst) in submission_context
                         .submission
@@ -341,23 +357,49 @@ impl Queues {
                         .unwrap();
                     fences.push(fence);
                 }
+                
+                for info in queue_batch.presents.iter() {
+                    let fences: Vec<_> = (0..info.swapchain_count as usize).map(|_| {
+                        let fence = fence_pool.get();
+                        fences.push(fence);
+                        fence
+                    }).collect();
+                    let fence_info = vk::SwapchainPresentFenceInfoEXT {
+                        swapchain_count: info.swapchain_count,
+                        p_fences: fences.as_ptr(),
+                        ..Default::default()
+                    };
+                    let present_info = vk::PresentInfoKHR {
+                        p_next: &fence_info as *const _ as  *const _,
+                        ..*info
+                    };
+                    self.device.swapchain_loader()
+                        .queue_present(queue, &present_info)
+                        .unwrap();
+                }
             }
         }
         fences
     }
 }
 
+/// Resource pool to be recreated for each submission.
 pub struct TimelineSemaphorePool {
     device: Arc<Device>,
-    all_semaphores: Vec<vk::Semaphore>,
+    timeline_semaphores: Vec<vk::Semaphore>,
     semaphore_ops: Vec<(vk::Semaphore, u64)>,
+
+    binary_semaphores: Vec<vk::Semaphore>,
+    binary_indice: usize,
 }
 impl TimelineSemaphorePool {
     pub fn new(device: Arc<Device>) -> Self {
         Self {
             device,
-            all_semaphores: Vec::new(),
+            timeline_semaphores: Vec::new(),
             semaphore_ops: Vec::new(),
+            binary_semaphores: Vec::new(),
+            binary_indice: 0,
         }
     }
     pub fn signal(&mut self) -> (vk::Semaphore, u64) {
@@ -370,7 +412,7 @@ impl TimelineSemaphorePool {
                 .push_next(&mut type_info)
                 .build();
             let semaphore = unsafe { self.device.create_semaphore(&create_info, None).unwrap() };
-            self.all_semaphores.push(semaphore);
+            self.timeline_semaphores.push(semaphore);
             (semaphore, 0)
         });
         (semaphore, timeline + 1)
@@ -378,10 +420,33 @@ impl TimelineSemaphorePool {
     pub fn waited(&mut self, semaphore: vk::Semaphore, timeline: u64) {
         self.semaphore_ops.push((semaphore, timeline));
     }
+    pub fn get_binary_semaphore(&mut self) -> vk::Semaphore {
+        if self.binary_indice <= self.binary_semaphores.len() {
+            let semaphore = unsafe {
+                self.device
+                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                    .unwrap()
+            };
+            self.binary_semaphores.push(semaphore);
+        }
+        let semaphore = self.binary_semaphores[self.binary_indice];
+        self.binary_indice += 1;
+        semaphore
+    }
+    pub fn reset(&mut self) {
+        assert_eq!(self.timeline_semaphores.len(), self.semaphore_ops.len());
+        for semaphore in self.timeline_semaphores.drain(..) {
+            unsafe {
+                self.device.destroy_semaphore(semaphore, None);
+            }
+        }
+        self.binary_indice = 0;
+        self.semaphore_ops.clear();
+    }
 }
 impl Drop for TimelineSemaphorePool {
     fn drop(&mut self) {
-        for semaphore in self.all_semaphores.iter() {
+        for semaphore in self.timeline_semaphores.iter() {
             unsafe {
                 self.device.destroy_semaphore(*semaphore, None);
             }
@@ -389,6 +454,7 @@ impl Drop for TimelineSemaphorePool {
     }
 }
 
+/// Resource pool to be reset each frame.
 pub struct FencePool {
     device: Arc<Device>,
     all_fences: Vec<vk::Fence>,
@@ -469,14 +535,19 @@ impl CachedStageSubmissions {
             .zip(self.queues.iter_mut())
             .enumerate()
         {
-            cache.signals.extend(ctx.signals.iter().map(|stage| {
-                let (semaphore, value) = semaphore_pool.signal();
-                (*stage, (semaphore, value))
+            cache.signals.extend(ctx.signals.iter().map(|(stage, force_binary)| {
+                if *force_binary {
+                    let semaphore = semaphore_pool.get_binary_semaphore();
+                    (*stage, (semaphore, u64::MAX))
+                } else {
+                    let (semaphore, value) = semaphore_pool.signal();
+                    (*stage, (semaphore, value))
+                }
             }));
         }
     }
     /// Called on the current stage.
-    fn apply_submissions(&mut self, submission_context: &SubmissionContext, prev_stage: &Self) {
+    fn apply_submissions(&mut self, submission_context: &SubmissionContext, prev_stage: &Self, semaphore_pool: &mut TimelineSemaphorePool) {
         for (_i, (ctx, cache)) in submission_context
             .queues
             .iter()
@@ -485,12 +556,29 @@ impl CachedStageSubmissions {
         {
             cache
                 .waits
-                .extend(ctx.waits.iter().map(|(dst_stage, src_queue, src_stage)| {
-                    let (semaphore, value) = prev_stage.queues[src_queue.0 as usize]
-                        .signals
-                        .get(src_stage)
-                        .unwrap();
-                    (*semaphore, *value, *dst_stage)
+                .extend(ctx.waits.iter().map(|wait| {
+                    match wait {
+                        QueueSubmissionContextSemaphoreWait::WaitForSignal { dst_stages, queue, src_stages } => {
+                            let (semaphore, value) = prev_stage.queues[queue.0 as usize]
+                            .signals
+                            .get(src_stages)
+                            .unwrap();
+                            if *value != u64::MAX {
+                                semaphore_pool.waited(*semaphore, *value);
+        
+                                (*semaphore, *value, *dst_stages)
+                            } else {
+                                // when value == u64::MAX, it's a binary semaphore.
+                                // the `value` here gets fed into the `value` field of vk::SemaphoreSubmitInfo
+                                // When semaphore is a binary semaphore, this value was ignored.
+                                // We can also just return *value here, but to be safe let's set it to 0
+                                (*semaphore, 0, *dst_stages)
+                            }
+                        },
+                        QueueSubmissionContextSemaphoreWait::WaitForAcquire { dst_stages, acquire_semaphore } => {
+                            (*acquire_semaphore, 0, *dst_stages)
+                        }
+                    }
                 }));
         }
     }
@@ -500,6 +588,7 @@ impl CachedStageSubmissions {
 pub struct QueueSubmissionBatch {
     submits: Vec<vk::SubmitInfo2>,
     sparse_binds: Vec<vk::BindSparseInfo>,
+    presents: Vec<vk::PresentInfoKHR>
 }
 pub struct SubmissionBatch {
     queues: Vec<QueueSubmissionBatch>,
@@ -564,7 +653,6 @@ impl SubmissionBatch {
     }
     fn add_stage(&mut self, stage: CachedStageSubmissions) {
         for (ctx, self_ctx) in stage.queues.into_iter().zip(self.queues.iter_mut()) {
-            println!("{:?}", ctx.ty);
             match ctx.ty {
                 QueueSubmissionType::Submit {
                     command_buffers,
@@ -677,8 +765,34 @@ impl SubmissionBatch {
                     std::mem::forget(image_binds);
                     std::mem::forget(timeline_info);
                 }
+                QueueSubmissionType::Present(presents) => {
+                    let waits = ctx
+                        .waits
+                        .iter()
+                        .map(|(semaphore, value, stage)| {
+                            assert_eq!(*value, u64::MAX);
+                            assert!(stage.is_empty());
+                            *semaphore
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
+                    assert!(ctx.signals.is_empty());
+                    let swapchains: Box<[vk::SwapchainKHR]> = presents.iter().map(|(swapchain, _)| *swapchain).collect::<Vec<_>>().into_boxed_slice();
+                    let indices: Box<[u32]> = presents.iter().map(|(_, indice)| *indice).collect::<Vec<_>>().into_boxed_slice();
+                    self_ctx.presents.push(vk::PresentInfoKHR {
+                        wait_semaphore_count: waits.len() as u32,
+                        p_wait_semaphores: waits.as_ptr(),
+                        swapchain_count: swapchains.len() as u32,
+                        p_swapchains: swapchains.as_ptr(),
+                        p_image_indices: indices.as_ptr(),
+                        p_results: std::ptr::null_mut(),
+                        ..Default::default()
+                    });
+                    std::mem::forget(waits);
+                    std::mem::forget(swapchains);
+                    std::mem::forget(indices);
+                },
                 QueueSubmissionType::Acquire => todo!(),
-                QueueSubmissionType::Present => todo!(),
                 QueueSubmissionType::Unknown => (),
             }
         }
@@ -737,6 +851,20 @@ impl Drop for SubmissionBatch {
                         timeline.wait_semaphore_value_count as usize,
                     )));
                     drop(timeline);
+                }
+                for present in &queue.presents {
+                    drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                        present.p_swapchains as *mut vk::SwapchainKHR,
+                        present.swapchain_count as usize,
+                    )));
+                    drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                        present.p_image_indices as *mut u32,
+                        present.swapchain_count as usize,
+                    )));
+                    drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                        present.p_wait_semaphores as *mut vk::Semaphore,
+                        present.wait_semaphore_count as usize,
+                    )));
                 }
             }
         }
@@ -1104,14 +1232,23 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
 
         let poll = if q.stage_index == 0 {
             command_ctx.record_first_step(this.inner, recycled_state, |a| {
-                for (src_queue, dst_queue, src_stages, dst_stages) in &a.semaphore_transitions {
-                    let _id = ctx.queues[src_queue.0 as usize].signals.len() as u32;
-                    ctx.queues[src_queue.0 as usize].signals.insert(*src_stages);
-                    ctx.queues[dst_queue.0 as usize].waits.push((
-                        *dst_stages,
-                        *src_queue,
-                        *src_stages,
-                    ));
+                for transition in &a.semaphore_transitions {
+                    match transition {
+                        StageContextSemaphoreTransition::Managed { src_queue, dst_queue, src_stages, dst_stages } => {
+                            ctx.queues[src_queue.0 as usize].signals.insert((*src_stages, false));
+                            ctx.queues[dst_queue.0 as usize].waits.push(QueueSubmissionContextSemaphoreWait::WaitForSignal{
+                                dst_stages: *dst_stages,
+                                queue: *src_queue,
+                                src_stages: *src_stages,
+                            });
+                        },
+                        StageContextSemaphoreTransition::Untracked { semaphore, dst_queue, dst_stages } => {
+                            ctx.queues[dst_queue.0 as usize].waits.push(QueueSubmissionContextSemaphoreWait::WaitForAcquire {
+                                dst_stages: *dst_stages,
+                                acquire_semaphore: *semaphore
+                            });
+                        },
+                    }
                 }
             })
         } else {
