@@ -30,13 +30,19 @@ pub struct Device {
 
 impl Device {
     pub fn swapchain_loader(&self) -> &ash::extensions::khr::Swapchain {
-        self.swapchain_loader.as_ref().unwrap()
+        self.swapchain_loader
+            .as_ref()
+            .expect("VkSwapchainKHR extension was not enabled")
     }
     pub fn rtx_loader(&self) -> &ash::extensions::khr::RayTracingPipeline {
-        self.rtx_loader.as_ref().unwrap()
+        self.rtx_loader
+            .as_ref()
+            .expect("VkRayTracingPipelineKHR extension was not enabled")
     }
     pub fn accel_struct_loader(&self) -> &ash::extensions::khr::AccelerationStructure {
-        self.accel_struct_loader.as_ref().unwrap()
+        self.accel_struct_loader
+            .as_ref()
+            .expect("VkAccelerationStructureKHR extensions was not enabled")
     }
     pub(crate) fn new(
         instance: Arc<Instance>,

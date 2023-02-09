@@ -8,10 +8,10 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{ops::Deref, pin::Pin};
 
-use crate::future::{Access, Res};
+use crate::future::{Access, Res, ResImage};
 use crate::{
-    Device, ImageLike, QueueFuture, QueueFuturePoll, QueueMask, QueueRef,
-    QueueSubmissionContextSemaphoreWait, QueueSubmissionType,
+    Device, ImageLike, PhysicalDevice, QueueFuture, QueueFuturePoll, QueueMask, QueueRef,
+    QueueSubmissionContextSemaphoreWait, QueueSubmissionType, Surface,
 };
 
 pub struct SwapchainLoader {
@@ -41,10 +41,14 @@ impl SwapchainLoader {
 }
 
 pub struct SwapchainInner {
-    loader: Arc<SwapchainLoader>,
+    device: Arc<Device>,
     swapchain: vk::SwapchainKHR,
     images: Vec<vk::Image>,
     generation: u64,
+
+    surface: Arc<Surface>,
+    extent: vk::Extent2D,
+    layer_count: u32,
 }
 
 pub struct Swapchain {
@@ -54,8 +58,73 @@ pub struct Swapchain {
 impl Drop for SwapchainInner {
     fn drop(&mut self) {
         unsafe {
-            self.loader.destroy_swapchain(self.swapchain, None);
+            self.device
+                .swapchain_loader()
+                .destroy_swapchain(self.swapchain, None);
         }
+    }
+}
+
+pub struct SwapchainCreateInfo<'a> {
+    pub flags: vk::SwapchainCreateFlagsKHR,
+    pub min_image_count: u32,
+    pub image_format: vk::Format,
+    pub image_color_space: vk::ColorSpaceKHR,
+    pub image_extent: vk::Extent2D,
+    pub image_array_layers: u32,
+    pub image_usage: vk::ImageUsageFlags,
+    pub image_sharing_mode: vk::SharingMode,
+    pub queue_family_indices: &'a [u32],
+    pub pre_transform: vk::SurfaceTransformFlagsKHR,
+    pub composite_alpha: vk::CompositeAlphaFlagsKHR,
+    pub present_mode: vk::PresentModeKHR,
+    pub clipped: bool,
+}
+
+pub fn color_space_area(color_space: vk::ColorSpaceKHR) -> f32 {
+    match color_space {
+        vk::ColorSpaceKHR::SRGB_NONLINEAR => 0.112,
+        vk::ColorSpaceKHR::EXTENDED_SRGB_NONLINEAR_EXT => 0.112,
+        vk::ColorSpaceKHR::ADOBERGB_LINEAR_EXT => 0.151,
+        vk::ColorSpaceKHR::DISPLAY_P3_NONLINEAR_EXT => 0.152,
+        vk::ColorSpaceKHR::DISPLAY_P3_LINEAR_EXT => 0.152,
+        vk::ColorSpaceKHR::DCI_P3_NONLINEAR_EXT => 0.5,
+        vk::ColorSpaceKHR::BT709_LINEAR_EXT => 0.112,
+        vk::ColorSpaceKHR::BT709_NONLINEAR_EXT => 0.112,
+        vk::ColorSpaceKHR::BT2020_LINEAR_EXT => 0.212,
+        vk::ColorSpaceKHR::HDR10_ST2084_EXT => 0.212,
+        vk::ColorSpaceKHR::HDR10_HLG_EXT => 0.212,
+        vk::ColorSpaceKHR::DOLBYVISION_EXT => 0.212,
+        vk::ColorSpaceKHR::PASS_THROUGH_EXT => 0.0,
+        vk::ColorSpaceKHR::DISPLAY_NATIVE_AMD => 1.0,
+        _ => 0.0,
+    }
+}
+
+impl<'a> SwapchainCreateInfo<'a> {
+    pub fn pick(
+        surface: &Surface,
+        pdevice: &PhysicalDevice,
+        usage: vk::ImageUsageFlags,
+    ) -> VkResult<Self> {
+        let formats = surface
+            .pick_format(pdevice, usage)?
+            .ok_or(vk::Result::ERROR_FORMAT_NOT_SUPPORTED)?;
+        Ok(Self {
+            flags: vk::SwapchainCreateFlagsKHR::empty(),
+            min_image_count: 3,
+            image_format: formats.format,
+            image_color_space: formats.color_space,
+            image_extent: Default::default(),
+            image_array_layers: 1,
+            image_usage: usage,
+            image_sharing_mode: vk::SharingMode::EXCLUSIVE,
+            queue_family_indices: &[],
+            pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
+            composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
+            present_mode: vk::PresentModeKHR::FIFO,
+            clipped: true,
+        })
     }
 }
 
@@ -64,17 +133,39 @@ impl Swapchain {
     /// # Safety
     /// <https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkCreateSwapchainKHR.html>
     pub fn create(
-        loader: Arc<SwapchainLoader>,
-        info: &vk::SwapchainCreateInfoKHR,
+        device: Arc<Device>,
+        surface: Arc<Surface>,
+        info: SwapchainCreateInfo,
     ) -> VkResult<Self> {
         unsafe {
-            let swapchain = loader.create_swapchain(info, None)?;
-            let images = loader.get_swapchain_images(swapchain)?;
+            let info = vk::SwapchainCreateInfoKHR {
+                flags: info.flags,
+                surface: surface.surface,
+                min_image_count: info.min_image_count,
+                image_format: info.image_format,
+                image_color_space: info.image_color_space,
+                image_extent: info.image_extent,
+                image_array_layers: info.image_array_layers,
+                image_usage: info.image_usage,
+                image_sharing_mode: info.image_sharing_mode,
+                queue_family_index_count: info.queue_family_indices.len() as u32,
+                p_queue_family_indices: info.queue_family_indices.as_ptr(),
+                pre_transform: info.pre_transform,
+                composite_alpha: info.composite_alpha,
+                present_mode: info.present_mode,
+                clipped: info.clipped.into(),
+                ..Default::default()
+            };
+            let swapchain = device.swapchain_loader().create_swapchain(&info, None)?;
+            let images = device.swapchain_loader().get_swapchain_images(swapchain)?;
             let inner = SwapchainInner {
-                loader,
+                device,
+                surface,
                 swapchain,
                 images,
                 generation: 0,
+                extent: info.image_extent,
+                layer_count: info.image_array_layers,
             };
             Ok(Self {
                 inner: Arc::new(inner),
@@ -82,15 +173,45 @@ impl Swapchain {
         }
     }
 
-    pub fn recreate(&mut self, info: &vk::SwapchainCreateInfoKHR) -> VkResult<()> {
+    pub fn recreate(&mut self, info: SwapchainCreateInfo) -> VkResult<()> {
         unsafe {
-            let swapchain = self.inner.loader.create_swapchain(info, None)?;
-            let images = self.inner.loader.get_swapchain_images(swapchain)?;
+            let info = vk::SwapchainCreateInfoKHR {
+                flags: info.flags,
+                surface: self.inner.surface.surface,
+                min_image_count: info.min_image_count,
+                image_format: info.image_format,
+                image_color_space: info.image_color_space,
+                image_extent: info.image_extent,
+                image_array_layers: info.image_array_layers,
+                image_usage: info.image_usage,
+                image_sharing_mode: info.image_sharing_mode,
+                queue_family_index_count: info.queue_family_indices.len() as u32,
+                p_queue_family_indices: info.queue_family_indices.as_ptr(),
+                pre_transform: info.pre_transform,
+                composite_alpha: info.composite_alpha,
+                present_mode: info.present_mode,
+                clipped: info.clipped.into(),
+                old_swapchain: self.inner.swapchain,
+                ..Default::default()
+            };
+            let swapchain = self
+                .inner
+                .device
+                .swapchain_loader()
+                .create_swapchain(&info, None)?;
+            let images = self
+                .inner
+                .device
+                .swapchain_loader()
+                .get_swapchain_images(swapchain)?;
             let inner = SwapchainInner {
-                loader: self.inner.loader.clone(),
+                device: self.inner.device.clone(),
+                surface: self.inner.surface.clone(),
                 swapchain,
                 images,
                 generation: self.inner.generation.wrapping_add(1),
+                extent: info.image_extent,
+                layer_count: info.image_array_layers,
             };
             self.inner = Arc::new(inner);
         }
@@ -99,7 +220,7 @@ impl Swapchain {
 
     pub fn acquire_next_image(&mut self, semaphore: vk::Semaphore) -> AcquireFuture {
         let (image_indice, suboptimal) = unsafe {
-            self.inner.loader.acquire_next_image(
+            self.inner.device.swapchain_loader().acquire_next_image(
                 self.inner.swapchain,
                 !0,
                 semaphore,
@@ -114,6 +235,8 @@ impl Swapchain {
             indice: image_indice,
             suboptimal,
             generation: self.inner.generation,
+            extent: self.inner.extent,
+            layer_count: self.inner.layer_count,
         };
         AcquireFuture {
             image: Some(swapchain_image),
@@ -128,6 +251,8 @@ pub struct SwapchainImage {
     indice: u32,
     suboptimal: bool,
     generation: u64,
+    extent: vk::Extent2D,
+    layer_count: u32,
 }
 impl Drop for SwapchainImage {
     fn drop(&mut self) {
@@ -144,9 +269,16 @@ impl ImageLike for SwapchainImage {
         vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
-            level_count: vk::REMAINING_MIP_LEVELS,
+            level_count: 1,
             base_array_layer: 0,
-            layer_count: vk::REMAINING_ARRAY_LAYERS,
+            layer_count: self.layer_count,
+        }
+    }
+    fn extent(&self) -> vk::Extent3D {
+        vk::Extent3D {
+            width: self.extent.width,
+            height: self.extent.height,
+            depth: 1,
         }
     }
 }
@@ -155,7 +287,17 @@ impl ImageLike for SwapchainImage {
 pub struct PresentFuture {
     queue: QueueRef,
     prev_queue: QueueMask,
-    swapchain: Vec<Res<SwapchainImage>>,
+    swapchain: Vec<ResImage<SwapchainImage>>,
+}
+
+impl ResImage<SwapchainImage> {
+    pub fn present(self) -> PresentFuture {
+        PresentFuture {
+            queue: QueueRef::null(),
+            prev_queue: QueueMask::empty(),
+            swapchain: vec![self],
+        }
+    }
 }
 
 impl QueueFuture for PresentFuture {
@@ -163,7 +305,7 @@ impl QueueFuture for PresentFuture {
 
     type RecycledState = ();
 
-    type RetainedState = ();
+    type RetainedState = Vec<ResImage<SwapchainImage>>;
 
     fn init(
         self: Pin<&mut Self>,
@@ -171,8 +313,22 @@ impl QueueFuture for PresentFuture {
         recycled_state: &mut Self::RecycledState,
         prev_queue: crate::QueueMask,
     ) {
-        let mut this = self.project();
+        let this = self.project();
         *this.prev_queue = prev_queue;
+
+        if this.queue.is_null() {
+            let mut iter = prev_queue.iter();
+            if let Some(inherited_queue) = iter.next() {
+                *this.queue = inherited_queue;
+                assert!(
+                    iter.next().is_none(),
+                    "Cannot use derived queue when the future depends on more than one queues"
+                );
+            } else {
+                // Default to the first queue, if the queue does not have predecessor.
+                *this.queue = QueueRef(0);
+            }
+        }
     }
 
     fn record(
@@ -182,18 +338,12 @@ impl QueueFuture for PresentFuture {
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
 
-        let queue = {
-            let mut mask = QueueMask::empty();
-            mask.set_queue(*this.queue);
-            mask
-        };
-
         if !this.prev_queue.is_empty() {
             *this.prev_queue = QueueMask::empty();
             return QueueFuturePoll::Semaphore;
         }
         for swapchain in this.swapchain.iter() {
-            let tracking = swapchain.tracking_info.borrow_mut();
+            let tracking = swapchain.res.tracking_info.borrow_mut();
 
             // If we consider the queue present operation as a read, then we only need to syncronize with previous writes.
             ctx.queues[tracking.queue_index.0 as usize]
@@ -214,7 +364,7 @@ impl QueueFuture for PresentFuture {
         ctx.submission[this.queue.0 as usize] = QueueSubmissionType::Present(
             this.swapchain
                 .iter()
-                .map(|a| (a.inner.swapchain, a.inner.indice))
+                .map(|a| (a.res.inner.swapchain, a.res.inner.indice))
                 .collect(),
         );
         QueueFuturePoll::Ready {
@@ -224,7 +374,7 @@ impl QueueFuture for PresentFuture {
     }
 
     fn dispose(self) -> Self::RetainedState {
-        ()
+        self.swapchain
     }
 }
 
@@ -235,7 +385,7 @@ pub struct AcquireFuture {
     semaphore: vk::Semaphore,
 }
 impl QueueFuture for AcquireFuture {
-    type Output = Res<SwapchainImage>;
+    type Output = ResImage<SwapchainImage>;
 
     type RecycledState = ();
 
@@ -255,9 +405,9 @@ impl QueueFuture for AcquireFuture {
         recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
-        let output = Res::new(this.image.take().unwrap());
+        let output = ResImage::new(this.image.take().unwrap(), vk::ImageLayout::UNDEFINED);
         {
-            let mut tracking = output.tracking_info.borrow_mut();
+            let mut tracking = output.res.tracking_info.borrow_mut();
             tracking.untracked_semaphore = Some(*this.semaphore);
         }
         QueueFuturePoll::Ready {

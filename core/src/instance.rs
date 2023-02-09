@@ -2,8 +2,10 @@ use crate::cstr;
 use crate::debug::DebugUtilsMessenger;
 use ash::{prelude::VkResult, vk};
 use std::{
+    collections::BTreeSet,
     ffi::{c_char, CStr},
     fmt::Debug,
+    mem::ManuallyDrop,
     ops::Deref,
     sync::Arc,
 };
@@ -11,7 +13,9 @@ use std::{
 pub struct Instance {
     entry: Arc<ash::Entry>,
     instance: ash::Instance,
-    debug_utils: DebugUtilsMessenger,
+    debug_utils: ManuallyDrop<Option<DebugUtilsMessenger>>,
+
+    surface_loader: Option<Box<ash::extensions::khr::Surface>>,
 }
 
 pub struct Version(pub(crate) u32);
@@ -55,13 +59,13 @@ impl Debug for Version {
 }
 
 pub struct InstanceCreateInfo<'a> {
-    application_name: &'a CStr,
-    application_version: Version,
-    engine_name: &'a CStr,
-    engine_version: Version,
-    api_version: Version,
-    enabled_layer_names: &'a [*const c_char],
-    enabled_extension_names: &'a [*const c_char],
+    pub application_name: &'a CStr,
+    pub application_version: Version,
+    pub engine_name: &'a CStr,
+    pub engine_version: Version,
+    pub api_version: Version,
+    pub enabled_layer_names: &'a [*const c_char],
+    pub enabled_extension_names: &'a [*const c_char],
 }
 
 const DEFAULT_INSTANCE_EXTENSIONS: &[*const c_char] =
@@ -82,6 +86,12 @@ impl<'a> Default for InstanceCreateInfo<'a> {
 
 impl Instance {
     pub fn create(entry: Arc<ash::Entry>, info: &InstanceCreateInfo) -> VkResult<Self> {
+        let enabled_extensions: BTreeSet<&CStr> = info
+            .enabled_extension_names
+            .iter()
+            .map(|ptr| unsafe { CStr::from_ptr(*ptr) })
+            .collect();
+
         let info = vk::InstanceCreateInfo {
             p_application_info: &vk::ApplicationInfo {
                 p_application_name: info.application_name.as_ptr(),
@@ -98,19 +108,35 @@ impl Instance {
             ..Default::default()
         };
         // Safety: No Host Syncronization rules for vkCreateInstance.
-        let mut instance = unsafe { entry.create_instance(&info, None)? };
-        let debug_utils = DebugUtilsMessenger::new(&entry, &mut instance)?;
+        let instance = unsafe { entry.create_instance(&info, None)? };
+
+        let debug_utils = if enabled_extensions.contains(ash::extensions::ext::DebugUtils::name()) {
+            ManuallyDrop::new(Some(DebugUtilsMessenger::new(&entry, &instance)?))
+        } else {
+            ManuallyDrop::new(None)
+        };
+        let surface_loader = if enabled_extensions.contains(ash::extensions::khr::Surface::name()) {
+            Some(Box::new(ash::extensions::khr::Surface::new(
+                &entry, &instance,
+            )))
+        } else {
+            None
+        };
         Ok(Instance {
             entry,
             instance,
             debug_utils,
+            surface_loader,
         })
     }
     pub fn entry(&self) -> &Arc<ash::Entry> {
         &self.entry
     }
     pub fn debug_utils(&self) -> &DebugUtilsMessenger {
-        &self.debug_utils
+        self.debug_utils.as_ref().unwrap()
+    }
+    pub fn surface_loader(&self) -> &ash::extensions::khr::Surface {
+        self.surface_loader.as_ref().unwrap()
     }
 }
 
@@ -133,9 +159,7 @@ impl Drop for Instance {
         // because PhysicalDevice retains an Arc to Instance.
         // If there still exist a copy of PhysicalDevice, the Instance wouldn't be dropped.
         unsafe {
-            self.debug_utils
-                .debug_utils
-                .destroy_debug_utils_messenger(self.debug_utils.messenger, None);
+            ManuallyDrop::drop(&mut self.debug_utils);
             self.instance.destroy_instance(None);
         }
     }

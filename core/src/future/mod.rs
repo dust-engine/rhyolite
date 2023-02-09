@@ -16,6 +16,13 @@ pub trait Disposable {
 impl Disposable for () {
     fn dispose(self) {}
 }
+impl<T: Disposable> Disposable for Vec<T> {
+    fn dispose(self) {
+        for i in self.into_iter() {
+            i.dispose();
+        }
+    }
+}
 impl<T1, T2> Disposable for (T1, T2)
 where
     T1: Disposable,

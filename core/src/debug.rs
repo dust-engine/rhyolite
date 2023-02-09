@@ -7,12 +7,20 @@ use crate::future::GPUCommandFuture;
 use crate::HasDevice;
 
 pub struct DebugUtilsMessenger {
-    pub(crate) debug_utils: ext::DebugUtils,
+    pub(crate) debug_utils: Box<ext::DebugUtils>,
     pub(crate) messenger: vk::DebugUtilsMessengerEXT,
+}
+impl Drop for DebugUtilsMessenger {
+    fn drop(&mut self) {
+        unsafe {
+            self.debug_utils
+                .destroy_debug_utils_messenger(self.messenger, None);
+        }
+    }
 }
 
 impl DebugUtilsMessenger {
-    pub fn new(entry: &ash::Entry, instance: &mut ash::Instance) -> VkResult<Self> {
+    pub fn new(entry: &ash::Entry, instance: &ash::Instance) -> VkResult<Self> {
         let debug_utils = ext::DebugUtils::new(entry, instance);
 
         let messenger = unsafe {
@@ -37,7 +45,7 @@ impl DebugUtilsMessenger {
             )?
         };
         Ok(Self {
-            debug_utils,
+            debug_utils: Box::new(debug_utils),
             messenger,
         })
     }

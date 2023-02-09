@@ -78,7 +78,7 @@ impl<T> Res<T> {
 }
 
 pub struct ResImage<T> {
-    res: Res<T>,
+    pub res: Res<T>,
     old_layout: vk::ImageLayout,
     layout: vk::ImageLayout,
 }
@@ -199,6 +199,7 @@ impl<'host, 'retain> CommandBufferRecordContextInner<'host, 'retain> {
 struct StageContextImage {
     image: vk::Image,
     subresource_range: vk::ImageSubresourceRange,
+    extent: vk::Extent3D,
 }
 impl ImageLike for StageContextImage {
     fn raw_image(&self) -> vk::Image {
@@ -207,6 +208,10 @@ impl ImageLike for StageContextImage {
 
     fn subresource_range(&self) -> vk::ImageSubresourceRange {
         self.subresource_range
+    }
+
+    fn extent(&self) -> vk::Extent3D {
+        self.extent
     }
 }
 
@@ -488,6 +493,7 @@ impl StageContext {
             .entry(StageContextImage {
                 image: res.inner().raw_image(),
                 subresource_range: res.inner().subresource_range(),
+                extent: res.inner().extent(),
             })
             .or_insert((Default::default(), res.old_layout, layout));
         get_memory_access(barrier, &tracking.prev_stage_access, &access);
@@ -534,6 +540,7 @@ impl StageContext {
             .entry(StageContextImage {
                 image: res.inner().raw_image(),
                 subresource_range: res.inner().subresource_range(),
+                extent: res.inner().extent(),
             })
             .or_insert((Default::default(), res.old_layout, layout));
         get_memory_access(barrier, &tracking.prev_stage_access, &access);
@@ -938,6 +945,7 @@ mod tests {
                 base_array_layer: 0,
                 layer_count: vk::REMAINING_ARRAY_LAYERS,
             },
+            extent: vk::Extent3D::default(),
         };
         let image2: vk::Image = unsafe { std::mem::transmute(456_usize) };
         let mut stage_image2 = StageContextImage {
@@ -949,6 +957,7 @@ mod tests {
                 base_array_layer: 0,
                 layer_count: vk::REMAINING_ARRAY_LAYERS,
             },
+            extent: vk::Extent3D::default(),
         };
 
         let mut buffer1: vk::Buffer = unsafe { std::mem::transmute(4562_usize) };

@@ -663,6 +663,22 @@ impl Debug for SubmissionBatch {
                     }
                 }
             }
+            if !queue.presents.is_empty() {
+                f.write_char('\n')?;
+                f.write_fmt(format_args!("  Queue {i} Presents:\n"))?;
+                for present in queue.presents.iter() {
+                    unsafe {
+                        for i in 0..present.wait_semaphore_count {
+                            let semaphore = &*present.p_wait_semaphores.add(i as usize);
+                            f.write_fmt(format_args!("    Wait semaphore {:?}\n", semaphore,))?;
+                        }
+                    }
+                    f.write_fmt(format_args!(
+                        "    Present {} swap chains\n",
+                        present.swapchain_count
+                    ))?;
+                }
+            }
         }
         f.write_str("}")?;
         Ok(())
@@ -793,7 +809,7 @@ impl SubmissionBatch {
                         .waits
                         .iter()
                         .map(|(semaphore, value, stage)| {
-                            assert_eq!(*value, u64::MAX);
+                            assert_eq!(*value, 0);
                             assert!(stage.is_empty());
                             *semaphore
                         })
