@@ -255,7 +255,7 @@ impl QueueFuture for AcquireFuture {
         recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
-        let mut output = Res::new(this.image.take().unwrap());
+        let output = Res::new(this.image.take().unwrap());
         {
             let mut tracking = output.tracking_info.borrow_mut();
             tracking.untracked_semaphore = Some(*this.semaphore);

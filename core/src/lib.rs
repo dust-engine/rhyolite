@@ -2,6 +2,7 @@
 #![feature(trait_alias)]
 #![feature(cstr_from_bytes_until_nul)]
 #![feature(negative_impls)]
+#![feature(specialization)]
 #![feature(array_zip)]
 
 pub use cstr::cstr;
