@@ -291,6 +291,8 @@ impl Queues {
                     for ctx in submission_context.queues.iter_mut() {
                         ctx.stage_index = 0;
                         ctx.timeline_index += 1;
+                        ctx.waits.clear();
+                        ctx.signals.clear();
                     }
                 }
                 QueueFuturePoll::Ready {

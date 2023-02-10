@@ -26,6 +26,7 @@ pub struct Device {
     swapchain_loader: Option<Box<ash::extensions::khr::Swapchain>>,
     rtx_loader: Option<Box<ash::extensions::khr::RayTracingPipeline>>,
     accel_struct_loader: Option<Box<ash::extensions::khr::AccelerationStructure>>,
+    deferred_host_operation_loader: Option<Box<ash::extensions::khr::DeferredHostOperations>>,
 }
 
 impl Device {
@@ -43,6 +44,11 @@ impl Device {
         self.accel_struct_loader
             .as_ref()
             .expect("VkAccelerationStructureKHR extensions was not enabled")
+    }
+    pub fn deferred_host_operation_loader(&self) -> &ash::extensions::khr::DeferredHostOperations {
+        self.deferred_host_operation_loader
+            .as_ref()
+            .expect("VkDeferredHostOperation extension was not enabled")
     }
     pub(crate) fn new(
         instance: Arc<Instance>,
@@ -83,6 +89,15 @@ impl Device {
             } else {
                 None
             };
+            
+        let deferred_host_operation_loader =
+        if extensions.contains(ash::extensions::khr::DeferredHostOperations::name()) {
+            Some(Box::new(ash::extensions::khr::DeferredHostOperations::new(
+                &instance, &device,
+            )))
+        } else {
+            None
+        };
 
         Ok(Self {
             instance,
@@ -91,6 +106,7 @@ impl Device {
             swapchain_loader,
             rtx_loader,
             accel_struct_loader,
+            deferred_host_operation_loader
         })
     }
     pub fn instance(&self) -> &Arc<Instance> {

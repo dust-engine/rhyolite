@@ -75,6 +75,19 @@ impl<T> Res<T> {
     pub fn inner_mut(&mut self) -> &mut T {
         &mut self.inner
     }
+
+    pub fn map<RET>(mut self, mapper: impl FnOnce(T) -> RET) -> Res<RET> {
+        let (inner, tracking) = unsafe {
+            let inner = ManuallyDrop::take(&mut self.inner);
+            let tracking = ManuallyDrop::take(&mut self.tracking_info);
+            std::mem::forget(self);
+            (inner, tracking)
+        };
+        Res {
+            inner: ManuallyDrop::new((mapper)(inner)),
+            tracking_info: ManuallyDrop::new(tracking),
+        }
+    }
 }
 
 pub struct ResImage<T> {
@@ -100,6 +113,15 @@ impl<T> ResImage<T> {
     }
     pub fn inner_mut(&mut self) -> &mut T {
         &mut self.res.inner
+    }
+
+    pub fn map<RET>(self, mapper: impl FnOnce(T) -> RET) -> ResImage<RET> {
+        let res = self.res.map(mapper);
+        ResImage {
+            res,
+            old_layout: self.old_layout,
+            layout: self.layout,
+        }
     }
 }
 
@@ -567,6 +589,12 @@ impl<'a> CommandBufferRecordContext<'a> {
         fut.as_mut().context(&mut next_stage);
         (context_handler)(&next_stage);
 
+        Self::add_barrier(&next_stage, |dependency_info| {
+            self.record(|ctx, command_buffer| unsafe {
+                ctx.device()
+                    .cmd_pipeline_barrier2(command_buffer, dependency_info);
+            });
+        });
         let ret = fut.as_mut().record(self, recycled_state);
         ret
     }
@@ -610,8 +638,9 @@ impl<'a> CommandBufferRecordContext<'a> {
                 global_memory_barrier.dst_stage_mask |= barrier.dst_stage_mask;
                 global_memory_barrier.src_stage_mask |= barrier.src_stage_mask;
             } else {
+                println!("Needs image layout transfers");
                 // Needs image layout transfer.
-                let o = vk::ImageMemoryBarrier2 {
+                let mut o = vk::ImageMemoryBarrier2 {
                     src_access_mask: barrier.src_access_mask,
                     src_stage_mask: barrier.src_stage_mask,
                     dst_access_mask: barrier.dst_access_mask,
@@ -625,8 +654,7 @@ impl<'a> CommandBufferRecordContext<'a> {
                     ..Default::default()
                 };
                 if barrier.src_access_mask.is_empty() {
-                    // TODO: This is a bit questionable
-                    continue;
+                    o.old_layout = vk::ImageLayout::UNDEFINED;
                 }
                 image_barrier.push(o);
             }

@@ -409,6 +409,11 @@ impl QueueFuture for AcquireFuture {
         {
             let mut tracking = output.res.tracking_info.borrow_mut();
             tracking.untracked_semaphore = Some(*this.semaphore);
+            tracking.current_stage_access = Access {
+                read_stages: vk::PipelineStageFlags2::ALL_COMMANDS,
+                write_stages: vk::PipelineStageFlags2::ALL_COMMANDS,
+                ..Default::default()
+            };
         }
         QueueFuturePoll::Ready {
             next_queue: QueueMask::empty(),

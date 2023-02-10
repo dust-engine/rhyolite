@@ -5,8 +5,8 @@ use std::{
 };
 
 use async_ash::{
-    commands::SharedCommandPool, copy_buffer_to_image, cstr, debug::command_debug, Device, Queues,
-    Surface, Swapchain, SwapchainCreateInfo,
+    commands::SharedCommandPool, copy_buffer_to_image, cstr, debug::command_debug, Device,
+    ImageExt, Queues, Surface, Swapchain, SwapchainCreateInfo,
 };
 use async_ash_alloc::{buffer::ResidentBuffer, Allocator};
 use async_ash_core::{
@@ -18,6 +18,7 @@ use async_ash_core::{
     DeviceCreateInfo, FencePool, Instance, InstanceCreateInfo, PhysicalDevice,
     PhysicalDeviceFeatures, QueueFuture, QueueType, QueuesRouter, TimelineSemaphorePool,
 };
+use image::GenericImageView;
 struct WindowedApplication {
     device: Arc<Device>,
     queues: Queues,
@@ -122,6 +123,8 @@ impl WindowedApplication {
             self.surface.clone(),
             SwapchainCreateInfo {
                 image_extent: size,
+                image_format: vk::Format::B8G8R8A8_UNORM,
+                image_color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
                 ..SwapchainCreateInfo::pick(&self.surface, self.device.physical_device(), usage)
                     .unwrap()
             },
@@ -138,9 +141,9 @@ fn main() {
     .bytes()
     .unwrap();
     let res = Cursor::new(res);
-    let image = image::load(res, image::ImageFormat::Png)
-        .unwrap()
-        .into_rgb8();
+    let image = image::load(res, image::ImageFormat::Png).unwrap();
+    let image_size = image.dimensions();
+    let image = image.into_rgba8();
 
     use winit::{
         event::{Event, WindowEvent},
@@ -149,7 +152,10 @@ fn main() {
     };
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let window = WindowBuilder::new()
+        .with_inner_size(winit::dpi::PhysicalSize::new(1300, 600))
+        .build(&event_loop)
+        .unwrap();
     let mut application = WindowedApplication::new(&window);
 
     let size = window.inner_size();
@@ -185,12 +191,20 @@ fn main() {
 
                 let swapchain_image = swapchain.acquire_next_image(application.shared_semaphore_pool.get_binary_semaphore());
                 let future = gpu! {
-                    let mut swapchain_image = swapchain_image.await;
+                    let swapchain_image = swapchain_image.await;
+                    let mut swapchain_image_region = swapchain_image.map(|image| {
+                        image.crop(vk::Extent3D {
+                            width: image_size.0,
+                            height: image_size.1,
+                            depth: 1
+                        }, Default::default())
+                    });
                     commands! {
                         let image_buffer = image_buffer.await;
-                        copy_buffer_to_image(&image_buffer, &mut swapchain_image, vk::ImageLayout::TRANSFER_DST_OPTIMAL).await;
+                        copy_buffer_to_image(&image_buffer, &mut swapchain_image_region, vk::ImageLayout::TRANSFER_DST_OPTIMAL).await;
                         retain!(image_buffer);
                     }.schedule().await;
+                    let swapchain_image = swapchain_image_region.map(|image| image.into_inner());
                     swapchain_image.present().await;
                 };
 
