@@ -1,6 +1,6 @@
 use crate::{
     commands::{CommandBufferLike, SharedCommandPool},
-    HasDevice, ImageLike, QueueRef,
+    HasDevice, ImageLike, QueueRef, BufferLike,
 };
 use ash::vk;
 use std::{
@@ -218,6 +218,13 @@ impl<'host, 'retain> CommandBufferRecordContextInner<'host, 'retain> {
     }
 }
 
+struct StageImageBarrier {
+    barrier: vk::MemoryBarrier2,
+    src_layout: vk::ImageLayout,
+    dst_layout: vk::ImageLayout,
+    src_queue_family: u32,
+    dst_queue_family: u32
+}
 struct StageContextImage {
     image: vk::Image,
     subresource_range: vk::ImageSubresourceRange,
@@ -298,13 +305,31 @@ impl Ord for StageContextImage {
     }
 }
 
+struct StageBufferBarrier {
+    barrier: vk::MemoryBarrier2,
+    src_queue_family: u32,
+    dst_queue_family: u32,
+}
 struct StageContextBuffer {
     buffer: vk::Buffer,
-    range: Range<vk::DeviceSize>,
+    offset: vk::DeviceSize,
+    size: vk::DeviceSize,
+}
+impl BufferLike for StageContextBuffer {
+    fn raw_buffer(&self) -> vk::Buffer {
+        self.buffer
+    }
+
+    fn size(&self) -> vk::DeviceSize {
+        self.size
+    }
+    fn offset(&self) -> vk::DeviceSize {
+        self.offset
+    }
 }
 impl PartialEq for StageContextBuffer {
     fn eq(&self, other: &Self) -> bool {
-        self.buffer == other.buffer && self.range == other.range
+        self.buffer == other.buffer && self.offset == other.offset && self.size == other.size
     }
 }
 impl Eq for StageContextBuffer {}
@@ -315,11 +340,11 @@ impl PartialOrd for StageContextBuffer {
 }
 impl Ord for StageContextBuffer {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.range.start.cmp(&other.range.start) {
+        match self.offset.cmp(&other.offset) {
             core::cmp::Ordering::Equal => {}
             ord => return ord,
         }
-        match self.range.end.cmp(&other.range.start) {
+        match self.size.cmp(&other.size) {
             core::cmp::Ordering::Equal => {}
             ord => return ord,
         }
@@ -348,7 +373,9 @@ pub struct StageContext {
     queue_index: QueueRef,
     global_access: vk::MemoryBarrier2,
     image_accesses:
-        BTreeMap<StageContextImage, (vk::MemoryBarrier2, vk::ImageLayout, vk::ImageLayout)>,
+        BTreeMap<StageContextImage, StageImageBarrier>,
+    buffer_accesses:
+        BTreeMap<StageContextBuffer, StageBufferBarrier>,
 
     // Queue, srcQueue, dstQueue, srcStages, dstStages
     pub semaphore_transitions: Vec<StageContextSemaphoreTransition>,
@@ -368,6 +395,7 @@ impl StageContext {
             timeline_index,
             global_access: vk::MemoryBarrier2::default(),
             image_accesses: BTreeMap::new(),
+            buffer_accesses: BTreeMap::new(),
             semaphore_transitions: Vec::new(),
         }
     }
@@ -416,9 +444,6 @@ impl StageContext {
                     });
             }
         }
-        if tracking.prev_queue_family != self.queue_family_index {
-            // Need queue family transfer.
-        }
     }
     /// Declare a global memory write
     #[inline]
@@ -427,7 +452,7 @@ impl StageContext {
         res: &mut Res<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
-    ) {
+    ) where T: BufferLike {
         let access = Access {
             write_access: accesses,
             write_stages: stages,
@@ -438,9 +463,12 @@ impl StageContext {
         if tracking.last_accessed_stage_index < self.stage_index
             || tracking.last_accessed_timeline < self.timeline_index
         {
+            tracking.prev_queue_family =
+                std::mem::replace(&mut tracking.queue_family, self.queue_family_index);
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
         }
         self.add_barrier_tracking(&mut tracking, &access);
+        // Writes never need to worry about queue family ownership transfers.
         get_memory_access(
             &mut self.global_access,
             &tracking.prev_stage_access,
@@ -457,7 +485,7 @@ impl StageContext {
         res: &Res<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
-    ) {
+    ) where T: BufferLike {
         let access = Access {
             read_access: accesses,
             read_stages: stages,
@@ -467,14 +495,36 @@ impl StageContext {
         if tracking.last_accessed_stage_index < self.stage_index
             || tracking.last_accessed_timeline < self.timeline_index
         {
+            tracking.prev_queue_family =
+                std::mem::replace(&mut tracking.queue_family, self.queue_family_index);
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
         }
         self.add_barrier_tracking(&mut tracking, &access);
-        get_memory_access(
-            &mut self.global_access,
-            &tracking.prev_stage_access,
-            &access,
-        );
+        if tracking.prev_queue_family == self.queue_family_index {
+            get_memory_access(
+                &mut self.global_access,
+                &tracking.prev_stage_access,
+                &access,
+            );
+        } else {
+            let buffer_barrier = self
+            .buffer_accesses
+            .entry(StageContextBuffer {
+                buffer: res.inner().raw_buffer(),
+                offset: res.inner().offset(),
+                size: res.inner().offset()
+            })
+            .or_insert(StageBufferBarrier {
+                barrier: Default::default(),
+                src_queue_family: tracking.prev_queue_family,
+                dst_queue_family: self.queue_family_index
+            });
+            get_memory_access(
+                &mut buffer_barrier.barrier,
+                &tracking.prev_stage_access,
+                &access,
+            );
+        }
         tracking.current_stage_access.read_access |= accesses;
         tracking.current_stage_access.read_stages |= stages;
         tracking.last_accessed_stage_index = self.stage_index;
@@ -500,6 +550,8 @@ impl StageContext {
             || tracking.last_accessed_timeline < self.timeline_index
         {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
+            tracking.prev_queue_family =
+                std::mem::replace(&mut tracking.queue_family, self.queue_family_index);
             res.old_layout = std::mem::replace(&mut res.layout, layout);
         } else {
             assert_eq!(
@@ -510,15 +562,21 @@ impl StageContext {
         }
         self.add_barrier_tracking(&mut tracking, &access);
 
-        let (barrier, _old_layout, _new_layout) = self
+        let image_barrier = self
             .image_accesses
             .entry(StageContextImage {
                 image: res.inner().raw_image(),
                 subresource_range: res.inner().subresource_range(),
                 extent: res.inner().extent(),
             })
-            .or_insert((Default::default(), res.old_layout, layout));
-        get_memory_access(barrier, &tracking.prev_stage_access, &access);
+            .or_insert(StageImageBarrier {
+                barrier: Default::default(),
+                src_layout: vk::ImageLayout::UNDEFINED,
+                dst_layout: layout,
+                src_queue_family: vk::QUEUE_FAMILY_IGNORED,
+                dst_queue_family: vk::QUEUE_FAMILY_IGNORED
+            });
+        get_memory_access(&mut image_barrier.barrier, &tracking.prev_stage_access, &access);
 
         tracking.current_stage_access.write_access |= accesses;
         tracking.current_stage_access.write_stages |= stages;
@@ -557,15 +615,21 @@ impl StageContext {
         }
         self.add_barrier_tracking(&mut tracking, &access);
 
-        let (barrier, _old_layout, _new_layout) = self
+        let mut image_barrier = self
             .image_accesses
             .entry(StageContextImage {
                 image: res.inner().raw_image(),
                 subresource_range: res.inner().subresource_range(),
                 extent: res.inner().extent(),
             })
-            .or_insert((Default::default(), res.old_layout, layout));
-        get_memory_access(barrier, &tracking.prev_stage_access, &access);
+            .or_insert(StageImageBarrier {
+                barrier: Default::default(),
+                src_layout: res.old_layout,
+                dst_layout: layout,
+                src_queue_family: tracking.prev_queue_family,
+                dst_queue_family: self.queue_family_index
+            });
+        get_memory_access(&mut image_barrier.barrier, &tracking.prev_stage_access, &access);
 
         tracking.current_stage_access.read_access |= accesses;
         tracking.current_stage_access.read_stages |= stages;
@@ -573,8 +637,19 @@ impl StageContext {
     }
 }
 
+fn print_dependency_info(info: &vk::DependencyInfo) {
+    unsafe {
+        for barrier in std::slice::from_raw_parts(info.p_memory_barriers, info.memory_barrier_count as usize) {
+            println!("{:?}", barrier);
+        }
+        for barrier in std::slice::from_raw_parts(info.p_image_memory_barriers, info.image_memory_barrier_count as usize) {
+            println!("{:?}", barrier);
+        }
+    }
+}
+
 impl<'a> CommandBufferRecordContext<'a> {
-    pub fn record_first_step<T: GPUCommandFuture>(
+    pub fn record_one_step<T: GPUCommandFuture>(
         &mut self,
         mut fut: Pin<&'a mut T>,
         recycled_state: &mut T::RecycledState,
@@ -589,36 +664,15 @@ impl<'a> CommandBufferRecordContext<'a> {
         fut.as_mut().context(&mut next_stage);
         (context_handler)(&next_stage);
 
+        let queue = self.queue;
         Self::add_barrier(&next_stage, |dependency_info| {
             self.record(|ctx, command_buffer| unsafe {
+                println!("pipeline barrier on queue {:?}",queue);
+                print_dependency_info(dependency_info);
                 ctx.device()
                     .cmd_pipeline_barrier2(command_buffer, dependency_info);
             });
         });
-        let ret = fut.as_mut().record(self, recycled_state);
-        ret
-    }
-
-    pub fn record_one_step<T: GPUCommandFuture>(
-        &mut self,
-        mut fut: Pin<&'a mut T>,
-        recycled_state: &mut T::RecycledState,
-    ) -> Poll<(T::Output, T::RetainedState)> {
-        let mut next_stage = StageContext::new(
-            self.stage_index,
-            self.timeline_index,
-            self.command_pool.queue_family_index(),
-            self.queue,
-        );
-        fut.as_mut().context(&mut next_stage);
-        assert_eq!(next_stage.semaphore_transitions.len(), 0);
-        Self::add_barrier(&next_stage, |dependency_info| {
-            self.record(|ctx, command_buffer| unsafe {
-                ctx.device()
-                    .cmd_pipeline_barrier2(command_buffer, dependency_info);
-            });
-        });
-
         let ret = fut.as_mut().record(self, recycled_state);
         ret
     }
@@ -627,37 +681,51 @@ impl<'a> CommandBufferRecordContext<'a> {
         cmd_pipeline_barrier: impl FnOnce(&vk::DependencyInfo),
     ) {
         let mut global_memory_barrier = next_stage.global_access;
-        let mut image_barrier: Vec<vk::ImageMemoryBarrier2> = Vec::new();
+        let mut image_barriers: Vec<vk::ImageMemoryBarrier2> = Vec::new();
+        let mut buffer_barriers: Vec<vk::BufferMemoryBarrier2> = Vec::new();
 
         // Set the global memory barrier.
 
-        for (image, (barrier, old_layout, new_layout)) in next_stage.image_accesses.iter() {
-            if old_layout == new_layout {
+        for (image, image_barrier) in next_stage.image_accesses.iter() {
+            let barrier = &image_barrier.barrier;
+            if image_barrier.src_layout == image_barrier.dst_layout && image_barrier.src_queue_family == image_barrier.dst_queue_family {
                 global_memory_barrier.dst_access_mask |= barrier.dst_access_mask;
                 global_memory_barrier.src_access_mask |= barrier.src_access_mask;
                 global_memory_barrier.dst_stage_mask |= barrier.dst_stage_mask;
                 global_memory_barrier.src_stage_mask |= barrier.src_stage_mask;
             } else {
-                println!("Needs image layout transfers");
                 // Needs image layout transfer.
-                let mut o = vk::ImageMemoryBarrier2 {
+                let o = vk::ImageMemoryBarrier2 {
                     src_access_mask: barrier.src_access_mask,
                     src_stage_mask: barrier.src_stage_mask,
                     dst_access_mask: barrier.dst_access_mask,
                     dst_stage_mask: barrier.dst_stage_mask,
                     image: image.image,
                     subresource_range: image.subresource_range,
-                    old_layout: *old_layout,
-                    new_layout: *new_layout,
-                    src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-                    dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+                    old_layout: image_barrier.src_layout,
+                    new_layout: image_barrier.dst_layout,
+                    src_queue_family_index: image_barrier.src_queue_family,
+                    dst_queue_family_index: image_barrier.dst_queue_family,
                     ..Default::default()
                 };
-                if barrier.src_access_mask.is_empty() {
-                    o.old_layout = vk::ImageLayout::UNDEFINED;
-                }
-                image_barrier.push(o);
+                image_barriers.push(o);
             }
+        }
+        for (buffer, buffer_barrier) in next_stage.buffer_accesses.iter() {
+            assert_ne!(buffer_barrier.src_queue_family, buffer_barrier.dst_queue_family);
+            let o = vk::BufferMemoryBarrier2 {
+                src_access_mask: buffer_barrier.barrier.src_access_mask,
+                src_stage_mask: buffer_barrier.barrier.src_stage_mask,
+                dst_access_mask: buffer_barrier.barrier.dst_access_mask,
+                dst_stage_mask: buffer_barrier.barrier.dst_stage_mask,
+                buffer: buffer.buffer,
+                size: buffer.size,
+                offset: buffer.offset,
+                src_queue_family_index: buffer_barrier.src_queue_family,
+                dst_queue_family_index: buffer_barrier.dst_queue_family,
+                ..Default::default()
+            };
+            buffer_barriers.push(o);
         }
         let mut dep = vk::DependencyInfo {
             dependency_flags: vk::DependencyFlags::BY_REGION, // TODO
@@ -671,9 +739,14 @@ impl<'a> CommandBufferRecordContext<'a> {
             dep.memory_barrier_count = 1;
             dep.p_memory_barriers = &global_memory_barrier;
         }
-        if !image_barrier.is_empty() {
-            dep.image_memory_barrier_count = image_barrier.len() as u32;
-            dep.p_image_memory_barriers = image_barrier.as_ptr();
+        if !image_barriers.is_empty() {
+            dep.image_memory_barrier_count = image_barriers.len() as u32;
+            dep.p_image_memory_barriers = image_barriers.as_ptr();
+        }
+        
+        if !buffer_barriers.is_empty() {
+            dep.buffer_memory_barrier_count = buffer_barriers.len() as u32;
+            dep.p_buffer_memory_barriers = buffer_barriers.as_ptr();
         }
 
         if dep.memory_barrier_count > 0
@@ -759,7 +832,7 @@ mod tests {
         ReadWrite(Access),
     }
     impl ReadWrite {
-        fn stage<T>(&self, stage_ctx: &mut StageContext, res: &mut Res<T>) {
+        fn stage<T: BufferLike>(&self, stage_ctx: &mut StageContext, res: &mut Res<T>) {
             match &self {
                 ReadWrite::Read(stage, access) => stage_ctx.read(res, *stage, *access),
                 ReadWrite::Write(stage, access) => stage_ctx.write(res, *stage, *access),

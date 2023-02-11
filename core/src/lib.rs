@@ -20,6 +20,7 @@ pub mod queue;
 mod resources;
 mod semaphore;
 mod surface;
+mod dho;
 pub mod swapchain;
 pub mod utils;
 

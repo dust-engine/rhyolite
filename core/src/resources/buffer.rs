@@ -19,6 +19,14 @@ pub trait BufferLike {
     }
     fn size(&self) -> vk::DeviceSize;
 }
+impl BufferLike for vk::Buffer {
+    fn raw_buffer(&self) -> vk::Buffer {
+        *self
+    }
+    fn size(&self) -> vk::DeviceSize {
+        u64::MAX
+    }
+}
 impl<T> BufferLike for &T
 where
     T: BufferLike,
@@ -127,8 +135,8 @@ pub fn copy_buffer<
     SRef: Deref<Target = Res<S>>,
     TRef: DerefMut<Target = Res<T>>,
 >(
-    dst: TRef,
     src: SRef,
+    dst: TRef,
 ) -> CopyBufferFuture<S, T, SRef, TRef> {
     CopyBufferFuture {
         str: "aaa",

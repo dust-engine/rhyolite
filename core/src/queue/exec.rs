@@ -371,6 +371,8 @@ impl Queues {
                 }
 
                 for info in queue_batch.presents.iter() {
+                    /*
+                    VK_EXT_swapchain_maintenance1
                     let fences: Vec<_> = (0..info.swapchain_count as usize)
                         .map(|_| {
                             let fence = fence_pool.get();
@@ -387,9 +389,10 @@ impl Queues {
                         p_next: &fence_info as *const _ as *const _,
                         ..*info
                     };
+                    */
                     self.device
                         .swapchain_loader()
-                        .queue_present(queue, &present_info)
+                        .queue_present(queue, &info)
                         .unwrap();
                 }
             }
@@ -462,6 +465,12 @@ impl TimelineSemaphorePool {
 impl Drop for TimelineSemaphorePool {
     fn drop(&mut self) {
         for semaphore in self.timeline_semaphores.iter() {
+            unsafe {
+                self.device.destroy_semaphore(*semaphore, None);
+            }
+        }
+        
+        for semaphore in self.binary_semaphores.iter() {
             unsafe {
                 self.device.destroy_semaphore(*semaphore, None);
             }
@@ -1158,6 +1167,7 @@ pub struct RunCommandsQueueFuture<I: GPUCommandFuture> {
     /// Retained state and the timeline index
     retained_state: Option<I::RetainedState>,
     prev_queue: QueueMask,
+    output: Option<I::Output>
 }
 impl<I: GPUCommandFuture> RunCommandsQueueFuture<I> {
     pub fn new(future: I, queue: QueueRef) -> Self {
@@ -1166,6 +1176,7 @@ impl<I: GPUCommandFuture> RunCommandsQueueFuture<I> {
             queue,
             retained_state: None,
             prev_queue: QueueMask::empty(),
+            output: None
         }
     }
 }
@@ -1219,7 +1230,13 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
             timeline_index: q.timeline_index,
             queue: *this.queue,
         };
-        this.inner.init(&mut command_ctx, recycled_state);
+        match this.inner.init(&mut command_ctx, recycled_state) {
+            Some((out, retain)) => {
+                *this.output = Some(out);
+                *this.retained_state = Some(retain);
+            },
+            None => (),
+        }
         assert!(temp_command_buffers.is_empty());
         assert!(temp_recording_command_buffers.is_none());
     }
@@ -1230,6 +1247,16 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
         recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
+        if let Some(output) = this.output.take() {
+            return QueueFuturePoll::Ready {
+                next_queue: {
+                    let mut mask = QueueMask::empty();
+                    mask.set_queue(*this.queue);
+                    mask
+                },
+                output,
+            }
+        }
 
         let queue = {
             let mut mask = QueueMask::empty();
@@ -1279,8 +1306,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
             queue: *this.queue,
         };
 
-        let poll = if q.stage_index == 0 {
-            command_ctx.record_first_step(this.inner, recycled_state, |a| {
+            let poll = command_ctx.record_one_step(this.inner, recycled_state, |a| {
                 for transition in &a.semaphore_transitions {
                     match transition {
                         StageContextSemaphoreTransition::Managed {
@@ -1314,10 +1340,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
                         }
                     }
                 }
-            })
-        } else {
-            command_ctx.record_one_step(this.inner, recycled_state)
-        };
+            });
         let result = match poll {
             Poll::Ready((output, retained_state)) => {
                 *this.retained_state = Some(retained_state);

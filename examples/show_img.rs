@@ -22,6 +22,7 @@ use image::GenericImageView;
 struct WindowedApplication {
     device: Arc<Device>,
     queues: Queues,
+    queues_router: QueuesRouter,
     allocator: Allocator,
     shared_command_pools: Vec<Option<SharedCommandPool>>,
     shared_semaphore_pool: TimelineSemaphorePool,
@@ -47,7 +48,9 @@ impl WindowedApplication {
         let physical_device = PhysicalDevice::enumerate(&instance)
             .unwrap()
             .into_iter()
-            .skip(1)
+            .filter(|a| {
+                a.properties().api_version().minor() == 3
+            })
             .next()
             .unwrap();
         println!(
@@ -92,6 +95,7 @@ impl WindowedApplication {
             device,
             queues,
             allocator,
+            queues_router,
             shared_command_pools,
             shared_semaphore_pool,
             shared_fence_pool,
@@ -184,10 +188,14 @@ fn main() {
                 // You only need to call this if you've determined that you need to redraw, in
                 // applications which do not always need to. Applications that redraw continuously
                 // can just render here instead.
-                //window.request_redraw();
+                window.request_redraw();
             }
             Event::RedrawRequested(_) => {
+                let transfer_queue = application.queues_router.of_type(QueueType::Transfer);
+                let graphics_queue = application.queues_router.of_type(QueueType::Graphics);
                 let image_buffer = application.allocator.create_device_buffer_with_data(image.as_raw(), vk::BufferUsageFlags::TRANSFER_SRC).unwrap();
+                let intermediate_buffer = application.allocator.create_device_buffer_uninit(image.as_raw().len() as u64, vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC).unwrap();
+                let intermediate_buffer2 = application.allocator.create_device_buffer_uninit(image.as_raw().len() as u64, vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC).unwrap();
 
                 let swapchain_image = swapchain.acquire_next_image(application.shared_semaphore_pool.get_binary_semaphore());
                 let future = gpu! {
@@ -199,13 +207,23 @@ fn main() {
                             depth: 1
                         }, Default::default())
                     });
+                    let mut intermediate_buffer = Res::new(intermediate_buffer);
                     commands! {
                         let image_buffer = image_buffer.await;
-                        copy_buffer_to_image(&image_buffer, &mut swapchain_image_region, vk::ImageLayout::TRANSFER_DST_OPTIMAL).await;
+                        copy_buffer(&image_buffer, &mut intermediate_buffer).await;
                         retain!(image_buffer);
-                    }.schedule().await;
+                    }.schedule_on_queue(transfer_queue).await;
+                    
+                    let mut intermediate_buffer2 = Res::new(intermediate_buffer2);
+                    commands! {
+                        copy_buffer(&intermediate_buffer, &mut intermediate_buffer2).await;
+                        copy_buffer_to_image(&intermediate_buffer2, &mut swapchain_image_region, vk::ImageLayout::TRANSFER_DST_OPTIMAL).await;
+                    }.schedule_on_queue(graphics_queue).await;
                     let swapchain_image = swapchain_image_region.map(|image| image.into_inner());
                     swapchain_image.present().await;
+                    
+                    retain!(intermediate_buffer);
+                    retain!(intermediate_buffer2);
                 };
 
                 application.submit(future, &mut recycled_state);

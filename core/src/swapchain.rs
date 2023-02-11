@@ -237,6 +237,7 @@ impl Swapchain {
             generation: self.inner.generation,
             extent: self.inner.extent,
             layer_count: self.inner.layer_count,
+            presented: false,
         };
         AcquireFuture {
             image: Some(swapchain_image),
@@ -253,10 +254,14 @@ pub struct SwapchainImage {
     generation: u64,
     extent: vk::Extent2D,
     layer_count: u32,
+
+    presented: bool
 }
 impl Drop for SwapchainImage {
     fn drop(&mut self) {
-        panic!("SwapchainImage must be returned to the OS by calling Present!")
+        if !self.presented {
+            panic!("SwapchainImage must be returned to the OS by calling Present!")
+        }
     }
 }
 
@@ -373,7 +378,10 @@ impl QueueFuture for PresentFuture {
         }
     }
 
-    fn dispose(self) -> Self::RetainedState {
+    fn dispose(mut self) -> Self::RetainedState {
+        for i in self.swapchain.iter_mut() {
+            i.inner_mut().presented = true;
+        }
         self.swapchain
     }
 }

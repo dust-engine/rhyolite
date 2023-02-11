@@ -23,42 +23,29 @@ impl<T: Disposable> Disposable for Vec<T> {
         }
     }
 }
-impl<T1, T2> Disposable for (T1, T2)
-where
-    T1: Disposable,
-    T2: Disposable,
-{
-    fn dispose(self) {
-        self.0.dispose();
-        self.1.dispose();
-    }
+
+macro_rules! impl_tuple {
+    ($($idx:tt $t:tt),+) => {
+        impl<$($t,)+> Disposable for ($($t,)+)
+        where
+            $($t: Disposable,)+
+        {
+            fn dispose(self) {
+                $(
+                    $t :: dispose(self.$idx);
+                )+
+            }
+        }
+    };
 }
-impl<T1, T2, T3> Disposable for (T1, T2, T3)
-where
-    T1: Disposable,
-    T2: Disposable,
-    T3: Disposable,
-{
-    fn dispose(self) {
-        self.0.dispose();
-        self.1.dispose();
-        self.2.dispose();
-    }
-}
-impl<T1, T2, T3, T4> Disposable for (T1, T2, T3, T4)
-where
-    T1: Disposable,
-    T2: Disposable,
-    T3: Disposable,
-    T4: Disposable,
-{
-    fn dispose(self) {
-        self.0.dispose();
-        self.1.dispose();
-        self.2.dispose();
-        self.3.dispose();
-    }
-}
+
+impl_tuple!(0 A, 1 B);
+impl_tuple!(0 A, 1 B, 2 C);
+impl_tuple!(0 A, 1 B, 2 C, 3 D);
+impl_tuple!(0 A, 1 B, 2 C, 3 D, 4 E);
+impl_tuple!(0 A, 1 B, 2 C, 3 D, 4 E, 5 F);
+impl_tuple!(0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G);
+impl_tuple!(0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H);
 
 impl<T> Disposable for Option<T>
 where
