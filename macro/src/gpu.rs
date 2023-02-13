@@ -19,7 +19,7 @@ impl State {
         });
         self.dispose_ret_expr
             .push(syn::Expr::Verbatim(res_token_name.to_token_stream()));
-        quote::quote! {unsafe {
+        quote::quote! {{
             #res_token_name = Some(#input_tokens)
         }}
     }
@@ -89,7 +89,7 @@ impl CommandsTransformer for State {
         syn::Expr::Verbatim(quote::quote! {{
             let mut fut = #base;
             let mut fut_pinned = unsafe{std::pin::Pin::new_unchecked(&mut fut)};
-            fut_pinned.as_mut().init(
+            fut_pinned.as_mut().setup(
                 unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)},
                 &mut unsafe{&mut *__recycled_states}.#index,
                 __current_queue

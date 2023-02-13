@@ -210,13 +210,14 @@ fn main() {
                         let image_buffer = image_buffer.await;
                         copy_buffer(&image_buffer, &mut intermediate_buffer).await;
                         retain!(image_buffer);
-                    }.schedule_on_queue(graphics_queue).await;
+                    }.schedule_on_queue(transfer_queue).await;
+                    
                     
                     let mut intermediate_buffer2 = Res::new(intermediate_buffer2);
                     commands! {
                         copy_buffer(&intermediate_buffer, &mut intermediate_buffer2).await;
                         copy_buffer_to_image(&intermediate_buffer2, &mut swapchain_image_region, vk::ImageLayout::TRANSFER_DST_OPTIMAL).await;
-                    }.schedule_on_queue(transfer_queue).await;
+                    }.schedule_on_queue(graphics_queue).await;
                     let swapchain_image = swapchain_image_region.map(|image| image.into_inner());
                     swapchain_image.present().await;
                     

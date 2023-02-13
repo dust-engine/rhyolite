@@ -275,7 +275,7 @@ impl Queues {
 
         future_pinned
             .as_mut()
-            .init(&mut submission_context, recycled_state, QueueMask::empty());
+            .setup(&mut submission_context, recycled_state, QueueMask::empty());
         let output = loop {
             match future_pinned
                 .as_mut()
@@ -1089,7 +1089,7 @@ pub trait QueueFuture {
     type Output;
     type RecycledState: Default;
     type RetainedState: Disposable;
-    fn init(
+    fn setup(
         self: Pin<&mut Self>,
         ctx: &mut SubmissionContext,
         recycled_state: &mut Self::RecycledState,
@@ -1151,7 +1151,7 @@ where
     type Output = Ret;
     type RecycledState = Recycle;
     type RetainedState = Retain;
-    fn init(
+    fn setup(
         self: Pin<&mut Self>,
         _ctx: &mut SubmissionContext,
         _recycled_state: &mut Self::RecycledState,
@@ -1324,7 +1324,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
     type RecycledState = I::RecycledState;
     type RetainedState = I::RetainedState;
 
-    fn init(
+    fn setup(
         self: Pin<&mut Self>,
         ctx: &mut SubmissionContext,
         recycled_state: &mut Self::RecycledState,

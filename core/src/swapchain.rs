@@ -313,7 +313,7 @@ impl QueueFuture for PresentFuture {
 
     type RetainedState = Vec<ResImage<SwapchainImage>>;
 
-    fn init(
+    fn setup(
         self: Pin<&mut Self>,
         ctx: &mut crate::SubmissionContext,
         recycled_state: &mut Self::RecycledState,
@@ -427,7 +427,7 @@ impl QueueFuture for AcquireFuture {
 
     type RetainedState = ();
 
-    fn init(
+    fn setup(
         self: Pin<&mut Self>,
         ctx: &mut crate::SubmissionContext,
         recycled_state: &mut Self::RecycledState,
