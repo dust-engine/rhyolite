@@ -1,14 +1,14 @@
 #![feature(generators, generator_trait)]
 use std::{
-    io::{BufReader, Cursor},
+    io::{Cursor},
     sync::Arc,
 };
 
 use async_ash::{
-    commands::SharedCommandPool, copy_buffer_to_image, cstr, debug::command_debug, Device,
+    commands::SharedCommandPool, copy_buffer_to_image, Device,
     ImageExt, Queues, Surface, Swapchain, SwapchainCreateInfo,
 };
-use async_ash_alloc::{buffer::ResidentBuffer, Allocator};
+use async_ash_alloc::{Allocator};
 use async_ash_core::{
     ash,
     ash::vk,
@@ -48,9 +48,7 @@ impl WindowedApplication {
         let physical_device = PhysicalDevice::enumerate(&instance)
             .unwrap()
             .into_iter()
-            .filter(|a| {
-                a.properties().api_version().minor() == 3
-            })
+            .filter(|a| a.properties().api_version().minor() == 3)
             .next()
             .unwrap();
         println!(
@@ -86,9 +84,9 @@ impl WindowedApplication {
             .unwrap();
         let allocator = Allocator::new(device.clone());
 
-        let mut shared_command_pools = queues.make_shared_command_pools();
-        let mut shared_semaphore_pool = TimelineSemaphorePool::new(device.clone());
-        let mut shared_fence_pool = FencePool::new(device.clone());
+        let shared_command_pools = queues.make_shared_command_pools();
+        let shared_semaphore_pool = TimelineSemaphorePool::new(device.clone());
+        let shared_fence_pool = FencePool::new(device.clone());
 
         let surface = Surface::create(instance, window, window).unwrap();
         Self {
@@ -212,13 +210,13 @@ fn main() {
                         let image_buffer = image_buffer.await;
                         copy_buffer(&image_buffer, &mut intermediate_buffer).await;
                         retain!(image_buffer);
-                    }.schedule_on_queue(transfer_queue).await;
+                    }.schedule_on_queue(graphics_queue).await;
                     
                     let mut intermediate_buffer2 = Res::new(intermediate_buffer2);
                     commands! {
                         copy_buffer(&intermediate_buffer, &mut intermediate_buffer2).await;
                         copy_buffer_to_image(&intermediate_buffer2, &mut swapchain_image_region, vk::ImageLayout::TRANSFER_DST_OPTIMAL).await;
-                    }.schedule_on_queue(graphics_queue).await;
+                    }.schedule_on_queue(transfer_queue).await;
                     let swapchain_image = swapchain_image_region.map(|image| image.into_inner());
                     swapchain_image.present().await;
                     

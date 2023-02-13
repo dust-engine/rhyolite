@@ -8,10 +8,11 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{ops::Deref, pin::Pin};
 
-use crate::future::{Access, Res, ResImage};
+use crate::future::{Access, Res, ResImage, StageContextImage};
 use crate::{
     Device, ImageLike, PhysicalDevice, QueueFuture, QueueFuturePoll, QueueMask, QueueRef,
-    QueueSubmissionContextSemaphoreWait, QueueSubmissionType, Surface,
+    QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait, QueueSubmissionType,
+    Surface,
 };
 
 pub struct SwapchainLoader {
@@ -255,7 +256,7 @@ pub struct SwapchainImage {
     extent: vk::Extent2D,
     layer_count: u32,
 
-    presented: bool
+    presented: bool,
 }
 impl Drop for SwapchainImage {
     fn drop(&mut self) {
@@ -354,6 +355,33 @@ impl QueueFuture for PresentFuture {
             ctx.queues[tracking.queue_index.0 as usize]
                 .signals
                 .insert((tracking.current_stage_access.write_stages, true));
+
+            let export = QueueSubmissionContextExport::Image {
+                image: StageContextImage {
+                    image: swapchain.res.inner.image,
+                    subresource_range: swapchain.res.inner.subresource_range(),
+                    extent: swapchain.res.inner.extent(),
+                },
+                barrier: vk::MemoryBarrier2 {
+                    src_stage_mask: tracking.current_stage_access.write_stages,
+                    src_access_mask: tracking.current_stage_access.write_access,
+
+                    // We set dst_stage_mask to be write_stages so that we can establish dependency
+                    // between the layout transition and the semaphore signal operation.
+                    dst_stage_mask: tracking.current_stage_access.write_stages,
+
+                    // No need for memory dependency - handled automatically by the semaphore signal operation.
+                    dst_access_mask: vk::AccessFlags2::empty(),
+                    ..Default::default()
+                },
+                dst_queue_family: ctx.queues[this.queue.0 as usize].queue_family_index,
+                src_layout: swapchain.layout,
+                dst_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            };
+            ctx.queues[tracking.queue_index.0 as usize]
+                .exports
+                .push(export);
+
             ctx.queues[this.queue.0 as usize].waits.push(
                 QueueSubmissionContextSemaphoreWait::WaitForSignal {
                     dst_stages: vk::PipelineStageFlags2::empty(),

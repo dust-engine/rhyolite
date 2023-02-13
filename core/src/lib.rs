@@ -13,6 +13,7 @@ pub extern crate async_ash_macro as macros;
 pub mod commands;
 pub mod debug;
 mod device;
+mod dho;
 pub mod future;
 mod instance;
 mod physical_device;
@@ -20,7 +21,6 @@ pub mod queue;
 mod resources;
 mod semaphore;
 mod surface;
-mod dho;
 pub mod swapchain;
 pub mod utils;
 

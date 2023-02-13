@@ -89,15 +89,15 @@ impl Device {
             } else {
                 None
             };
-            
+
         let deferred_host_operation_loader =
-        if extensions.contains(ash::extensions::khr::DeferredHostOperations::name()) {
-            Some(Box::new(ash::extensions::khr::DeferredHostOperations::new(
-                &instance, &device,
-            )))
-        } else {
-            None
-        };
+            if extensions.contains(ash::extensions::khr::DeferredHostOperations::name()) {
+                Some(Box::new(ash::extensions::khr::DeferredHostOperations::new(
+                    &instance, &device,
+                )))
+            } else {
+                None
+            };
 
         Ok(Self {
             instance,
@@ -106,7 +106,7 @@ impl Device {
             swapchain_loader,
             rtx_loader,
             accel_struct_loader,
-            deferred_host_operation_loader
+            deferred_host_operation_loader,
         })
     }
     pub fn instance(&self) -> &Arc<Instance> {

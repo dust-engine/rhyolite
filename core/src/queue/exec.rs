@@ -15,7 +15,8 @@ use pin_project::pin_project;
 use crate::{
     commands::SharedCommandPool,
     future::{
-        CommandBufferRecordContext, Disposable, GPUCommandFuture, StageContextSemaphoreTransition,
+        print_dependency_info, CommandBufferRecordContext, Disposable, GPUCommandFuture,
+        StageContextBuffer, StageContextImage, StageContextSemaphoreTransition,
     },
     Device,
 };
@@ -110,6 +111,21 @@ pub enum QueueSubmissionContextSemaphoreWait {
     },
 }
 
+pub(crate) enum QueueSubmissionContextExport {
+    Image {
+        image: StageContextImage,
+        barrier: vk::MemoryBarrier2,
+        dst_queue_family: u32,
+        src_layout: vk::ImageLayout,
+        dst_layout: vk::ImageLayout,
+    },
+    Buffer {
+        buffer: StageContextBuffer,
+        barrier: vk::MemoryBarrier2,
+        dst_queue_family: u32,
+    },
+}
+
 /// One per queue per submission
 pub struct QueueSubmissionContext {
     pub queue_family_index: u32,
@@ -126,6 +142,8 @@ pub struct QueueSubmissionContext {
     /// Stages that the current stage needs to wait on.
     /// A list of (dst_stage, src_queue, src_stage)
     pub waits: Vec<QueueSubmissionContextSemaphoreWait>,
+
+    pub(crate) exports: Vec<QueueSubmissionContextExport>,
 }
 
 #[derive(Debug)]
@@ -241,6 +259,7 @@ impl Queues {
                     timeline_index: 1,
                     signals: Default::default(),
                     waits: Default::default(),
+                    exports: Default::default(),
                 })
                 .collect(),
             submission: self
@@ -251,7 +270,8 @@ impl Queues {
         };
 
         let mut current_stage = CachedStageSubmissions::new(self.queues.len());
-        let mut submission_batch = SubmissionBatch::new(self.queues.len());
+        let mut submission_stages: Vec<CachedStageSubmissions> = Vec::new();
+        let mut last_submit_stage_index = vec![usize::MAX; self.queues.len()];
 
         future_pinned
             .as_mut()
@@ -277,22 +297,40 @@ impl Queues {
                         &last_stage,
                         semaphore_pool,
                     );
+                    submission_stages.push(last_stage);
 
-                    for (src, dst) in submission_context
+                    for (i, (src, dst)) in submission_context
                         .submission
                         .iter_mut()
                         .zip(current_stage.queues.iter_mut())
+                        .enumerate()
                     {
-                        src.end(&self.device);
                         dst.ty = std::mem::replace(src, QueueSubmissionType::Unknown);
+                        if let QueueSubmissionType::Submit { .. } = &dst.ty {
+                            last_submit_stage_index[i] = submission_stages.len();
+                        }
                     }
 
-                    submission_batch.add_stage(last_stage);
+                    for (i, ctx) in submission_context.queues.iter().enumerate() {
+                        if ctx.exports.is_empty() {
+                            continue;
+                        }
+
+                        let last_accessed_stage = last_submit_stage_index[i];
+                        println!(
+                            "-------------Apply exports on queue : {:?}, stage {}",
+                            i, last_accessed_stage
+                        );
+                        submission_stages[last_accessed_stage].queues[i]
+                            .apply_exports(ctx, &self.device);
+                    }
+
                     for ctx in submission_context.queues.iter_mut() {
                         ctx.stage_index = 0;
                         ctx.timeline_index += 1;
                         ctx.waits.clear();
                         ctx.signals.clear();
+                        ctx.exports.clear();
                     }
                 }
                 QueueFuturePoll::Ready {
@@ -310,21 +348,46 @@ impl Queues {
                         &last_stage,
                         semaphore_pool,
                     );
+                    submission_stages.push(last_stage);
 
-                    for (src, dst) in submission_context
+                    for (i, (src, dst)) in submission_context
                         .submission
                         .iter_mut()
                         .zip(current_stage.queues.iter_mut())
+                        .enumerate()
                     {
-                        src.end(&self.device);
                         dst.ty = std::mem::replace(src, QueueSubmissionType::Unknown);
+                        if let QueueSubmissionType::Submit { .. } = &dst.ty {
+                            last_submit_stage_index[i] = submission_stages.len();
+                        }
                     }
-                    submission_batch.add_stage(last_stage);
-                    submission_batch.add_stage(current_stage);
+                    for (i, ctx) in submission_context.queues.iter().enumerate() {
+                        if ctx.exports.is_empty() {
+                            continue;
+                        }
+
+                        let last_accessed_stage = last_submit_stage_index[i];
+                        println!(
+                            "-------------Apply exports on queue : {:?}, stage {}",
+                            i, last_accessed_stage
+                        );
+                        submission_stages[last_accessed_stage].queues[i]
+                            .apply_exports(ctx, &self.device);
+                    }
+
+                    submission_stages.push(current_stage);
                     break output;
                 }
             }
         };
+
+        let mut submission_batch = SubmissionBatch::new(self.queues.len());
+        for mut stage in submission_stages.into_iter() {
+            for q in stage.queues.iter_mut() {
+                q.ty.end(&self.device);
+            }
+            submission_batch.add_stage(stage);
+        }
 
         let fences_to_wait = self.submit_batch(submission_batch, fence_pool);
 
@@ -369,7 +432,18 @@ impl Queues {
                         .unwrap();
                     fences.push(fence);
                 }
+            }
+        }
 
+        // Presents after all others. This ensures that the binary semaphores used by the present operation
+        // were submitted after all others.
+        for (queue, queue_batch) in self
+            .queues
+            .iter()
+            .map(|(queue, _)| *queue)
+            .zip(batch.queues.iter())
+        {
+            unsafe {
                 for info in queue_batch.presents.iter() {
                     /*
                     VK_EXT_swapchain_maintenance1
@@ -469,7 +543,7 @@ impl Drop for TimelineSemaphorePool {
                 self.device.destroy_semaphore(*semaphore, None);
             }
         }
-        
+
         for semaphore in self.binary_semaphores.iter() {
             unsafe {
                 self.device.destroy_semaphore(*semaphore, None);
@@ -534,6 +608,76 @@ struct CachedQueueStageSubmissions {
     waits: Vec<(vk::Semaphore, u64, vk::PipelineStageFlags2)>,
     signals: BTreeMap<vk::PipelineStageFlags2, (vk::Semaphore, u64)>,
 }
+impl CachedQueueStageSubmissions {
+    pub fn apply_exports(&mut self, ctx: &QueueSubmissionContext, device: &Device) {
+        let mut image_barriers: Vec<vk::ImageMemoryBarrier2> = Vec::new();
+        let mut buffer_barriers: Vec<vk::BufferMemoryBarrier2> = Vec::new();
+
+        for export in ctx.exports.iter() {
+            match export {
+                QueueSubmissionContextExport::Image {
+                    image,
+                    barrier,
+                    dst_queue_family,
+                    src_layout,
+                    dst_layout,
+                } => {
+                    image_barriers.push(vk::ImageMemoryBarrier2 {
+                        src_stage_mask: barrier.src_stage_mask,
+                        src_access_mask: barrier.src_access_mask,
+                        dst_access_mask: barrier.dst_access_mask,
+                        dst_stage_mask: barrier.dst_stage_mask,
+                        old_layout: *src_layout,
+                        new_layout: *dst_layout,
+                        src_queue_family_index: ctx.queue_family_index,
+                        dst_queue_family_index: *dst_queue_family,
+                        image: image.image,
+                        subresource_range: image.subresource_range.clone(),
+                        ..Default::default()
+                    });
+                }
+                QueueSubmissionContextExport::Buffer {
+                    buffer,
+                    barrier,
+                    dst_queue_family,
+                } => {
+                    buffer_barriers.push(vk::BufferMemoryBarrier2 {
+                        src_stage_mask: barrier.src_stage_mask,
+                        src_access_mask: barrier.src_access_mask,
+                        dst_access_mask: barrier.dst_access_mask,
+                        dst_stage_mask: barrier.dst_stage_mask,
+                        src_queue_family_index: ctx.queue_family_index,
+                        dst_queue_family_index: *dst_queue_family,
+                        buffer: buffer.buffer,
+                        size: buffer.size,
+                        offset: buffer.offset,
+                        ..Default::default()
+                    });
+                }
+                _ => panic!(),
+            }
+        }
+        if image_barriers.is_empty() && buffer_barriers.is_empty() {
+            return;
+        }
+        let dependency_info = vk::DependencyInfo::builder()
+            .dependency_flags(vk::DependencyFlags::BY_REGION)
+            .image_memory_barriers(&image_barriers)
+            .buffer_memory_barriers(&buffer_barriers)
+            .build();
+        match &self.ty {
+            QueueSubmissionType::Submit {
+                recording_command_buffer: Some(command_buffer),
+                ..
+            } => unsafe {
+                print_dependency_info(&dependency_info);
+                println!("-------------");
+                device.cmd_pipeline_barrier2(*command_buffer, &dependency_info);
+            },
+            _ => panic!(),
+        }
+    }
+}
 /// Represents one stage of submissions
 struct CachedStageSubmissions {
     // Indexed by QueueId
@@ -553,12 +697,7 @@ impl CachedStageSubmissions {
         submission_context: &SubmissionContext,
         semaphore_pool: &mut TimelineSemaphorePool,
     ) {
-        for (_i, (ctx, cache)) in submission_context
-            .queues
-            .iter()
-            .zip(self.queues.iter_mut())
-            .enumerate()
-        {
+        for (ctx, cache) in submission_context.queues.iter().zip(self.queues.iter_mut()) {
             cache
                 .signals
                 .extend(ctx.signals.iter().map(|(stage, force_binary)| {
@@ -1167,7 +1306,7 @@ pub struct RunCommandsQueueFuture<I: GPUCommandFuture> {
     /// Retained state and the timeline index
     retained_state: Option<I::RetainedState>,
     prev_queue: QueueMask,
-    output: Option<I::Output>
+    output: Option<I::Output>,
 }
 impl<I: GPUCommandFuture> RunCommandsQueueFuture<I> {
     pub fn new(future: I, queue: QueueRef) -> Self {
@@ -1176,7 +1315,7 @@ impl<I: GPUCommandFuture> RunCommandsQueueFuture<I> {
             queue,
             retained_state: None,
             prev_queue: QueueMask::empty(),
-            output: None
+            output: None,
         }
     }
 }
@@ -1234,7 +1373,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
             Some((out, retain)) => {
                 *this.output = Some(out);
                 *this.retained_state = Some(retain);
-            },
+            }
             None => (),
         }
         assert!(temp_command_buffers.is_empty());
@@ -1255,7 +1394,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
                     mask
                 },
                 output,
-            }
+            };
         }
 
         let queue = {
@@ -1306,41 +1445,70 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
             queue: *this.queue,
         };
 
-            let poll = command_ctx.record_one_step(this.inner, recycled_state, |a| {
-                for transition in &a.semaphore_transitions {
-                    match transition {
-                        StageContextSemaphoreTransition::Managed {
-                            src_queue,
-                            dst_queue,
-                            src_stages,
-                            dst_stages,
-                        } => {
-                            ctx.queues[src_queue.0 as usize]
-                                .signals
-                                .insert((*src_stages, false));
-                            ctx.queues[dst_queue.0 as usize].waits.push(
-                                QueueSubmissionContextSemaphoreWait::WaitForSignal {
-                                    dst_stages: *dst_stages,
-                                    queue: *src_queue,
-                                    src_stages: *src_stages,
-                                },
-                            );
-                        }
-                        StageContextSemaphoreTransition::Untracked {
-                            semaphore,
-                            dst_queue,
-                            dst_stages,
-                        } => {
-                            ctx.queues[dst_queue.0 as usize].waits.push(
-                                QueueSubmissionContextSemaphoreWait::WaitForAcquire {
-                                    dst_stages: *dst_stages,
-                                    acquire_semaphore: *semaphore,
-                                },
-                            );
-                        }
+        let poll = command_ctx.record_one_step(this.inner, recycled_state, |a| {
+            for (img, barrier) in a.image_accesses.iter() {
+                assert!(
+                    barrier.src_layout != barrier.dst_layout
+                        || barrier.src_queue_family != barrier.dst_queue_family
+                );
+                if barrier.src_queue.is_null() {
+                    assert!(barrier.src_layout != barrier.dst_layout);
+                    continue;
+                }
+                ctx.queues[barrier.src_queue.0 as usize].exports.push(
+                    QueueSubmissionContextExport::Image {
+                        image: img.clone(),
+                        barrier: barrier.barrier,
+                        dst_queue_family: barrier.dst_queue_family,
+                        src_layout: barrier.src_layout,
+                        dst_layout: barrier.dst_layout,
+                    },
+                );
+            }
+            for (buffer, barrier) in a.buffer_accesses.iter() {
+                assert!(barrier.src_queue_family != barrier.dst_queue_family);
+                ctx.queues[barrier.src_queue.0 as usize].exports.push(
+                    QueueSubmissionContextExport::Buffer {
+                        buffer: buffer.clone(),
+                        barrier: barrier.barrier,
+                        dst_queue_family: barrier.dst_queue_family,
+                    },
+                );
+            }
+            for transition in &a.semaphore_transitions {
+                match transition {
+                    StageContextSemaphoreTransition::Managed {
+                        src_queue,
+                        dst_queue,
+                        src_stages,
+                        dst_stages,
+                    } => {
+                        ctx.queues[src_queue.0 as usize]
+                            .signals
+                            .insert((*src_stages, false));
+                        ctx.queues[dst_queue.0 as usize].waits.push(
+                            QueueSubmissionContextSemaphoreWait::WaitForSignal {
+                                dst_stages: *dst_stages,
+                                queue: *src_queue,
+                                src_stages: *src_stages,
+                            },
+                        );
+                    }
+                    StageContextSemaphoreTransition::Untracked {
+                        semaphore,
+                        dst_queue,
+                        dst_stages,
+                    } => {
+                        ctx.queues[dst_queue.0 as usize].waits.push(
+                            QueueSubmissionContextSemaphoreWait::WaitForAcquire {
+                                dst_stages: *dst_stages,
+                                acquire_semaphore: *semaphore,
+                            },
+                        );
                     }
                 }
-            });
+            }
+        });
         let result = match poll {
             Poll::Ready((output, retained_state)) => {
                 *this.retained_state = Some(retained_state);

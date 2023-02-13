@@ -43,6 +43,7 @@ impl Iterator for QueueTypeIterator {
 
 impl QueueType {
     pub fn priority(&self) -> f32 {
+        // Note: Sum must be less than 1.0 but greater than 0.0
         [
             QUEUE_PRIORITY_HIGH,
             QUEUE_PRIORITY_HIGH,
@@ -57,8 +58,8 @@ pub struct QueuesRouter {
     queue_type_to_index: [(QueueRef, u32); 4],
 }
 
-const QUEUE_PRIORITY_HIGH: f32 = 1.0;
-const QUEUE_PRIORITY_MID: f32 = 0.5;
+const QUEUE_PRIORITY_HIGH: f32 = 0.35;
+const QUEUE_PRIORITY_MID: f32 = 0.2;
 const QUEUE_PRIORITY_LOW: f32 = 0.1;
 
 impl QueuesRouter {
