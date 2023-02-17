@@ -1,5 +1,5 @@
 use async_ash::{
-    future::{GPUCommandFuture, Res},
+    future::{GPUCommandFuture, RenderRes},
     BufferLike, SharingMode,
 };
 use async_ash_core::{
@@ -119,7 +119,7 @@ impl Allocator {
         &self,
         data: &[u8],
         usage: vk::BufferUsageFlags,
-    ) -> VkResult<impl GPUCommandFuture<Output = Res<ResidentBuffer>>> {
+    ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
         let create_info = vk::BufferCreateInfo {
             size: data.len() as u64,
             usage,
@@ -187,9 +187,9 @@ impl Allocator {
         };
 
         Ok(commands! {
-            let mut dst_buffer = Res::new(dst_buffer);
+            let mut dst_buffer = RenderRes::new(dst_buffer);
             if let Some(staging_buffer) = staging_buffer {
-                let staging_buffer = Res::new(staging_buffer);
+                let staging_buffer = RenderRes::new(staging_buffer);
                 copy_buffer(&staging_buffer, &mut dst_buffer).await;
                 retain!(staging_buffer);
             }

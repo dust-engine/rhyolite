@@ -41,11 +41,11 @@ impl Default for ResTrackingInfo {
     }
 }
 
-pub struct Res<T> {
+pub struct RenderRes<T> {
     pub tracking_info: ManuallyDrop<RefCell<ResTrackingInfo>>,
     pub inner: ManuallyDrop<T>,
 }
-impl<T> Disposable for Res<T> {
+impl<T> Disposable for RenderRes<T> {
     fn dispose(mut self) {
         unsafe {
             ManuallyDrop::drop(&mut self.tracking_info);
@@ -54,7 +54,7 @@ impl<T> Disposable for Res<T> {
         }
     }
 }
-impl<T> Drop for Res<T> {
+impl<T> Drop for RenderRes<T> {
     fn drop(&mut self) {
         if std::mem::needs_drop::<T>() {
             panic!("Res<{}> must be disposed!", std::any::type_name::<T>());
@@ -62,7 +62,7 @@ impl<T> Drop for Res<T> {
     }
 }
 // TODO: Make Res error out when not retained / disposed properly.
-impl<T> Res<T> {
+impl<T> RenderRes<T> {
     pub fn new(inner: T) -> Self {
         Self {
             tracking_info: Default::default(),
@@ -76,34 +76,34 @@ impl<T> Res<T> {
         &mut self.inner
     }
 
-    pub fn map<RET>(mut self, mapper: impl FnOnce(T) -> RET) -> Res<RET> {
+    pub fn map<RET>(mut self, mapper: impl FnOnce(T) -> RET) -> RenderRes<RET> {
         let (inner, tracking) = unsafe {
             let inner = ManuallyDrop::take(&mut self.inner);
             let tracking = ManuallyDrop::take(&mut self.tracking_info);
             std::mem::forget(self);
             (inner, tracking)
         };
-        Res {
+        RenderRes {
             inner: ManuallyDrop::new((mapper)(inner)),
             tracking_info: ManuallyDrop::new(tracking),
         }
     }
 }
 
-pub struct ResImage<T> {
-    pub res: Res<T>,
+pub struct RenderImage<T> {
+    pub res: RenderRes<T>,
     pub old_layout: vk::ImageLayout,
     pub layout: vk::ImageLayout,
 }
-impl<T> Disposable for ResImage<T> {
+impl<T> Disposable for RenderImage<T> {
     fn dispose(self) {
         self.res.dispose()
     }
 }
-impl<T> ResImage<T> {
+impl<T> RenderImage<T> {
     pub fn new(inner: T, initial_layout: vk::ImageLayout) -> Self {
         Self {
-            res: Res::new(inner),
+            res: RenderRes::new(inner),
             layout: initial_layout,
             old_layout: initial_layout,
         }
@@ -115,9 +115,9 @@ impl<T> ResImage<T> {
         &mut self.res.inner
     }
 
-    pub fn map<RET>(self, mapper: impl FnOnce(T) -> RET) -> ResImage<RET> {
+    pub fn map<RET>(self, mapper: impl FnOnce(T) -> RET) -> RenderImage<RET> {
         let res = self.res.map(mapper);
-        ResImage {
+        RenderImage {
             res,
             old_layout: self.old_layout,
             layout: self.layout,
@@ -205,16 +205,16 @@ impl<'host, 'retain> CommandBufferRecordContextInner<'host, 'retain> {
             _marker: old._marker,
         }
     }
-    pub unsafe fn add_res<T>(&mut self, res: T) -> Res<T> {
+    pub unsafe fn add_res<T>(&mut self, res: T) -> RenderRes<T> {
         // Extend the lifetime of res so that it lives as long as 'retain
-        Res::new(res)
+        RenderRes::new(res)
     }
     pub unsafe fn add_image<T: ImageLike>(
         &mut self,
         res: T,
         initial_layout: vk::ImageLayout,
-    ) -> ResImage<T> {
-        ResImage::new(res, initial_layout)
+    ) -> RenderImage<T> {
+        RenderImage::new(res, initial_layout)
     }
 }
 
@@ -456,7 +456,7 @@ impl StageContext {
     #[inline]
     pub fn write<T>(
         &mut self,
-        res: &mut Res<T>,
+        res: &mut RenderRes<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
     ) where
@@ -489,7 +489,7 @@ impl StageContext {
     #[inline]
     pub fn read<T>(
         &mut self,
-        res: &Res<T>,
+        res: &RenderRes<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
     ) where
@@ -543,7 +543,7 @@ impl StageContext {
     #[inline]
     pub fn write_image<T>(
         &mut self,
-        res: &mut ResImage<T>,
+        res: &mut RenderImage<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
         layout: vk::ImageLayout,
@@ -601,7 +601,7 @@ impl StageContext {
     #[inline]
     pub fn read_image<T>(
         &mut self,
-        res: &mut ResImage<T>,
+        res: &mut RenderImage<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
         layout: vk::ImageLayout,
@@ -867,7 +867,7 @@ mod tests {
         ReadWrite(Access),
     }
     impl ReadWrite {
-        fn stage<T: BufferLike>(&self, stage_ctx: &mut StageContext, res: &mut Res<T>) {
+        fn stage<T: BufferLike>(&self, stage_ctx: &mut StageContext, res: &mut RenderRes<T>) {
             match &self {
                 ReadWrite::Read(stage, access) => stage_ctx.read(res, *stage, *access),
                 ReadWrite::Write(stage, access) => stage_ctx.write(res, *stage, *access),
@@ -940,7 +940,7 @@ mod tests {
 
         let mut buffer: vk::Buffer = unsafe { std::mem::transmute(123_u64) };
         for test_case in test_cases.into_iter() {
-            let mut buffer = Res::new(&mut buffer);
+            let mut buffer = RenderRes::new(&mut buffer);
             let mut stage1 = make_stage(0);
             test_case.0[0].stage(&mut stage1, &mut buffer);
 
@@ -1021,7 +1021,7 @@ mod tests {
         ];
         let mut buffer: vk::Buffer = unsafe { std::mem::transmute(123_u64) };
         for test_case in test_cases.into_iter() {
-            let mut buffer = Res::new(&mut buffer);
+            let mut buffer = RenderRes::new(&mut buffer);
 
             let mut stage1 = make_stage(0);
             test_case.0[0].stage(&mut stage1, &mut buffer);
@@ -1100,7 +1100,7 @@ mod tests {
         let mut buffer2: vk::Buffer = unsafe { std::mem::transmute(578_usize) };
 
         {
-            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
+            let mut stage_image_res = RenderImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
             // First dispatch writes to a storage image, second dispatch reads from that storage image.
             let mut stage1 = make_stage(0);
             stage1.write_image(
@@ -1132,7 +1132,7 @@ mod tests {
             assert!(called);
         }
         {
-            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
+            let mut stage_image_res = RenderImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
             // Dispatch writes into a storage image. Draw samples that image in a fragment shader.
             let mut stage1 = make_stage(0);
             stage1.write_image(
@@ -1184,11 +1184,11 @@ mod tests {
 
         {
             // Tests that image access info are retained across stages.
-            let mut stage_image_res = ResImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
+            let mut stage_image_res = RenderImage::new(&mut stage_image, vk::ImageLayout::GENERAL);
             let mut stage_image_res2 =
-                ResImage::new(&mut stage_image2, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-            let mut buffer_res1 = Res::new(&mut buffer1);
-            let mut buffer_res2 = Res::new(&mut buffer2);
+                RenderImage::new(&mut stage_image2, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            let mut buffer_res1 = RenderRes::new(&mut buffer1);
+            let mut buffer_res2 = RenderRes::new(&mut buffer2);
             // Stage 1 is a compute shader which writes into buffer1 and an image.
             // Stage 2 is a graphics pass which reads buffer1 as the vertex input and writes to another image.
             // Stage 3 is a compute shader, reads both images, and writes into buffer2.

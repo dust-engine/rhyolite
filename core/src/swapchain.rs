@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{ops::Deref, pin::Pin};
 
-use crate::future::{Access, Res, ResImage, StageContextImage};
+use crate::future::{Access, RenderRes, RenderImage, StageContextImage};
 use crate::{
     Device, HasDevice, ImageLike, PhysicalDevice, QueueFuture, QueueFuturePoll, QueueMask,
     QueueRef, QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait,
@@ -316,10 +316,10 @@ impl ImageLike for SwapchainImage {
 pub struct PresentFuture {
     queue: QueueRef,
     prev_queue: QueueMask,
-    swapchain: Vec<ResImage<SwapchainImage>>,
+    swapchain: Vec<RenderImage<SwapchainImage>>,
 }
 
-impl ResImage<SwapchainImage> {
+impl RenderImage<SwapchainImage> {
     pub fn present(self) -> PresentFuture {
         PresentFuture {
             queue: QueueRef::null(),
@@ -334,7 +334,7 @@ impl QueueFuture for PresentFuture {
 
     type RecycledState = ();
 
-    type RetainedState = Vec<ResImage<SwapchainImage>>;
+    type RetainedState = Vec<RenderImage<SwapchainImage>>;
 
     fn setup(
         self: Pin<&mut Self>,
@@ -444,7 +444,7 @@ pub struct AcquireFuture {
     semaphore: vk::Semaphore,
 }
 impl QueueFuture for AcquireFuture {
-    type Output = ResImage<SwapchainImage>;
+    type Output = RenderImage<SwapchainImage>;
 
     type RecycledState = ();
 
@@ -464,7 +464,7 @@ impl QueueFuture for AcquireFuture {
         recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
-        let output = ResImage::new(this.image.take().unwrap(), vk::ImageLayout::UNDEFINED);
+        let output = RenderImage::new(this.image.take().unwrap(), vk::ImageLayout::UNDEFINED);
         {
             let mut tracking = output.res.tracking_info.borrow_mut();
             tracking.untracked_semaphore = Some(*this.semaphore);

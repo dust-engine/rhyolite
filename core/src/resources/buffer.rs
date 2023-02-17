@@ -8,7 +8,7 @@ use ash::vk;
 use pin_project::pin_project;
 
 use crate::{
-    future::{CommandBufferRecordContext, GPUCommandFuture, Res, StageContext},
+    future::{CommandBufferRecordContext, GPUCommandFuture, RenderRes, StageContext},
     HasDevice,
 };
 
@@ -71,8 +71,8 @@ where
 pub struct CopyBufferFuture<
     S: BufferLike,
     T: BufferLike,
-    SRef: Deref<Target = Res<S>>,
-    TRef: DerefMut<Target = Res<T>>,
+    SRef: Deref<Target = RenderRes<S>>,
+    TRef: DerefMut<Target = RenderRes<T>>,
 > {
     pub str: &'static str,
     pub src: SRef,
@@ -81,8 +81,8 @@ pub struct CopyBufferFuture<
 impl<
         S: BufferLike,
         T: BufferLike,
-        SRef: Deref<Target = Res<S>>,
-        TRef: DerefMut<Target = Res<T>>,
+        SRef: Deref<Target = RenderRes<S>>,
+        TRef: DerefMut<Target = RenderRes<T>>,
     > GPUCommandFuture for CopyBufferFuture<S, T, SRef, TRef>
 {
     type Output = ();
@@ -132,8 +132,8 @@ impl<
 pub fn copy_buffer<
     S: BufferLike,
     T: BufferLike,
-    SRef: Deref<Target = Res<S>>,
-    TRef: DerefMut<Target = Res<T>>,
+    SRef: Deref<Target = RenderRes<S>>,
+    TRef: DerefMut<Target = RenderRes<T>>,
 >(
     src: SRef,
     dst: TRef,

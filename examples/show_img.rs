@@ -202,7 +202,7 @@ fn main() {
                             depth: 1
                         }, Default::default())
                     });
-                    let mut intermediate_buffer = Res::new(intermediate_buffer);
+                    let mut intermediate_buffer = RenderRes::new(intermediate_buffer);
                     commands! {
                         let image_buffer = image_buffer.await;
                         copy_buffer(&image_buffer, &mut intermediate_buffer).await;
@@ -210,7 +210,7 @@ fn main() {
                     }.schedule_on_queue(transfer_queue).await;
                     
                     
-                    let mut intermediate_buffer2 = Res::new(intermediate_buffer2);
+                    let mut intermediate_buffer2 = RenderRes::new(intermediate_buffer2);
                     commands! {
                         copy_buffer(&intermediate_buffer, &mut intermediate_buffer2).await;
                         copy_buffer_to_image(&intermediate_buffer2, &mut swapchain_image_region, vk::ImageLayout::TRANSFER_DST_OPTIMAL).await;

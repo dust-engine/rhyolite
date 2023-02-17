@@ -8,7 +8,7 @@ use ash::vk;
 use pin_project::pin_project;
 
 use crate::{
-    future::{CommandBufferRecordContext, GPUCommandFuture, Res, ResImage, StageContext},
+    future::{CommandBufferRecordContext, GPUCommandFuture, RenderRes, RenderImage, StageContext},
     BufferLike, HasDevice, ImageLike,
 };
 
@@ -16,8 +16,8 @@ use crate::{
 pub struct CopyBufferToImageFuture<
     S: BufferLike,
     T: ImageLike,
-    SRef: Deref<Target = Res<S>>,
-    TRef: DerefMut<Target = ResImage<T>>,
+    SRef: Deref<Target = RenderRes<S>>,
+    TRef: DerefMut<Target = RenderImage<T>>,
 > {
     pub src: SRef,
     pub dst: TRef,
@@ -36,8 +36,8 @@ pub struct CopyBufferToImageFuture<
 impl<
         S: BufferLike,
         T: ImageLike,
-        SRef: Deref<Target = Res<S>>,
-        TRef: DerefMut<Target = ResImage<T>>,
+        SRef: Deref<Target = RenderRes<S>>,
+        TRef: DerefMut<Target = RenderImage<T>>,
     > GPUCommandFuture for CopyBufferToImageFuture<S, T, SRef, TRef>
 {
     type Output = ();
@@ -99,8 +99,8 @@ impl<
 pub fn copy_buffer_to_image<
     S: BufferLike,
     T: ImageLike,
-    SRef: Deref<Target = Res<S>>,
-    TRef: DerefMut<Target = ResImage<T>>,
+    SRef: Deref<Target = RenderRes<S>>,
+    TRef: DerefMut<Target = RenderImage<T>>,
 >(
     src: SRef,
     dst: TRef,
