@@ -8,7 +8,7 @@ use ash::vk;
 use pin_project::pin_project;
 
 use crate::{
-    future::{CommandBufferRecordContext, GPUCommandFuture, RenderRes, RenderImage, StageContext},
+    future::{CommandBufferRecordContext, GPUCommandFuture, RenderImage, RenderRes, StageContext},
     BufferLike, HasDevice, ImageLike,
 };
 

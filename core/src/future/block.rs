@@ -68,8 +68,8 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
 impl<
         'retain,
         R,
-        State: Disposable,
-        Recycle: Default,
+        State: Disposable + Send,
+        Recycle: Default + Send + Sync,
         G: GPUCommandGenerator<'retain, R, State, Recycle>,
     > GPUCommandFuture for GPUCommandBlock<R, State, Recycle, G>
 {

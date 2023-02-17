@@ -243,16 +243,16 @@ impl Queues {
             .collect()
     }
 
-    pub fn submit<'a, F: QueueFuture + 'a>(
+    pub fn submit<F: QueueFuture>(
         &mut self,
         mut future: F,
         // These pools are passed in as argument so that they can be cleaned on a regular basis (per frame) externally.
         // The lifetime parameter prevents the caller from dropping the polls before awaiting the returned future.
-        shared_command_pools: &'_ mut [Option<SharedCommandPool>],
-        semaphore_pool: &'_ mut TimelineSemaphorePool,
-        fence_pool: &'_ mut FencePool,
-        recycled_state: &'a mut F::RecycledState,
-    ) -> impl std::future::Future<Output = F::Output> + 'a {
+        shared_command_pools: &mut [Option<SharedCommandPool>],
+        semaphore_pool: &mut TimelineSemaphorePool,
+        fence_pool: &mut FencePool,
+        recycled_state: &mut F::RecycledState,
+    ) -> impl std::future::Future<Output = F::Output> {
         let mut future_pinned = unsafe { std::pin::Pin::new_unchecked(&mut future) };
         let mut submission_context = SubmissionContext {
             shared_command_pools,
@@ -1093,8 +1093,8 @@ pub enum QueueFuturePoll<OUT> {
 /// - future2.record().......
 pub trait QueueFuture {
     type Output;
-    type RecycledState: Default;
-    type RetainedState: Disposable;
+    type RecycledState: Default + Send + Sync;
+    type RetainedState: Disposable + Send;
     fn setup(
         self: Pin<&mut Self>,
         ctx: &mut SubmissionContext,
@@ -1149,7 +1149,7 @@ where
         }
     }
 }
-impl<Ret, Inner, Retain: Disposable, Recycle: Default> QueueFuture
+impl<Ret, Inner, Retain: Disposable + Send, Recycle: Default + Send + Sync> QueueFuture
     for QueueFutureBlock<Ret, Inner, Recycle, Retain>
 where
     Inner: QueueFutureBlockGenerator<Ret, Recycle, Retain>,

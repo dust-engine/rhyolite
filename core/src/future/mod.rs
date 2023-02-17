@@ -62,10 +62,10 @@ pub trait GPUCommandFuture {
     type Output;
 
     /// Objects with lifetimes that need to be extended until the future was executed on the GPU.
-    type RetainedState: Disposable;
+    type RetainedState: Disposable + Send;
 
     /// Optional object to be passed in at record time that collects reused states.
-    type RecycledState: Default;
+    type RecycledState: Default + Send + Sync;
 
     /// Attempt to record as many commands as possible into the provided
     /// command_buffer until a pipeline barrier is needed.

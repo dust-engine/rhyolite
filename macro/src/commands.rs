@@ -291,8 +291,10 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
             elems
         },
     });
+
+    let mv = input.mv;
     quote::quote! {
-        ::async_ash::future::GPUCommandBlock::new(static |(mut __fut_global_ctx_ptr, mut __recycled_states): (*mut (), *mut #recycled_states_type)| {
+        ::async_ash::future::GPUCommandBlock::new(static #mv |(mut __fut_global_ctx_ptr, mut __recycled_states): (*mut (), *mut #recycled_states_type)| {
             let mut __fut_global_ctx = unsafe{::async_ash::future::CommandBufferRecordContextInner::new(__fut_global_ctx_ptr)};
             #retain_bindings
             #(#inner_closure_stmts)*

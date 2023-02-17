@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{ops::Deref, pin::Pin};
 
-use crate::future::{Access, RenderRes, RenderImage, StageContextImage};
+use crate::future::{Access, RenderImage, RenderRes, StageContextImage};
 use crate::{
     Device, HasDevice, ImageLike, PhysicalDevice, QueueFuture, QueueFuturePoll, QueueMask,
     QueueRef, QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait,
@@ -373,6 +373,10 @@ impl QueueFuture for PresentFuture {
         }
         for swapchain in this.swapchain.iter() {
             let tracking = swapchain.res.tracking_info.borrow_mut();
+            assert!(
+                !tracking.queue_index.is_null(),
+                "The swapchain image was never written to!"
+            );
 
             // If we consider the queue present operation as a read, then we only need to syncronize with previous writes.
             ctx.queues[tracking.queue_index.0 as usize]

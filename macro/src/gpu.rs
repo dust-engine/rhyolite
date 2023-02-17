@@ -194,8 +194,10 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
             elems
         },
     });
+
+    let mv = input.mv;
     quote::quote! {
-        async_ash::queue::QueueFutureBlock::new(static |(mut __initial_queue, mut __ctx, mut __recycled_states):(_,_,*mut #recycled_states_type)| {
+        async_ash::queue::QueueFutureBlock::new(static #mv |(mut __initial_queue, mut __ctx, mut __recycled_states):(_,_,*mut #recycled_states_type)| {
             #dispose_forward_decl
             let mut __current_queue: ::async_ash::queue::QueueMask = __initial_queue;
             #(#inner_closure_stmts)*
