@@ -125,4 +125,7 @@ impl SharedCommandPool {
             raw_buffer
         }
     }
+    pub fn reset(&mut self, release_resources: bool) {
+        self.pool.reset(release_resources);
+    }
 }

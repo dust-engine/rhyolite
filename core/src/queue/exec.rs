@@ -18,7 +18,7 @@ use crate::{
         print_dependency_info, CommandBufferRecordContext, Disposable, GPUCommandFuture,
         StageContextBuffer, StageContextImage, StageContextSemaphoreTransition,
     },
-    Device,
+    Device, HasDevice,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -193,6 +193,12 @@ pub struct Queues {
     families: Vec<QueueMask>,
 }
 
+impl HasDevice for Queues {
+    fn device(&self) -> &Arc<Device> {
+        &self.device
+    }
+}
+
 impl Queues {
     /// This function can only be called once per device.
     pub(crate) unsafe fn new(
@@ -242,9 +248,9 @@ impl Queues {
         mut future: F,
         // These pools are passed in as argument so that they can be cleaned on a regular basis (per frame) externally.
         // The lifetime parameter prevents the caller from dropping the polls before awaiting the returned future.
-        shared_command_pools: &'a mut [Option<SharedCommandPool>],
-        semaphore_pool: &'a mut TimelineSemaphorePool,
-        fence_pool: &'a mut FencePool,
+        shared_command_pools: &'_ mut [Option<SharedCommandPool>],
+        semaphore_pool: &'_ mut TimelineSemaphorePool,
+        fence_pool: &'_ mut FencePool,
         recycled_state: &'a mut F::RecycledState,
     ) -> impl std::future::Future<Output = F::Output> + 'a {
         let mut future_pinned = unsafe { std::pin::Pin::new_unchecked(&mut future) };

@@ -37,6 +37,8 @@ pub struct PerFrameState<T> {
     receiver: mpsc::Receiver<T>,
     sender: mpsc::Sender<T>,
 }
+// Safety: We do not expose &self.receiver or &self.sender to the outside.
+unsafe impl<T> Sync for PerFrameState<T> {}
 impl<T> Default for PerFrameState<T> {
     fn default() -> Self {
         let (sender, receiver) = mpsc::channel();
@@ -47,6 +49,7 @@ pub struct PerFrameContainer<T> {
     sender: mpsc::Sender<T>,
     item: Option<T>,
 }
+unsafe impl<T> Sync for PerFrameContainer<T> {}
 impl<T> Deref for PerFrameContainer<T> {
     type Target = T;
 

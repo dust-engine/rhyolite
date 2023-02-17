@@ -1,14 +1,11 @@
 #![feature(generators, generator_trait)]
-use std::{
-    io::{Cursor},
-    sync::Arc,
-};
+use std::{io::Cursor, sync::Arc};
 
 use async_ash::{
-    commands::SharedCommandPool, copy_buffer_to_image, Device,
-    ImageExt, Queues, Surface, Swapchain, SwapchainCreateInfo,
+    commands::SharedCommandPool, copy_buffer_to_image, Device, ImageExt, Queues, Surface,
+    Swapchain, SwapchainCreateInfo,
 };
-use async_ash_alloc::{Allocator};
+use async_ash_alloc::Allocator;
 use async_ash_core::{
     ash,
     ash::vk,

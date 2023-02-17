@@ -18,6 +18,7 @@ pub struct Instance {
     surface_loader: Option<Box<ash::extensions::khr::Surface>>,
 }
 
+#[derive(Clone, Copy)]
 pub struct Version(pub(crate) u32);
 impl Version {
     pub fn new(variant: u32, major: u32, minor: u32, patch: u32) -> Self {

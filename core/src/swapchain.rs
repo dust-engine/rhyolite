@@ -10,9 +10,9 @@ use std::{ops::Deref, pin::Pin};
 
 use crate::future::{Access, Res, ResImage, StageContextImage};
 use crate::{
-    Device, ImageLike, PhysicalDevice, QueueFuture, QueueFuturePoll, QueueMask, QueueRef,
-    QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait, QueueSubmissionType,
-    Surface,
+    Device, HasDevice, ImageLike, PhysicalDevice, QueueFuture, QueueFuturePoll, QueueMask,
+    QueueRef, QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait,
+    QueueSubmissionType, SharingMode, Surface,
 };
 
 pub struct SwapchainLoader {
@@ -74,8 +74,7 @@ pub struct SwapchainCreateInfo<'a> {
     pub image_extent: vk::Extent2D,
     pub image_array_layers: u32,
     pub image_usage: vk::ImageUsageFlags,
-    pub image_sharing_mode: vk::SharingMode,
-    pub queue_family_indices: &'a [u32],
+    pub image_sharing_mode: SharingMode<'a>,
     pub pre_transform: vk::SurfaceTransformFlagsKHR,
     pub composite_alpha: vk::CompositeAlphaFlagsKHR,
     pub present_mode: vk::PresentModeKHR,
@@ -119,8 +118,7 @@ impl<'a> SwapchainCreateInfo<'a> {
             image_extent: Default::default(),
             image_array_layers: 1,
             image_usage: usage,
-            image_sharing_mode: vk::SharingMode::EXCLUSIVE,
-            queue_family_indices: &[],
+            image_sharing_mode: SharingMode::Exclusive,
             pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
             composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
             present_mode: vk::PresentModeKHR::FIFO,
@@ -129,8 +127,17 @@ impl<'a> SwapchainCreateInfo<'a> {
     }
 }
 
+impl HasDevice for Swapchain {
+    fn device(&self) -> &Arc<Device> {
+        &self.inner.device
+    }
+}
+
 /// Unsafe APIs for Swapchain
 impl Swapchain {
+    pub fn surface(&self) -> &Arc<Surface> {
+        &self.inner.surface
+    }
     /// # Safety
     /// <https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkCreateSwapchainKHR.html>
     pub fn create(
@@ -139,7 +146,7 @@ impl Swapchain {
         info: SwapchainCreateInfo,
     ) -> VkResult<Self> {
         unsafe {
-            let info = vk::SwapchainCreateInfoKHR {
+            let mut create_info = vk::SwapchainCreateInfoKHR {
                 flags: info.flags,
                 surface: surface.surface,
                 min_image_count: info.min_image_count,
@@ -148,16 +155,25 @@ impl Swapchain {
                 image_extent: info.image_extent,
                 image_array_layers: info.image_array_layers,
                 image_usage: info.image_usage,
-                image_sharing_mode: info.image_sharing_mode,
-                queue_family_index_count: info.queue_family_indices.len() as u32,
-                p_queue_family_indices: info.queue_family_indices.as_ptr(),
+                image_sharing_mode: vk::SharingMode::EXCLUSIVE,
                 pre_transform: info.pre_transform,
                 composite_alpha: info.composite_alpha,
                 present_mode: info.present_mode,
                 clipped: info.clipped.into(),
                 ..Default::default()
             };
-            let swapchain = device.swapchain_loader().create_swapchain(&info, None)?;
+            match &info.image_sharing_mode {
+                SharingMode::Exclusive => (),
+                SharingMode::Concurrent {
+                    queue_family_indices,
+                } => {
+                    create_info.image_sharing_mode = vk::SharingMode::CONCURRENT;
+                    create_info.p_queue_family_indices = queue_family_indices.as_ptr();
+                }
+            }
+            let swapchain = device
+                .swapchain_loader()
+                .create_swapchain(&create_info, None)?;
             let images = device.swapchain_loader().get_swapchain_images(swapchain)?;
             let inner = SwapchainInner {
                 device,
@@ -176,7 +192,7 @@ impl Swapchain {
 
     pub fn recreate(&mut self, info: SwapchainCreateInfo) -> VkResult<()> {
         unsafe {
-            let info = vk::SwapchainCreateInfoKHR {
+            let mut create_info = vk::SwapchainCreateInfoKHR {
                 flags: info.flags,
                 surface: self.inner.surface.surface,
                 min_image_count: info.min_image_count,
@@ -185,9 +201,7 @@ impl Swapchain {
                 image_extent: info.image_extent,
                 image_array_layers: info.image_array_layers,
                 image_usage: info.image_usage,
-                image_sharing_mode: info.image_sharing_mode,
-                queue_family_index_count: info.queue_family_indices.len() as u32,
-                p_queue_family_indices: info.queue_family_indices.as_ptr(),
+                image_sharing_mode: vk::SharingMode::EXCLUSIVE,
                 pre_transform: info.pre_transform,
                 composite_alpha: info.composite_alpha,
                 present_mode: info.present_mode,
@@ -195,11 +209,20 @@ impl Swapchain {
                 old_swapchain: self.inner.swapchain,
                 ..Default::default()
             };
+            match &info.image_sharing_mode {
+                SharingMode::Exclusive => (),
+                SharingMode::Concurrent {
+                    queue_family_indices,
+                } => {
+                    create_info.image_sharing_mode = vk::SharingMode::CONCURRENT;
+                    create_info.p_queue_family_indices = queue_family_indices.as_ptr();
+                }
+            }
             let swapchain = self
                 .inner
                 .device
                 .swapchain_loader()
-                .create_swapchain(&info, None)?;
+                .create_swapchain(&create_info, None)?;
             let images = self
                 .inner
                 .device

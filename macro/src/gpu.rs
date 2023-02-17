@@ -89,13 +89,15 @@ impl CommandsTransformer for State {
         syn::Expr::Verbatim(quote::quote! {{
             let mut fut = #base;
             let mut fut_pinned = unsafe{std::pin::Pin::new_unchecked(&mut fut)};
-            fut_pinned.as_mut().setup(
+            ::async_ash::QueueFuture::setup(
+                fut_pinned.as_mut(),
                 unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)},
                 &mut unsafe{&mut *__recycled_states}.#index,
                 __current_queue
             );
             let output = loop {
-                match fut_pinned.as_mut().record(
+                match ::async_ash::QueueFuture::record(
+                    fut_pinned.as_mut(),
                     unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)},
                     &mut unsafe{&mut *__recycled_states}.#index
                 ) {
@@ -107,7 +109,7 @@ impl CommandsTransformer for State {
                     ::async_ash::queue::QueueFuturePoll::Barrier => (__initial_queue, __ctx, __recycled_states) = yield false,
                 };
             };
-            #dispose_token_name.replace(Some(fut.dispose()));
+            #dispose_token_name.replace(Some(::async_ash::QueueFuture::dispose(fut)));
             output
         }})
     }
