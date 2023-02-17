@@ -4,8 +4,8 @@ use crate::{
 };
 use ash::vk;
 use std::{
-    cell::RefCell, collections::BTreeMap, marker::PhantomData, mem::ManuallyDrop, ops::Range,
-    pin::Pin, task::Poll,
+    cell::RefCell, collections::BTreeMap, marker::PhantomData, mem::ManuallyDrop, pin::Pin,
+    task::Poll,
 };
 
 use super::{Disposable, GPUCommandFuture};
@@ -628,7 +628,7 @@ impl StageContext {
         }
         self.add_barrier_tracking(&mut tracking, &access);
 
-        let mut image_barrier = self
+        let image_barrier = self
             .image_accesses
             .entry(StageContextImage {
                 image: res.inner().raw_image(),

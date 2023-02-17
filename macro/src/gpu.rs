@@ -51,12 +51,12 @@ impl CommandsTransformer for State {
         if is_image {
             quote::quote! {unsafe {
                 #res_token_name = Some(#input_tokens);
-                ::async_ash::future::ResImage::new(#res_token_name.as_mut().unwrap())
+                ::rhyolite::future::ResImage::new(#res_token_name.as_mut().unwrap())
             }}
         } else {
             quote::quote! {unsafe {
                 #res_token_name = Some(#input_tokens);
-                ::async_ash::future::Res::new(#res_token_name.as_mut().unwrap())
+                ::rhyolite::future::Res::new(#res_token_name.as_mut().unwrap())
             }}
         }
     }
@@ -89,27 +89,27 @@ impl CommandsTransformer for State {
         syn::Expr::Verbatim(quote::quote! {{
             let mut fut = #base;
             let mut fut_pinned = unsafe{std::pin::Pin::new_unchecked(&mut fut)};
-            ::async_ash::QueueFuture::setup(
+            ::rhyolite::QueueFuture::setup(
                 fut_pinned.as_mut(),
-                unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)},
+                unsafe{&mut *(__ctx as *mut ::rhyolite::queue::SubmissionContext)},
                 &mut unsafe{&mut *__recycled_states}.#index,
                 __current_queue
             );
             let output = loop {
-                match ::async_ash::QueueFuture::record(
+                match ::rhyolite::QueueFuture::record(
                     fut_pinned.as_mut(),
-                    unsafe{&mut *(__ctx as *mut ::async_ash::queue::SubmissionContext)},
+                    unsafe{&mut *(__ctx as *mut ::rhyolite::queue::SubmissionContext)},
                     &mut unsafe{&mut *__recycled_states}.#index
                 ) {
-                    ::async_ash::queue::QueueFuturePoll::Ready { next_queue, output } => {
+                    ::rhyolite::queue::QueueFuturePoll::Ready { next_queue, output } => {
                         __current_queue = next_queue;
                         break output;
                     },
-                    ::async_ash::queue::QueueFuturePoll::Semaphore => (__initial_queue, __ctx, __recycled_states) = yield true,
-                    ::async_ash::queue::QueueFuturePoll::Barrier => (__initial_queue, __ctx, __recycled_states) = yield false,
+                    ::rhyolite::queue::QueueFuturePoll::Semaphore => (__initial_queue, __ctx, __recycled_states) = yield true,
+                    ::rhyolite::queue::QueueFuturePoll::Barrier => (__initial_queue, __ctx, __recycled_states) = yield false,
                 };
             };
-            #dispose_token_name.replace(Some(::async_ash::QueueFuture::dispose(fut)));
+            #dispose_token_name.replace(Some(::rhyolite::QueueFuture::dispose(fut)));
             output
         }})
     }
@@ -197,9 +197,9 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
 
     let mv = input.mv;
     quote::quote! {
-        async_ash::queue::QueueFutureBlock::new(static #mv |(mut __initial_queue, mut __ctx, mut __recycled_states):(_,_,*mut #recycled_states_type)| {
+        rhyolite::queue::QueueFutureBlock::new(static #mv |(mut __initial_queue, mut __ctx, mut __recycled_states):(_,_,*mut #recycled_states_type)| {
             #dispose_forward_decl
-            let mut __current_queue: ::async_ash::queue::QueueMask = __initial_queue;
+            let mut __current_queue: ::rhyolite::queue::QueueMask = __initial_queue;
             #(#inner_closure_stmts)*
         })
     }

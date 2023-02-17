@@ -78,21 +78,21 @@ impl CommandsTransformer for CommandsTransformState {
                 let mut fut = #base;
                 unsafe {
                     let mut fut_pinned = std::pin::Pin::new_unchecked(&mut fut);
-                    if let Some((out, retain)) = ::async_ash::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
+                    if let Some((out, retain)) = ::rhyolite::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
                         #global_future_variable_name = Some(retain);
                         out
                     } else {
-                        (__fut_global_ctx_ptr, __recycled_states) = yield ::async_ash::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
-                        __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
+                        (__fut_global_ctx_ptr, __recycled_states) = yield ::rhyolite::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
+                        __fut_global_ctx = ::rhyolite::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
                         loop {
-                            match ::async_ash::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
+                            match ::rhyolite::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
                                 ::std::task::Poll::Ready((output, retained_state)) => {
                                     #global_future_variable_name = Some(retained_state);
                                     break output
                                 },
                                 ::std::task::Poll::Pending => {
-                                    (__fut_global_ctx_ptr, __recycled_states) = yield ::async_ash::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
-                                    __fut_global_ctx = ::async_ash::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
+                                    (__fut_global_ctx_ptr, __recycled_states) = yield ::rhyolite::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
+                                    __fut_global_ctx = ::rhyolite::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
                                 },
                             };
                         }
@@ -196,7 +196,7 @@ impl CommandsTransformState {
                 .collect(),
         };
         quote::quote! {{
-            let mut forked_future = ::async_ash::future::GPUCommandForkedStateInner::Some(#forked_future);
+            let mut forked_future = ::rhyolite::future::GPUCommandForkedStateInner::Some(#forked_future);
             let mut pinned = unsafe{std::pin::Pin::new_unchecked(&mut forked_future)};
             pinned.as_mut().unwrap_pinned().init(__fut_global_ctx, __recycled_states);
             let forked_future_inner = GPUCommandForkedInner::<_, #number_of_forks>::new(pinned);
@@ -294,8 +294,8 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
 
     let mv = input.mv;
     quote::quote! {
-        ::async_ash::future::GPUCommandBlock::new(static #mv |(mut __fut_global_ctx_ptr, mut __recycled_states): (*mut (), *mut #recycled_states_type)| {
-            let mut __fut_global_ctx = unsafe{::async_ash::future::CommandBufferRecordContextInner::new(__fut_global_ctx_ptr)};
+        ::rhyolite::future::GPUCommandBlock::new(static #mv |(mut __fut_global_ctx_ptr, mut __recycled_states): (*mut (), *mut #recycled_states_type)| {
+            let mut __fut_global_ctx = unsafe{::rhyolite::future::CommandBufferRecordContextInner::new(__fut_global_ctx_ptr)};
             #retain_bindings
             #(#inner_closure_stmts)*
         })

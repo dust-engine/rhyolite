@@ -3,12 +3,10 @@ use ash::prelude::VkResult;
 use ash::vk;
 use pin_project::pin_project;
 
-use std::future::Future;
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{ops::Deref, pin::Pin};
 
-use crate::future::{Access, RenderImage, RenderRes, StageContextImage};
+use crate::future::{Access, RenderImage, StageContextImage};
 use crate::{
     Device, HasDevice, ImageLike, PhysicalDevice, QueueFuture, QueueFuturePoll, QueueMask,
     QueueRef, QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait,
@@ -338,8 +336,8 @@ impl QueueFuture for PresentFuture {
 
     fn setup(
         self: Pin<&mut Self>,
-        ctx: &mut crate::SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
+        _ctx: &mut crate::SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
         prev_queue: crate::QueueMask,
     ) {
         let this = self.project();
@@ -363,7 +361,7 @@ impl QueueFuture for PresentFuture {
     fn record(
         self: Pin<&mut Self>,
         ctx: &mut crate::SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
+        _recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
 
@@ -456,16 +454,16 @@ impl QueueFuture for AcquireFuture {
 
     fn setup(
         self: Pin<&mut Self>,
-        ctx: &mut crate::SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
-        prev_queue: QueueMask,
+        _ctx: &mut crate::SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
+        _prev_queue: QueueMask,
     ) {
     }
 
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut crate::SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
+        _ctx: &mut crate::SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
         let output = RenderImage::new(this.image.take().unwrap(), vk::ImageLayout::UNDEFINED);

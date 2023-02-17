@@ -31,7 +31,6 @@ pub fn use_cached_state<T>(
     }
 }
 
-use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 // probably needs a mpsc channel.
 pub struct PerFrameState<T> {

@@ -8,8 +8,10 @@
 pub use cstr::cstr;
 
 pub extern crate ash;
-pub extern crate async_ash_macro as macros;
+pub extern crate rhyolite_macro as macros;
+pub extern crate self as rhyolite;
 
+mod allocator;
 pub mod commands;
 pub mod debug;
 mod device;
@@ -33,4 +35,5 @@ pub use semaphore::*;
 pub use surface::*;
 pub use swapchain::*;
 
+pub use allocator::Allocator;
 // TODO: Test two consequtive reads, with different image layouts.

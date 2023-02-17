@@ -8,7 +8,7 @@ use std::{
     task::Poll,
 };
 
-use ash::vk::{self, SwapchainKHR};
+use ash::vk;
 
 use pin_project::pin_project;
 
