@@ -1,7 +1,11 @@
 [package]
-name = "rhyolite-core"
+name = "rhyolite"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/dust-engine/rhyolite"
+license = "MIT OR Apache-2.0"
+categories = ["game-engines", "graphics", "gui", "rendering"]
+description = "A refreshingly simple data-driven game engine and app framework"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -10,7 +14,7 @@ ash = "0.37.2"
 ash-window = "0.12"
 raw-window-handle = "0.5"
 tracing = "0.1"
-rhyolite-macro = { path = "../macro" }
+rhyolite-macro = { path = "../macro", version = "0.1.0" }
 vk-mem = { git = "https://github.com/dust-engine/vk-mem-rs" }
 blocking = "1.2"
 pin-project = "1.0"
