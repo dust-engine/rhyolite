@@ -15,7 +15,7 @@ use pin_project::pin_project;
 use crate::{
     commands::SharedCommandPool,
     future::{
-        print_dependency_info, CommandBufferRecordContext, Disposable, GPUCommandFuture,
+        CommandBufferRecordContext, Disposable, GPUCommandFuture,
         StageContextBuffer, StageContextImage, StageContextSemaphoreTransition,
     },
     Device, HasDevice,
@@ -288,11 +288,9 @@ impl Queues {
                 .record(&mut submission_context, recycled_state)
             {
                 QueueFuturePoll::Barrier => {
-                    println!("Saw barrier");
                     continue;
                 }
                 QueueFuturePoll::Semaphore => {
-                    println!("Saw semaphore");
                     let mut last_stage = std::mem::replace(
                         &mut current_stage,
                         CachedStageSubmissions::new(self.queues.len()),
@@ -323,10 +321,6 @@ impl Queues {
                         }
 
                         let last_accessed_stage = last_submit_stage_index[i];
-                        println!(
-                            "-------------Apply exports on queue : {:?}, stage {}",
-                            i, last_accessed_stage
-                        );
                         submission_stages[last_accessed_stage].queues[i]
                             .apply_exports(ctx, &self.device);
                     }
@@ -343,7 +337,6 @@ impl Queues {
                     next_queue: _,
                     output,
                 } => {
-                    println!("Saw ready");
                     let mut last_stage = std::mem::replace(
                         &mut current_stage,
                         CachedStageSubmissions::new(self.queues.len()),
@@ -373,10 +366,6 @@ impl Queues {
                         }
 
                         let last_accessed_stage = last_submit_stage_index[i];
-                        println!(
-                            "-------------Apply exports on queue : {:?}, stage {}",
-                            i, last_accessed_stage
-                        );
                         submission_stages[last_accessed_stage].queues[i]
                             .apply_exports(ctx, &self.device);
                     }
@@ -415,7 +404,6 @@ impl Queues {
         batch: SubmissionBatch,
         fence_pool: &mut FencePool,
     ) -> Vec<vk::Fence> {
-        println!("{batch:?}");
         let mut fences: Vec<vk::Fence> = Vec::new();
         for (queue, queue_batch) in self
             .queues
@@ -676,8 +664,6 @@ impl CachedQueueStageSubmissions {
                 recording_command_buffer: Some(command_buffer),
                 ..
             } => unsafe {
-                print_dependency_info(&dependency_info);
-                println!("-------------");
                 device.cmd_pipeline_barrier2(*command_buffer, &dependency_info);
             },
             _ => panic!(),

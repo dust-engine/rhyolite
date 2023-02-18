@@ -97,7 +97,6 @@ impl<
         ctx: &'fa mut CommandBufferRecordContext<'fb>,
         _recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
-        println!("{}, on stage {}", self.str, ctx.current_stage_index());
         let this = self.project();
         let src = this.src.deref().inner();
         let dst = this.dst.deref_mut().inner_mut();

@@ -656,28 +656,6 @@ impl StageContext {
     }
 }
 
-pub(crate) fn print_dependency_info(info: &vk::DependencyInfo) {
-    unsafe {
-        for barrier in
-            std::slice::from_raw_parts(info.p_memory_barriers, info.memory_barrier_count as usize)
-        {
-            println!("{:?}", barrier);
-        }
-        for barrier in std::slice::from_raw_parts(
-            info.p_image_memory_barriers,
-            info.image_memory_barrier_count as usize,
-        ) {
-            println!("{:?}", barrier);
-        }
-        for barrier in std::slice::from_raw_parts(
-            info.p_buffer_memory_barriers,
-            info.buffer_memory_barrier_count as usize,
-        ) {
-            println!("{:?}", barrier);
-        }
-    }
-}
-
 impl<'a> CommandBufferRecordContext<'a> {
     pub fn record_one_step<T: GPUCommandFuture>(
         &mut self,
@@ -697,8 +675,6 @@ impl<'a> CommandBufferRecordContext<'a> {
         let queue = self.queue;
         Self::add_barrier(&next_stage, |dependency_info| {
             self.record(|ctx, command_buffer| unsafe {
-                println!("pipeline barrier on queue {:?}", queue);
-                print_dependency_info(dependency_info);
                 ctx.device()
                     .cmd_pipeline_barrier2(command_buffer, dependency_info);
             });

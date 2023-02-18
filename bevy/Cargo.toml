@@ -21,3 +21,5 @@ bevy_core = { git = "https://github.com/bevyengine/bevy.git", rev = "f7fbfaf9c72
 bevy_hierarchy = { git = "https://github.com/bevyengine/bevy.git", rev = "f7fbfaf9c72035e98c6b6cec0c7d26ff9f5b1c82" }
 bevy_transform = { git = "https://github.com/bevyengine/bevy.git", rev = "f7fbfaf9c72035e98c6b6cec0c7d26ff9f5b1c82" }
 bevy_winit = { git = "https://github.com/bevyengine/bevy.git", rev = "f7fbfaf9c72035e98c6b6cec0c7d26ff9f5b1c82" }
+bevy_time = { git = "https://github.com/bevyengine/bevy.git", rev = "f7fbfaf9c72035e98c6b6cec0c7d26ff9f5b1c82" }
+bevy_diagnostic = { git = "https://github.com/bevyengine/bevy.git", rev = "f7fbfaf9c72035e98c6b6cec0c7d26ff9f5b1c82" }

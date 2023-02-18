@@ -117,6 +117,9 @@ pub fn use_per_frame_state_blocking<T>(
                 mpsc::TryRecvError::Disconnected => panic!(),
             })
     } else {
+        // When this branch was selected, we're acquiring images faster than we can process them.
+        // This is usually due to a max_frame_in_flight number that is smaller than the swapchain image count.
+        // When max_frame_in_flight >= swapchain image count, this branch usually shouldn't be triggered.
         this.receiver
             .recv()
             .map(|mut item| {
