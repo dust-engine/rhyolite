@@ -56,8 +56,13 @@ impl<T> Disposable for RenderRes<T> {
 }
 impl<T> Drop for RenderRes<T> {
     fn drop(&mut self) {
-        if std::mem::needs_drop::<T>() {
+        if std::mem::needs_drop::<T>() && !std::thread::panicking() {
             panic!("Res<{}> must be disposed!", std::any::type_name::<T>());
+        } else {
+            unsafe {
+                ManuallyDrop::drop(&mut self.tracking_info);
+                ManuallyDrop::drop(&mut self.inner);
+            }
         }
     }
 }

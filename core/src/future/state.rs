@@ -69,7 +69,7 @@ impl<T> DerefMut for PerFrameContainer<T> {
 }
 impl<T> Drop for PerFrameContainer<T> {
     fn drop(&mut self) {
-        self.sender.send(self.item.take().unwrap()).unwrap();
+        self.sender.send(self.item.take().unwrap()).ok();
     }
 }
 pub fn use_per_frame_state<T>(

@@ -16,19 +16,20 @@ use rhyolite_bevy::{Allocator, Queues, QueuesRouter, Swapchain, RenderSystems, S
 fn main() {
     let mut app = App::new();
     app
+        .add_plugin(bevy_log::LogPlugin::default())
         .add_plugin(bevy_core::TaskPoolPlugin::default())
         .add_plugin(bevy_core::TypeRegistrationPlugin::default())
         .add_plugin(bevy_core::FrameCountPlugin::default())
         .add_plugin(bevy_transform::TransformPlugin::default())
         .add_plugin(bevy_hierarchy::HierarchyPlugin::default())
+        .add_plugin(bevy_diagnostic::DiagnosticsPlugin::default())
         .add_plugin(bevy_input::InputPlugin::default())
         .add_plugin(bevy_window::WindowPlugin::default())
         .add_plugin(bevy_winit::WinitPlugin::default())
         .add_plugin(rhyolite_bevy::RenderPlugin::default())
         .add_plugin(bevy_time::TimePlugin::default())
-        .add_plugin(bevy_diagnostic::DiagnosticsPlugin::default())
-        .add_plugin(bevy_diagnostic::LogDiagnosticsPlugin::default())
         .add_plugin(bevy_diagnostic::FrameTimeDiagnosticsPlugin::default())
+        .add_plugin(bevy_diagnostic::LogDiagnosticsPlugin::default())
         .add_plugin(RenderSystem);
 
     let main_window =  app.world.query_filtered::<Entity, With<PrimaryWindow>>().iter(&app.world).next().unwrap();

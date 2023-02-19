@@ -4,8 +4,9 @@ use crate::{Device, HasDevice};
 use ash::vk;
 
 struct AllocatorInner {
-    device: Arc<Device>,
+    // This needs to be defined before device, so that it gets dropped hefore device gets dropped.
     inner: vk_mem::Allocator,
+    device: Arc<Device>,
 }
 
 #[derive(Clone)]
