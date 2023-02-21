@@ -76,9 +76,9 @@ impl<
     type Output = R;
     type RetainedState = State;
     type RecycledState = Recycle;
-    fn record<'a, 'b: 'a>(
+    fn record(
         self: Pin<&mut Self>,
-        ctx: &'a mut CommandBufferRecordContext<'b>,
+        ctx: &mut CommandBufferRecordContext,
         recycled_state: &mut Recycle,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
@@ -115,9 +115,9 @@ impl<
             }
         }
     }
-    fn init<'a, 'b: 'a>(
+    fn init(
         self: Pin<&mut Self>,
-        ctx: &'a mut CommandBufferRecordContext<'b>,
+        ctx: &mut CommandBufferRecordContext,
         recycled_state: &mut Recycle,
     ) -> Option<(Self::Output, Self::RetainedState)> {
         match self.state {

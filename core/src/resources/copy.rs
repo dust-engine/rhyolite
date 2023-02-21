@@ -44,9 +44,9 @@ impl<
     type RetainedState = ();
     type RecycledState = ();
     #[inline]
-    fn record<'fa, 'fb: 'fa>(
+    fn record(
         self: Pin<&mut Self>,
-        ctx: &'fa mut CommandBufferRecordContext<'fb>,
+        ctx: &mut CommandBufferRecordContext,
         _recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();

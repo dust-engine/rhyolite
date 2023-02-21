@@ -167,9 +167,9 @@ impl<'fut> GPUCommandFuture for CommandDebugFuture<'fut> {
     type RetainedState = ();
     type RecycledState = ();
 
-    fn record<'a, 'b: 'a>(
+    fn record(
         self: Pin<&mut Self>,
-        ctx: &'a mut crate::future::CommandBufferRecordContext<'b>,
+        ctx: &mut crate::future::CommandBufferRecordContext,
         _recycled_state: &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
         ctx.record(|ctx, buf| unsafe {
@@ -190,9 +190,9 @@ impl<'fut> GPUCommandFuture for CommandDebugFuture<'fut> {
     }
 
     fn context(self: Pin<&mut Self>, _ctx: &mut crate::future::StageContext) {}
-    fn init<'a, 'b: 'a>(
+    fn init(
         self: Pin<&mut Self>,
-        _ctx: &'a mut crate::future::CommandBufferRecordContext<'b>,
+        _ctx: &mut crate::future::CommandBufferRecordContext,
         _recycled_state: &mut Self::RecycledState,
     ) -> Option<(Self::Output, Self::RetainedState)> {
         Some(((), ()))
