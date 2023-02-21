@@ -5,6 +5,7 @@ use bevy_ecs::prelude::*;
 use bevy_window::{PrimaryWindow, Window};
 use rhyolite::ash::vk;
 use rhyolite::future::GPUCommandFutureExt;
+use rhyolite::macros::glsl;
 use rhyolite::{
     copy_buffer, copy_buffer_to_image,
     future::RenderRes,
@@ -15,6 +16,7 @@ use rhyolite_bevy::{Allocator, Queues, QueuesRouter, Swapchain, RenderSystems, S
 
 fn main() {
     let mut app = App::new();
+    let shader = glsl!("example.comp");
     app
         .add_plugin(bevy_log::LogPlugin::default())
         .add_plugin(bevy_core::TaskPoolPlugin::default())
@@ -39,7 +41,6 @@ fn main() {
     });
 
     app.run();
-
 
 }
 

@@ -18,6 +18,7 @@ mod device;
 mod dho;
 pub mod future;
 mod instance;
+pub mod shader;
 mod physical_device;
 pub mod queue;
 mod resources;

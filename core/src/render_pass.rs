@@ -1,5 +1,0 @@
-trait Subpass {
-    fn ctx() {
-        
-    }
-}
