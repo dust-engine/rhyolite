@@ -170,7 +170,7 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let bin = U32Slice(binary);
     return quote::quote! {{
         use ::rhyolite::shader::{SpirvEntryPoint, SpirvDescriptorSetBinding, SpirvDescriptorSet};
-        use ::rhyolite::ash::vk::{PushConstantRange, ShaderStageFlags, DescriptorType};
+        use ::rhyolite::ash::vk::{PushConstantRange, ShaderStageFlags, DescriptorType, DescriptorSetLayoutCreateFlags};
         ::rhyolite::shader::SpirvShader {
             data: {
                 let slice: &[u32] = #bin.as_slice();
@@ -248,10 +248,20 @@ impl<'a, I: Debug> Debug for ToVecFmt<'a, I> {
 struct SpirvDescriptorSet {
     pub bindings: Vec<SpirvDescriptorSetBinding>,
 }
+#[derive(Clone, Copy)]
+struct EmptyFlags(&'static str);
+impl Debug for EmptyFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)?;
+        f.write_str("::empty()")?;
+        Ok(())
+    }
+}
 impl Debug for SpirvDescriptorSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SpirvDescriptorSet")
             .field("bindings", &ToVecFmt(&self.bindings))
+            .field("flags", &EmptyFlags("DescriptorSetLayoutCreateFlags"))
             .finish()?;
         Ok(())
     }

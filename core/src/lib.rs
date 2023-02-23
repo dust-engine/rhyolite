@@ -3,6 +3,7 @@
 #![feature(cstr_from_bytes_until_nul)]
 #![feature(negative_impls)]
 #![feature(specialization)]
+#![feature(const_trait_impl)]
 #![feature(array_zip)]
 
 pub use cstr::cstr;
@@ -14,6 +15,7 @@ pub extern crate self as rhyolite;
 mod allocator;
 pub mod commands;
 pub mod debug;
+pub mod descriptor;
 mod device;
 mod dho;
 pub mod future;

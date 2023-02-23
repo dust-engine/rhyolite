@@ -3,6 +3,7 @@ use ash::vk;
 use std::ops::Deref;
 use std::{collections::HashMap, sync::Arc};
 
+use crate::descriptor::{DescriptorSetLayout, DescriptorSetLayoutCache};
 use crate::sampler::Sampler;
 use crate::{device, Device, HasDevice};
 pub struct SpirvShader<T: Deref<Target = [u32]>> {
@@ -10,19 +11,8 @@ pub struct SpirvShader<T: Deref<Target = [u32]>> {
     pub entry_points: HashMap<String, SpirvEntryPoint>,
 }
 
-#[derive(Debug)]
-pub struct SpirvDescriptorSetBinding {
-    pub binding: u32,
-    pub descriptor_type: vk::DescriptorType,
-    pub descriptor_count: u32,
-    pub stage_flags: vk::ShaderStageFlags,
-    pub immutable_samplers: Vec<Arc<Sampler>>,
-}
-#[derive(Debug)]
-pub struct SpirvDescriptorSet {
-    pub bindings: Vec<SpirvDescriptorSetBinding>,
-}
-
+pub use crate::descriptor::DescriptorSetLayoutBindingInfo as SpirvDescriptorSetBinding;
+pub use crate::descriptor::DescriptorSetLayoutCacheKey as SpirvDescriptorSet;
 #[derive(Debug)]
 pub struct SpirvEntryPoint {
     pub descriptor_sets: Vec<SpirvDescriptorSet>,
@@ -30,6 +20,18 @@ pub struct SpirvEntryPoint {
 }
 
 impl<T: Deref<Target = [u32]>> SpirvShader<T> {
+    pub fn set_flags(
+        &mut self,
+        entry_point: &str,
+        set_id: u32,
+        flags: vk::DescriptorSetLayoutCreateFlags,
+    ) {
+        self.entry_points
+            .get_mut(entry_point)
+            .unwrap()
+            .descriptor_sets[set_id as usize]
+            .flags = flags;
+    }
     pub fn add_immutable_samplers(
         &mut self,
         entry_point: &str,
@@ -59,9 +61,9 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
         );
         binding.immutable_samplers = samplers;
     }
-    pub fn build(&self, device: Arc<Device>) -> VkResult<ShaderModule> {
+    pub fn build(self, cache: &mut DescriptorSetLayoutCache) -> VkResult<ShaderModule> {
         let module = unsafe {
-            device.create_shader_module(
+            cache.device().create_shader_module(
                 &vk::ShaderModuleCreateInfo {
                     code_size: std::mem::size_of_val(self.data.as_ref()),
                     p_code: self.data.as_ref().as_ptr(),
@@ -73,69 +75,15 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
         let mut referenced_immutable_samplers: Vec<Arc<Sampler>> = Vec::new();
         let entry_points = self
             .entry_points
-            .iter()
+            .into_iter()
             .map(|(name, entry_point)| {
                 (
                     name.clone(),
                     ShaderModuleEntryPoint {
                         desc_sets: entry_point
                             .descriptor_sets
-                            .iter()
-                            .map(|desc_set| unsafe {
-                                let total_immutable_samplers = desc_set
-                                    .bindings
-                                    .iter()
-                                    .map(|a| a.immutable_samplers.len())
-                                    .sum();
-                                let mut immutable_samplers: Vec<vk::Sampler> =
-                                    Vec::with_capacity(total_immutable_samplers);
-                                let bindings: Vec<_> = desc_set
-                                    .bindings
-                                    .iter()
-                                    .map(|binding| {
-                                        let immutable_samplers_offset = immutable_samplers.len();
-                                        immutable_samplers.extend(
-                                            binding.immutable_samplers.iter().map(|a| a.raw()),
-                                        );
-                                        referenced_immutable_samplers.extend(
-                                            binding.immutable_samplers.iter().map(|a| a.clone()),
-                                        );
-                                        if binding.immutable_samplers.len() > 0 {
-                                            assert_eq!(
-                                                binding.immutable_samplers.len() as u32,
-                                                binding.descriptor_count
-                                            );
-                                        }
-                                        vk::DescriptorSetLayoutBinding {
-                                            binding: binding.binding,
-                                            descriptor_type: binding.descriptor_type,
-                                            descriptor_count: binding.descriptor_count,
-                                            stage_flags: binding.stage_flags,
-                                            p_immutable_samplers: if binding
-                                                .immutable_samplers
-                                                .is_empty()
-                                            {
-                                                std::ptr::null()
-                                            } else {
-                                                immutable_samplers
-                                                    .as_ptr()
-                                                    .add(immutable_samplers_offset)
-                                            },
-                                        }
-                                    })
-                                    .collect();
-                                device
-                                    .create_descriptor_set_layout(
-                                        &vk::DescriptorSetLayoutCreateInfo {
-                                            flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-                                            binding_count: bindings.len() as u32,
-                                            p_bindings: bindings.as_ptr(),
-                                            ..Default::default()
-                                        },
-                                        None,
-                                    )
-                                    .unwrap()
-                            })
+                            .into_iter()
+                            .map(|desc_set| cache.get(desc_set.bindings, Default::default()))
                             .collect(),
                         push_constant_ranges: entry_point.push_constant_ranges.clone(),
                     },
@@ -143,7 +91,7 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
             })
             .collect();
         Ok(ShaderModule {
-            device,
+            device: cache.device().clone(),
             module,
             entry_points,
             _referenced_immutable_samplers: referenced_immutable_samplers,
@@ -168,17 +116,12 @@ impl HasDevice for ShaderModule {
     }
 }
 pub(crate) struct ShaderModuleEntryPoint {
-    pub desc_sets: Vec<vk::DescriptorSetLayout>,
+    pub desc_sets: Vec<Arc<DescriptorSetLayout>>,
     pub push_constant_ranges: Vec<vk::PushConstantRange>,
 }
 impl Drop for ShaderModule {
     fn drop(&mut self) {
         unsafe {
-            for entry_point in self.entry_points.values() {
-                for layout in entry_point.desc_sets.iter() {
-                    self.device.destroy_descriptor_set_layout(*layout, None);
-                }
-            }
             self.device.destroy_shader_module(self.module, None);
         }
     }
