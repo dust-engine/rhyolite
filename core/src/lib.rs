@@ -11,6 +11,8 @@ pub extern crate ash;
 pub extern crate rhyolite_macro as macros;
 pub extern crate self as rhyolite;
 
+mod pipeline;
+mod sampler;
 mod allocator;
 pub mod commands;
 pub mod debug;
@@ -38,3 +40,4 @@ pub use swapchain::*;
 
 pub use allocator::Allocator;
 // TODO: Test two consequtive reads, with different image layouts.
+pub use shader::ShaderModule;

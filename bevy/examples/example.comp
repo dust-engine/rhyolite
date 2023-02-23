@@ -195,10 +195,6 @@ void main() {
             (t_min <= t_max)
         ) {
             // Terminate if the voxel is small enough.
-            if (tc_max * PushConstants.terminalPixelSize >= scale_exp2)
-                break; // at t_min
-
-
             // INTERSECT
             // Intersect active t-span with the cube and evaluate
             // tx(), ty(), and tz() at the center of the voxel.
@@ -343,5 +339,6 @@ void main() {
         color.b = v;
     }
     
+    imageLoad(beamDepthInput, ivec2(gl_GlobalInvocationID.xy));
     imageStore(imgOutput, ivec2(gl_GlobalInvocationID.xy), color);
 }
