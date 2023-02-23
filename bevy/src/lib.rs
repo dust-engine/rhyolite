@@ -63,8 +63,7 @@ pub enum RenderSystems {
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut bevy_app::App) {
-        app
-            .configure_set(RenderSystems::SetUp)
+        app.configure_set(RenderSystems::SetUp)
             .configure_set(RenderSystems::Render.after(RenderSystems::SetUp))
             .configure_set(RenderSystems::CleanUp.after(RenderSystems::Render));
 

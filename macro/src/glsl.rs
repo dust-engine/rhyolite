@@ -2,7 +2,6 @@ use std::fmt::{Debug, Write};
 
 use ash::vk;
 
-
 #[cfg(feature = "glsl")]
 pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     use std::fmt::Debug;
@@ -18,25 +17,28 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
 
     proc_macro::tracked_path::path(&path.as_os_str().to_str().unwrap());
 
-    let shader_stage = path.extension()
+    let shader_stage = path
+        .extension()
         .and_then(|extension| extension.to_str())
-        .and_then(|extension| Some(match extension {
-            "vert" => shaderc::ShaderKind::Vertex,
-            "frag" => shaderc::ShaderKind::Fragment,
-            "comp" => shaderc::ShaderKind::Compute,
-            "geom" => shaderc::ShaderKind::Geometry,
-            "tesc" => shaderc::ShaderKind::TessControl,
-            "tese" => shaderc::ShaderKind::TessEvaluation,
-            "mesh" => shaderc::ShaderKind::Mesh,
-            "task" => shaderc::ShaderKind::Task,
-            "rint" => shaderc::ShaderKind::Intersection,
-            "rgen" => shaderc::ShaderKind::RayGeneration,
-            "rmiss" => shaderc::ShaderKind::Miss,
-            "rcall" => shaderc::ShaderKind::Callable,
-            "rahit" => shaderc::ShaderKind::AnyHit,
-            "rchit" => shaderc::ShaderKind::ClosestHit,
-            _ => shaderc::ShaderKind::InferFromSource,
-        }))
+        .and_then(|extension| {
+            Some(match extension {
+                "vert" => shaderc::ShaderKind::Vertex,
+                "frag" => shaderc::ShaderKind::Fragment,
+                "comp" => shaderc::ShaderKind::Compute,
+                "geom" => shaderc::ShaderKind::Geometry,
+                "tesc" => shaderc::ShaderKind::TessControl,
+                "tese" => shaderc::ShaderKind::TessEvaluation,
+                "mesh" => shaderc::ShaderKind::Mesh,
+                "task" => shaderc::ShaderKind::Task,
+                "rint" => shaderc::ShaderKind::Intersection,
+                "rgen" => shaderc::ShaderKind::RayGeneration,
+                "rmiss" => shaderc::ShaderKind::Miss,
+                "rcall" => shaderc::ShaderKind::Callable,
+                "rahit" => shaderc::ShaderKind::AnyHit,
+                "rchit" => shaderc::ShaderKind::ClosestHit,
+                _ => shaderc::ShaderKind::InferFromSource,
+            })
+        })
         .unwrap_or(shaderc::ShaderKind::InferFromSource);
 
     let file = match std::fs::File::open(path) {
@@ -63,18 +65,18 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     options.set_target_spirv(shaderc::SpirvVersion::V1_3);
     options.set_target_env(shaderc::TargetEnv::Vulkan, (1 << 22) | (3 << 12));
 
-
     let binary_result = compiler.compile_into_spirv(
-        &source, shader_stage,
-        path.file_name().and_then(|f| f.to_str()).unwrap_or("unknown.glsl"),
+        &source,
+        shader_stage,
+        path.file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("unknown.glsl"),
         "main",
-        Some(&options)
+        Some(&options),
     );
 
     let binary_result = match binary_result {
-        Ok(binary) => {
-            binary
-        },
+        Ok(binary) => binary,
         Err(err) => {
             let err = err.to_string();
             input.span().unwrap().error(err).emit();
@@ -88,60 +90,82 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
 
     let binary = binary_result.as_binary();
     let reflect_result = spirq::ReflectConfig::new()
-    .spv(binary)
-    .combine_img_samplers(true)
-    .reflect().unwrap();
+        .spv(binary)
+        .combine_img_samplers(true)
+        .reflect()
+        .unwrap();
 
     let entry_points = reflect_result.into_iter().map(|entry_point| {
         let stage_flags = spirv_stage_to_vk(entry_point.exec_model);
-        (entry_point.name, SpirvEntryPoint {
-            descriptor_sets: {
-                let mut sets: Vec<SpirvDescriptorSet> = Vec::new();
+        (
+            entry_point.name,
+            SpirvEntryPoint {
+                descriptor_sets: {
+                    let mut sets: Vec<SpirvDescriptorSet> = Vec::new();
 
-                for var in entry_point.vars.iter() {
-                    match var {
-                        spirq::Variable::Descriptor { desc_ty, desc_bind, nbind, .. }  => {
-                            sets.resize(sets.len().max(desc_bind.set() as usize + 1), Default::default());
-                            let set = &mut sets[desc_bind.set() as usize];
-                            set.bindings.push(SpirvDescriptorSetBinding {
-                                binding: desc_bind.bind(),
-                                descriptor_type: DescriptorType(spirv_desc_ty_to_vk(desc_ty)),
-                                descriptor_count: *nbind,
-                                stage_flags,
-                            });
-                        },
-                        _ => (),
+                    for var in entry_point.vars.iter() {
+                        match var {
+                            spirq::Variable::Descriptor {
+                                desc_ty,
+                                desc_bind,
+                                nbind,
+                                ..
+                            } => {
+                                sets.resize(
+                                    sets.len().max(desc_bind.set() as usize + 1),
+                                    Default::default(),
+                                );
+                                let set = &mut sets[desc_bind.set() as usize];
+                                set.bindings.push(SpirvDescriptorSetBinding {
+                                    binding: desc_bind.bind(),
+                                    descriptor_type: DescriptorType(spirv_desc_ty_to_vk(desc_ty)),
+                                    descriptor_count: *nbind,
+                                    stage_flags,
+                                });
+                            }
+                            _ => (),
+                        }
                     }
-                }
-                sets
+                    sets
+                },
+                push_constant_ranges: entry_point
+                    .vars
+                    .iter()
+                    .filter_map(|var| match var {
+                        spirq::Variable::PushConstant {
+                            name: Some(name),
+                            ty,
+                        } if !name.starts_with('_') => {
+                            println!("{:?}", ty);
+                            Some(PushConstantRange {
+                                stage_flags: ShaderStageFlags(stage_flags),
+                                offset: 0,
+                                size: 0,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect(),
             },
-            push_constant_ranges: entry_point.vars.iter().filter_map(|var| {
-                match var {
-                    spirq::Variable::PushConstant { name: Some(name), ty } if !name.starts_with('_') => {
-                        println!("{:?}", ty);
-                        Some(PushConstantRange {
-                            stage_flags: ShaderStageFlags(stage_flags),
-                            offset: 0,
-                            size: 0
-                        })
-                    },
-                    _ => None,
-                }
-            }).collect(),
-        })
+        )
     });
 
-    let entry_points_stream = proc_macro2::TokenStream::from_iter(entry_points.flat_map(|(name, entry_point)| {
-        use proc_macro2::{TokenTree, Group, Delimiter, Punct, Spacing, TokenStream, Literal};
-        let item = proc_macro2::TokenTree::Group(proc_macro2::Group::new(Delimiter::Parenthesis, {
-            let serialized = format!("{:?}", entry_point).parse::<proc_macro2::TokenStream>().unwrap();
-            quote::quote!{
-                #name.to_string(),#serialized
-            }
+    let entry_points_stream =
+        proc_macro2::TokenStream::from_iter(entry_points.flat_map(|(name, entry_point)| {
+            use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, TokenStream, TokenTree};
+            let item =
+                proc_macro2::TokenTree::Group(proc_macro2::Group::new(Delimiter::Parenthesis, {
+                    let serialized = format!("{:?}", entry_point)
+                        .parse::<proc_macro2::TokenStream>()
+                        .unwrap();
+                    quote::quote! {
+                        #name.to_string(),#serialized
+                    }
+                }));
+            return std::iter::once(item).chain(std::iter::once(proc_macro2::TokenTree::Punct(
+                Punct::new(',', Spacing::Alone),
+            )));
         }));
-        return std::iter::once(item).chain(std::iter::once(proc_macro2::TokenTree::Punct(Punct::new(',', Spacing::Alone))))
-    }));
-
 
     let bin = U32Slice(binary);
     return quote::quote! {{
@@ -154,23 +178,23 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
             },
             entry_points: [#entry_points_stream].into(),
         }
-    }}
+    }};
 }
 
 struct U32Slice<'a>(&'a [u32]);
 impl<'a> quote::ToTokens for U32Slice<'a> {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        use proc_macro2::{TokenTree, Punct, Spacing, Group, Delimiter, TokenStream, Literal};
+        use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, TokenStream, TokenTree};
         tokens.extend_one(TokenTree::Punct(Punct::new('&', Spacing::Alone)));
         tokens.extend_one(TokenTree::Group(Group::new(Delimiter::Bracket, {
             TokenStream::from_iter(self.0.iter().flat_map(|num| {
-                std::iter::once(TokenTree::Literal(Literal::u32_unsuffixed(*num)))
-                .chain(std::iter::once(TokenTree::Punct(Punct::new(',', Spacing::Alone))))
+                std::iter::once(TokenTree::Literal(Literal::u32_unsuffixed(*num))).chain(
+                    std::iter::once(TokenTree::Punct(Punct::new(',', Spacing::Alone))),
+                )
             }))
         })));
     }
 }
-
 
 #[derive(Clone, Copy)]
 struct ShaderStageFlags(vk::ShaderStageFlags);
@@ -192,7 +216,6 @@ impl Debug for DescriptorType {
     }
 }
 
-
 #[derive(Clone)]
 struct SpirvDescriptorSetBinding {
     pub binding: u32,
@@ -203,12 +226,12 @@ struct SpirvDescriptorSetBinding {
 impl Debug for SpirvDescriptorSetBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SpirvDescriptorSetBinding")
-        .field("binding", &self.binding)
-        .field("descriptor_type", &self.descriptor_type)
-        .field("descriptor_count", &self.descriptor_count)
-        .field("stage_flags", &ShaderStageFlags(self.stage_flags))
-        .field("immutable_samplers", &ToVecFmt::<()>(&()))
-        .finish()
+            .field("binding", &self.binding)
+            .field("descriptor_type", &self.descriptor_type)
+            .field("descriptor_count", &self.descriptor_count)
+            .field("stage_flags", &ShaderStageFlags(self.stage_flags))
+            .field("immutable_samplers", &ToVecFmt::<()>(&()))
+            .finish()
     }
 }
 
@@ -221,10 +244,9 @@ impl<'a, I: Debug> Debug for ToVecFmt<'a, I> {
     }
 }
 
-
 #[derive(Clone, Default)]
 struct SpirvDescriptorSet {
-    pub bindings: Vec<SpirvDescriptorSetBinding>
+    pub bindings: Vec<SpirvDescriptorSetBinding>,
 }
 impl Debug for SpirvDescriptorSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -243,12 +265,14 @@ impl Debug for SpirvEntryPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SpirvEntryPoint")
             .field("descriptor_sets", &ToVecFmt(&self.descriptor_sets))
-            .field("push_constant_ranges", &ToVecFmt(&self.push_constant_ranges))
+            .field(
+                "push_constant_ranges",
+                &ToVecFmt(&self.push_constant_ranges),
+            )
             .finish()?;
         Ok(())
     }
 }
-
 
 #[derive(Debug)]
 struct PushConstantRange {
@@ -256,7 +280,6 @@ struct PushConstantRange {
     pub offset: u32,
     pub size: u32,
 }
-
 
 fn spirv_stage_to_vk(stage: spirq::ExecutionModel) -> vk::ShaderStageFlags {
     use spirq::ExecutionModel::*;

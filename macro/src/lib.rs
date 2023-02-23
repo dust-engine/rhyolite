@@ -5,8 +5,8 @@ use syn::parse::{Parse, ParseStream};
 extern crate proc_macro;
 mod commands;
 mod commands_join;
-mod transformer;
 mod glsl;
+mod transformer;
 
 mod gpu;
 

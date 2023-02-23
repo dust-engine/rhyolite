@@ -1,23 +1,25 @@
+use crate::{Device, HasDevice, ShaderModule};
+use ash::{prelude::VkResult, vk};
 use std::sync::Arc;
-use crate::{Device, ShaderModule, HasDevice};
-use ash::{vk, prelude::VkResult};
 
 pub struct PipelineLayout {
     device: Arc<Device>,
-    inner: vk::PipelineLayout
+    inner: vk::PipelineLayout,
 }
 
 impl PipelineLayout {
     pub fn new(device: Arc<Device>, info: &vk::PipelineLayoutCreateInfo) -> VkResult<Self> {
-        let layout = unsafe {
-            device.create_pipeline_layout(info, None)?
-        };
+        let layout = unsafe { device.create_pipeline_layout(info, None)? };
         Ok(Self {
             device,
-            inner: layout
+            inner: layout,
         })
     }
-    pub fn new_from_module(module: &ShaderModule, entry_point: &str, flags: vk::PipelineLayoutCreateFlags) -> VkResult<Self> {
+    pub fn new_from_module(
+        module: &ShaderModule,
+        entry_point: &str,
+        flags: vk::PipelineLayoutCreateFlags,
+    ) -> VkResult<Self> {
         let entry_point = module.entry_points.get(entry_point).unwrap();
         let info = vk::PipelineLayoutCreateInfo {
             flags,
@@ -27,10 +29,7 @@ impl PipelineLayout {
             p_push_constant_ranges: entry_point.push_constant_ranges.as_ptr(),
             ..Default::default()
         };
-        Self::new(
-            module.device().clone(),
-            &info,
-        )
+        Self::new(module.device().clone(), &info)
     }
     pub unsafe fn raw(&self) -> vk::PipelineLayout {
         self.inner
@@ -48,4 +47,3 @@ impl Drop for PipelineLayout {
         }
     }
 }
-

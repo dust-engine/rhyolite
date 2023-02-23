@@ -1,6 +1,6 @@
-use ash::{vk, prelude::VkResult};
-use std::{sync::Arc, fmt::Debug};
 use crate::Device;
+use ash::{prelude::VkResult, vk};
+use std::{fmt::Debug, sync::Arc};
 
 pub struct Sampler {
     device: Arc<Device>,
@@ -13,14 +13,9 @@ impl Debug for Sampler {
 }
 
 impl Sampler {
-    pub fn new(device: Arc<Device>, info: &vk::SamplerCreateInfo) -> VkResult<Self>  {
-        let inner = unsafe {
-            device.create_sampler(info, None)
-        }?;
-        Ok(Self {
-            device,
-            inner
-        })
+    pub fn new(device: Arc<Device>, info: &vk::SamplerCreateInfo) -> VkResult<Self> {
+        let inner = unsafe { device.create_sampler(info, None) }?;
+        Ok(Self { device, inner })
     }
     pub unsafe fn raw(&self) -> vk::Sampler {
         self.inner
@@ -29,8 +24,6 @@ impl Sampler {
 
 impl Drop for Sampler {
     fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_sampler(self.inner, None)
-        }
+        unsafe { self.device.destroy_sampler(self.inner, None) }
     }
 }

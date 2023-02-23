@@ -1,13 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
 use ash::prelude::VkResult;
 use ash::vk;
 use std::ops::Deref;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::sampler::Sampler;
-use crate::{Device, HasDevice, device};
+use crate::{device, Device, HasDevice};
 pub struct SpirvShader<T: Deref<Target = [u32]>> {
     pub data: T,
-    pub entry_points: HashMap<String, SpirvEntryPoint>
+    pub entry_points: HashMap<String, SpirvEntryPoint>,
 }
 
 #[derive(Debug)]
@@ -20,7 +20,7 @@ pub struct SpirvDescriptorSetBinding {
 }
 #[derive(Debug)]
 pub struct SpirvDescriptorSet {
-    pub bindings: Vec<SpirvDescriptorSetBinding>
+    pub bindings: Vec<SpirvDescriptorSetBinding>,
 }
 
 #[derive(Debug)]
@@ -30,20 +30,33 @@ pub struct SpirvEntryPoint {
 }
 
 impl<T: Deref<Target = [u32]>> SpirvShader<T> {
-    pub fn add_immutable_samplers(&mut self, entry_point: &str, set_id: u32, binding_id: u32, samplers: Vec<Arc<Sampler>>) {
-        let binding = self.entry_points
-        .get_mut(entry_point)
-        .expect("Entry point not found")
-        .descriptor_sets
-        .get_mut(set_id as usize)
-        .expect("Set not found")
-        .bindings
-        .iter_mut()
-        .find(|binding| binding.binding == binding_id)
-        .expect("Binding not found");
-        assert!(binding.immutable_samplers.is_empty(), "Immutable samplers already added");
+    pub fn add_immutable_samplers(
+        &mut self,
+        entry_point: &str,
+        set_id: u32,
+        binding_id: u32,
+        samplers: Vec<Arc<Sampler>>,
+    ) {
+        let binding = self
+            .entry_points
+            .get_mut(entry_point)
+            .expect("Entry point not found")
+            .descriptor_sets
+            .get_mut(set_id as usize)
+            .expect("Set not found")
+            .bindings
+            .iter_mut()
+            .find(|binding| binding.binding == binding_id)
+            .expect("Binding not found");
+        assert!(
+            binding.immutable_samplers.is_empty(),
+            "Immutable samplers already added"
+        );
         assert!(binding.descriptor_count == samplers.len() as u32);
-        assert!(binding.descriptor_type == vk::DescriptorType::SAMPLER || binding.descriptor_type == vk::DescriptorType::COMBINED_IMAGE_SAMPLER);
+        assert!(
+            binding.descriptor_type == vk::DescriptorType::SAMPLER
+                || binding.descriptor_type == vk::DescriptorType::COMBINED_IMAGE_SAMPLER
+        );
         binding.immutable_samplers = samplers;
     }
     pub fn build(&self, device: Arc<Device>) -> VkResult<ShaderModule> {
@@ -54,50 +67,86 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
                     p_code: self.data.as_ref().as_ptr(),
                     ..Default::default()
                 },
-                None
+                None,
             )
-        }?;            
+        }?;
         let mut referenced_immutable_samplers: Vec<Arc<Sampler>> = Vec::new();
-        let entry_points = self.entry_points.iter().map(|(name, entry_point)| {
-
-            (name.clone(), ShaderModuleEntryPoint {
-                desc_sets: entry_point.descriptor_sets.iter().map(|desc_set| unsafe {
-                    let total_immutable_samplers = desc_set.bindings.iter().map(|a| a.immutable_samplers.len()).sum();
-                    let mut immutable_samplers: Vec<vk::Sampler> = Vec::with_capacity(total_immutable_samplers);
-                    let bindings: Vec<_> = desc_set.bindings.iter().map(|binding| {
-                        let immutable_samplers_offset = immutable_samplers.len();
-                        immutable_samplers.extend(binding.immutable_samplers.iter().map(|a| a.raw()));
-                        referenced_immutable_samplers.extend(binding.immutable_samplers.iter().map(|a| a.clone()));
-                        if binding.immutable_samplers.len() > 0 {
-                            assert_eq!(binding.immutable_samplers.len() as u32, binding.descriptor_count);
-                        }
-                        vk::DescriptorSetLayoutBinding {
-                            binding: binding.binding,
-                            descriptor_type: binding.descriptor_type,
-                            descriptor_count: binding.descriptor_count,
-                            stage_flags: binding.stage_flags,
-                            p_immutable_samplers: if binding.immutable_samplers.is_empty() {
-                                std::ptr::null()
-                            } else {
-                                immutable_samplers.as_ptr().add(immutable_samplers_offset)
-                            },
-                        }
-                    }).collect();
-                    device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo {
-                        flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-                        binding_count: bindings.len() as u32,
-                        p_bindings: bindings.as_ptr(),
-                        ..Default::default()
-                    }, None).unwrap()
-                }).collect(),
-                push_constant_ranges: entry_point.push_constant_ranges.clone()
+        let entry_points = self
+            .entry_points
+            .iter()
+            .map(|(name, entry_point)| {
+                (
+                    name.clone(),
+                    ShaderModuleEntryPoint {
+                        desc_sets: entry_point
+                            .descriptor_sets
+                            .iter()
+                            .map(|desc_set| unsafe {
+                                let total_immutable_samplers = desc_set
+                                    .bindings
+                                    .iter()
+                                    .map(|a| a.immutable_samplers.len())
+                                    .sum();
+                                let mut immutable_samplers: Vec<vk::Sampler> =
+                                    Vec::with_capacity(total_immutable_samplers);
+                                let bindings: Vec<_> = desc_set
+                                    .bindings
+                                    .iter()
+                                    .map(|binding| {
+                                        let immutable_samplers_offset = immutable_samplers.len();
+                                        immutable_samplers.extend(
+                                            binding.immutable_samplers.iter().map(|a| a.raw()),
+                                        );
+                                        referenced_immutable_samplers.extend(
+                                            binding.immutable_samplers.iter().map(|a| a.clone()),
+                                        );
+                                        if binding.immutable_samplers.len() > 0 {
+                                            assert_eq!(
+                                                binding.immutable_samplers.len() as u32,
+                                                binding.descriptor_count
+                                            );
+                                        }
+                                        vk::DescriptorSetLayoutBinding {
+                                            binding: binding.binding,
+                                            descriptor_type: binding.descriptor_type,
+                                            descriptor_count: binding.descriptor_count,
+                                            stage_flags: binding.stage_flags,
+                                            p_immutable_samplers: if binding
+                                                .immutable_samplers
+                                                .is_empty()
+                                            {
+                                                std::ptr::null()
+                                            } else {
+                                                immutable_samplers
+                                                    .as_ptr()
+                                                    .add(immutable_samplers_offset)
+                                            },
+                                        }
+                                    })
+                                    .collect();
+                                device
+                                    .create_descriptor_set_layout(
+                                        &vk::DescriptorSetLayoutCreateInfo {
+                                            flags: vk::DescriptorSetLayoutCreateFlags::empty(),
+                                            binding_count: bindings.len() as u32,
+                                            p_bindings: bindings.as_ptr(),
+                                            ..Default::default()
+                                        },
+                                        None,
+                                    )
+                                    .unwrap()
+                            })
+                            .collect(),
+                        push_constant_ranges: entry_point.push_constant_ranges.clone(),
+                    },
+                )
             })
-        }).collect();
+            .collect();
         Ok(ShaderModule {
             device,
             module,
             entry_points,
-            _referenced_immutable_samplers: referenced_immutable_samplers
+            _referenced_immutable_samplers: referenced_immutable_samplers,
         })
     }
 }
@@ -106,7 +155,7 @@ pub struct ShaderModule {
     device: Arc<Device>,
     module: vk::ShaderModule,
     pub(crate) entry_points: HashMap<String, ShaderModuleEntryPoint>,
-    _referenced_immutable_samplers: Vec<Arc<Sampler>>
+    _referenced_immutable_samplers: Vec<Arc<Sampler>>,
 }
 impl ShaderModule {
     pub unsafe fn raw(&self) -> vk::ShaderModule {
@@ -120,7 +169,7 @@ impl HasDevice for ShaderModule {
 }
 pub(crate) struct ShaderModuleEntryPoint {
     pub desc_sets: Vec<vk::DescriptorSetLayout>,
-    pub push_constant_ranges: Vec<vk::PushConstantRange>
+    pub push_constant_ranges: Vec<vk::PushConstantRange>,
 }
 impl Drop for ShaderModule {
     fn drop(&mut self) {
@@ -135,15 +184,13 @@ impl Drop for ShaderModule {
     }
 }
 
-
-
 #[derive(Clone, Default, Debug)]
 pub struct SpecializationInfo {
     pub(super) data: Vec<u8>,
     pub(super) entries: Vec<vk::SpecializationMapEntry>,
 }
 impl SpecializationInfo {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             data: Vec::new(),
             entries: Vec::new(),

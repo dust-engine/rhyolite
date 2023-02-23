@@ -15,8 +15,8 @@ use pin_project::pin_project;
 use crate::{
     commands::SharedCommandPool,
     future::{
-        CommandBufferRecordContext, Disposable, GPUCommandFuture,
-        StageContextBuffer, StageContextImage, StageContextSemaphoreTransition,
+        CommandBufferRecordContext, Disposable, GPUCommandFuture, StageContextBuffer,
+        StageContextImage, StageContextSemaphoreTransition,
     },
     Device, HasDevice,
 };
