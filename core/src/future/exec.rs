@@ -618,7 +618,11 @@ impl StageContext {
                 src_layout: res.old_layout.get(),
                 dst_layout: layout,
                 src_queue_family: tracking.prev_queue_family,
-                dst_queue_family: self.queue_family_index,
+                dst_queue_family: if tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED {
+                    vk::QUEUE_FAMILY_IGNORED
+                } else {
+                    self.queue_family_index
+                },
                 src_queue: QueueRef::null(),
                 dst_queue: QueueRef::null(),
             });

@@ -55,6 +55,9 @@ impl Drop for SwapchainInner {
             self.device
                 .swapchain_loader()
                 .destroy_swapchain(self.swapchain, None);
+            for (_, view) in self.images.drain(..) {
+                self.device.destroy_image_view(view, None);
+            }
         }
     }
 }
@@ -167,37 +170,7 @@ impl Swapchain {
             let swapchain = device
                 .swapchain_loader()
                 .create_swapchain(&create_info, None)?;
-            let images = device.swapchain_loader().get_swapchain_images(swapchain)?;
-            let images = images
-                .into_iter()
-                .map(|image| unsafe {
-                    let view = device
-                        .create_image_view(
-                            &vk::ImageViewCreateInfo {
-                                image,
-                                view_type: vk::ImageViewType::TYPE_2D,
-                                format: info.image_format,
-                                components: vk::ComponentMapping {
-                                    r: vk::ComponentSwizzle::R,
-                                    g: vk::ComponentSwizzle::G,
-                                    b: vk::ComponentSwizzle::B,
-                                    a: vk::ComponentSwizzle::A,
-                                },
-                                subresource_range: vk::ImageSubresourceRange {
-                                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                                    base_mip_level: 0,
-                                    level_count: 1,
-                                    base_array_layer: 0,
-                                    layer_count: 1,
-                                },
-                                ..Default::default()
-                            },
-                            None,
-                        )
-                        .unwrap();
-                    (image, view)
-                })
-                .collect();
+            let images = get_swapchain_images(&device, swapchain, info.image_format)?;
             let inner = SwapchainInner {
                 device,
                 surface,
@@ -248,41 +221,7 @@ impl Swapchain {
                 .swapchain_loader()
                 .create_swapchain(&create_info, None)?;
 
-            let images = self
-                .device()
-                .swapchain_loader()
-                .get_swapchain_images(swapchain)?;
-            let images = images
-                .into_iter()
-                .map(|image| unsafe {
-                    let view = self
-                        .device()
-                        .create_image_view(
-                            &vk::ImageViewCreateInfo {
-                                image,
-                                view_type: vk::ImageViewType::TYPE_2D,
-                                format: info.image_format,
-                                components: vk::ComponentMapping {
-                                    r: vk::ComponentSwizzle::R,
-                                    g: vk::ComponentSwizzle::G,
-                                    b: vk::ComponentSwizzle::B,
-                                    a: vk::ComponentSwizzle::A,
-                                },
-                                subresource_range: vk::ImageSubresourceRange {
-                                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                                    base_mip_level: 0,
-                                    level_count: 1,
-                                    base_array_layer: 0,
-                                    layer_count: 1,
-                                },
-                                ..Default::default()
-                            },
-                            None,
-                        )
-                        .unwrap();
-                    (image, view)
-                })
-                .collect();
+            let images = get_swapchain_images(self.device(), swapchain, info.image_format)?;
             let inner = SwapchainInner {
                 device: self.inner.device.clone(),
                 surface: self.inner.surface.clone(),
@@ -560,4 +499,48 @@ impl QueueFuture for AcquireFuture {
     }
 
     fn dispose(self) -> Self::RetainedState {}
+}
+
+unsafe fn get_swapchain_images(
+    device: &Device,
+    swapchain: vk::SwapchainKHR,
+    format: vk::Format,
+) -> VkResult<Vec<(vk::Image, vk::ImageView)>> {
+    let images = device.swapchain_loader().get_swapchain_images(swapchain)?;
+    let mut image_views: Vec<(vk::Image, vk::ImageView)> = Vec::with_capacity(images.len());
+    for image in images.into_iter() {
+        let view = device.create_image_view(
+            &vk::ImageViewCreateInfo {
+                image,
+                view_type: vk::ImageViewType::TYPE_2D,
+                format,
+                components: vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::R,
+                    g: vk::ComponentSwizzle::G,
+                    b: vk::ComponentSwizzle::B,
+                    a: vk::ComponentSwizzle::A,
+                },
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                ..Default::default()
+            },
+            None,
+        );
+        match view {
+            Ok(view) => image_views.push((image, view)),
+            Err(err) => {
+                // Destroy existing
+                for (image, view) in image_views.into_iter() {
+                    device.destroy_image_view(view, None);
+                }
+                return Err(err);
+            }
+        }
+    }
+    Ok(image_views)
 }

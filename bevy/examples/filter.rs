@@ -5,7 +5,7 @@ use bevy_window::{PrimaryWindow, Window};
 use pin_project::pin_project;
 use rhyolite::ash::vk;
 use rhyolite::descriptor::DescriptorPool;
-use rhyolite::future::{GPUCommandFutureExt, RenderImage, Dispose};
+use rhyolite::future::{Dispose, GPUCommandFutureExt, RenderImage};
 use rhyolite::macros::glsl;
 use rhyolite::utils::retainer::{Retainer, RetainerHandle};
 use rhyolite::{
@@ -13,7 +13,9 @@ use rhyolite::{
     macros::{commands, gpu},
     ImageExt, QueueType,
 };
-use rhyolite::{ComputePipeline, ComputePipelineCreateInfo, HasDevice, ImageLike, ImageRequest, ImageViewLike};
+use rhyolite::{
+    ComputePipeline, ComputePipelineCreateInfo, HasDevice, ImageLike, ImageRequest, ImageViewLike,
+};
 use rhyolite_bevy::{
     Allocator, DescriptorSetLayoutCache, Queues, QueuesRouter, RenderSystems, Swapchain,
     SwapchainConfigExt,
@@ -77,7 +79,7 @@ impl FromWorld for MyImage {
     }
 }
 
-struct GaussianBlurPipeline {    
+struct GaussianBlurPipeline {
     pipeline: Arc<ComputePipeline>,
     desc_pool: Retainer<DescriptorPool>,
 }
@@ -92,9 +94,11 @@ impl FromWorld for GaussianBlurPipeline {
             ..ComputePipelineCreateInfo::with_module(&module)
         })
         .unwrap();
-        let desc_pool =
-            DescriptorPool::for_pipeline_layouts(std::iter::once(pipeline.layout().deref()), num_frame_in_flight)
-                .unwrap();
+        let desc_pool = DescriptorPool::for_pipeline_layouts(
+            std::iter::once(pipeline.layout().deref()),
+            num_frame_in_flight,
+        )
+        .unwrap();
         GaussianBlurPipeline {
             pipeline: Arc::new(pipeline),
             desc_pool: Retainer::new(desc_pool),
@@ -155,7 +159,8 @@ impl<
         let this = self.project();
         if recycled_state.len() == 0 {
             *recycled_state = this
-                .pipeline.desc_pool
+                .pipeline
+                .desc_pool
                 .allocate_for_pipeline_layout(this.pipeline.pipeline.layout())
                 .unwrap();
         }
@@ -171,10 +176,10 @@ impl<
                     sampler: vk::Sampler::null(),
                     image_view: this.tmp_img.inner().raw_image_view(),
                     image_layout: vk::ImageLayout::GENERAL,
-                }
+                },
             ];
-            this.pipeline.pipeline.device().update_descriptor_sets(&[
-                vk::WriteDescriptorSet {
+            this.pipeline.pipeline.device().update_descriptor_sets(
+                &[vk::WriteDescriptorSet {
                     dst_set: recycled_state[0],
                     dst_binding: 0,
                     dst_array_element: 0,
@@ -182,8 +187,9 @@ impl<
                     descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
                     p_image_info: image_infos.as_ptr(),
                     ..Default::default()
-                }
-            ], &[]);
+                }],
+                &[],
+            );
         }
         None
     }
@@ -210,11 +216,20 @@ impl<
                 recycled_state.as_slice(),
                 &[],
             );
-            device.cmd_dispatch(command_buffer, extent.width / 128, extent.height, extent.depth);
+            device.cmd_dispatch(
+                command_buffer,
+                extent.width / 128,
+                extent.height,
+                extent.depth,
+            );
         });
-        std::task::Poll::Ready(((), Dispose::new(
-            (this.pipeline.pipeline.clone(), this.pipeline.desc_pool.handle())
-        )))
+        std::task::Poll::Ready((
+            (),
+            Dispose::new((
+                this.pipeline.pipeline.clone(),
+                this.pipeline.desc_pool.handle(),
+            )),
+        ))
     }
 
     fn context(self: std::pin::Pin<&mut Self>, ctx: &mut rhyolite::future::StageContext) {

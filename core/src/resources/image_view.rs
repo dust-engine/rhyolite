@@ -12,6 +12,12 @@ pub struct ImageView<T: ImageLike> {
     image: T,
     view: vk::ImageView,
 }
+
+impl<T: ImageLike> Drop for ImageView<T> {
+    fn drop(&mut self) {
+        unsafe { self.image.device().destroy_image_view(self.view, None) }
+    }
+}
 impl<T: ImageLike> HasDevice for ImageView<T> {
     fn device(&self) -> &std::sync::Arc<crate::Device> {
         self.image.device()
