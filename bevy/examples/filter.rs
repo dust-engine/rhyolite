@@ -5,7 +5,7 @@ use bevy_window::{PrimaryWindow, Window};
 use pin_project::pin_project;
 use rhyolite::ash::vk;
 use rhyolite::descriptor::DescriptorPool;
-use rhyolite::future::{Dispose, GPUCommandFutureExt, RenderImage};
+use rhyolite::future::{Dispose, GPUCommandFutureExt, RenderImage, use_per_frame_state, PerFrameState, PerFrameContainer};
 use rhyolite::macros::glsl;
 use rhyolite::utils::retainer::{Retainer, RetainerHandle};
 use rhyolite::{
@@ -147,23 +147,34 @@ impl<
 {
     type Output = ();
 
-    type RetainedState = Dispose<(Arc<ComputePipeline>, RetainerHandle<DescriptorPool>)>;
+    type RetainedState = Dispose<(Arc<ComputePipeline>, RetainerHandle<DescriptorPool>, PerFrameContainer<Vec<vk::DescriptorSet>>)>;
 
-    type RecycledState = Vec<vk::DescriptorSet>;
+    type RecycledState = PerFrameState<Vec<vk::DescriptorSet>>;
 
     fn init(
         self: std::pin::Pin<&mut Self>,
         _ctx: &mut rhyolite::future::CommandBufferRecordContext,
         recycled_state: &mut Self::RecycledState,
     ) -> Option<(Self::Output, Self::RetainedState)> {
+        None
+    }
+    fn record(
+        self: std::pin::Pin<&mut Self>,
+        ctx: &mut rhyolite::future::CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
+    ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
-        if recycled_state.len() == 0 {
-            *recycled_state = this
+        assert_eq!(this.src_img.inner().extent(), this.tmp_img.inner().extent());
+        let extent = this.src_img.inner().extent();
+
+        let desc_set = use_per_frame_state(recycled_state, || {
+            this
                 .pipeline
                 .desc_pool
                 .allocate_for_pipeline_layout(this.pipeline.pipeline.layout())
-                .unwrap();
-        }
+                .unwrap()
+        }, |old| {
+        });
         unsafe {
             // TODO: optimize away redundant writes
             let image_infos = [
@@ -180,7 +191,7 @@ impl<
             ];
             this.pipeline.pipeline.device().update_descriptor_sets(
                 &[vk::WriteDescriptorSet {
-                    dst_set: recycled_state[0],
+                    dst_set: desc_set[0],
                     dst_binding: 0,
                     dst_array_element: 0,
                     descriptor_count: 2,
@@ -191,16 +202,8 @@ impl<
                 &[],
             );
         }
-        None
-    }
-    fn record(
-        self: std::pin::Pin<&mut Self>,
-        ctx: &mut rhyolite::future::CommandBufferRecordContext,
-        recycled_state: &mut Self::RecycledState,
-    ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
-        let this = self.project();
-        assert_eq!(this.src_img.inner().extent(), this.tmp_img.inner().extent());
-        let extent = this.src_img.inner().extent();
+
+
         ctx.record(|ctx, command_buffer| unsafe {
             let device = ctx.device();
             device.cmd_bind_pipeline(
@@ -213,7 +216,7 @@ impl<
                 vk::PipelineBindPoint::COMPUTE,
                 this.pipeline.pipeline.raw_layout(),
                 0,
-                recycled_state.as_slice(),
+                desc_set.as_slice(),
                 &[],
             );
             device.cmd_dispatch(
@@ -228,6 +231,7 @@ impl<
             Dispose::new((
                 this.pipeline.pipeline.clone(),
                 this.pipeline.desc_pool.handle(),
+                desc_set
             )),
         ))
     }

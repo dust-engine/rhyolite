@@ -79,6 +79,9 @@ impl Queues {
             recycled_state,
         );
 
+        // By using a retainer to wrap around PerFrameContainer and drop the handle only after
+        // awaiting on the future, we ensure that old frames aren't getting reused by newer frames
+        // before the old frame actually finishes rendering.
         let guard = self.current_frame.as_ref().unwrap().handle();
         let task = async {
             let out = future.await;

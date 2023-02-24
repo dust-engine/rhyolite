@@ -76,7 +76,7 @@ impl DescriptorPool {
             })
             .collect();
         let info = vk::DescriptorPoolCreateInfo {
-            max_sets,
+            max_sets: max_sets * multiplier,
             p_pool_sizes: pool_sizes.as_ptr(),
             pool_size_count: pool_sizes.len() as u32,
             ..Default::default()
