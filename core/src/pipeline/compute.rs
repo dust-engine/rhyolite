@@ -11,7 +11,22 @@ pub struct ComputePipeline {
     layout: Arc<PipelineLayout>,
     pipeline: vk::Pipeline,
 }
-
+impl ComputePipeline {
+    pub fn layout(&self) -> &Arc<PipelineLayout> {
+        &self.layout
+    }
+    pub unsafe fn raw(&self) -> vk::Pipeline {
+        self.pipeline
+    }
+    pub unsafe fn raw_layout(&self) -> vk::PipelineLayout {
+        self.layout.raw()
+    }
+}
+impl HasDevice for ComputePipeline {
+    fn device(&self) -> &Arc<crate::Device> {
+        self.layout.device()
+    }
+}
 impl Drop for ComputePipeline {
     fn drop(&mut self) {
         unsafe { self.layout.device().destroy_pipeline(self.pipeline, None) }
@@ -43,9 +58,13 @@ impl<'a> ComputePipelineCreateInfo<'a> {
 impl ComputePipeline {
     pub fn create(info: ComputePipelineCreateInfo) -> VkResult<Self> {
         let device = info.module.device().clone();
-        let layout = PipelineLayout::new_from_module(
-            info.module,
-            info.entry_point,
+        let layout = PipelineLayout::for_layout(
+            device.clone(),
+            info.module
+                .entry_points
+                .get(info.entry_point)
+                .unwrap()
+                .clone(),
             info.pipeline_layout_create_flags,
         )?;
         let pipeline = unsafe {

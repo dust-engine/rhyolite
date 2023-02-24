@@ -1,3 +1,4 @@
+use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -10,9 +11,36 @@ pub use exec::*;
 pub use ext::*;
 pub use state::*;
 
+// TODO: Use the dispose crate.
 pub trait Disposable {
     fn dispose(self);
 }
+pub struct Dispose<T>(ManuallyDrop<T>);
+impl<T> Dispose<T> {
+    pub fn new(inner: T) -> Self {
+        Self(ManuallyDrop::new(inner))
+    }
+}
+impl<T> Disposable for Dispose<T> {
+    fn dispose(mut self) {
+        unsafe {
+            ManuallyDrop::drop(&mut self.0);
+        }
+        std::mem::forget(self)
+    }
+}
+impl<T> Drop for Dispose<T> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            panic!("Res<{}> must be disposed!", std::any::type_name::<T>());
+        } else {
+            unsafe {
+                ManuallyDrop::drop(&mut self.0);
+            }
+        }
+    }
+}
+
 impl Disposable for () {
     fn dispose(self) {}
 }

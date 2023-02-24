@@ -127,11 +127,13 @@ impl Plugin for RenderPlugin {
             })
             .unwrap();
         let allocator = rhyolite::Allocator::new(device.clone());
+        let device = Device::new(device);
 
-        app.insert_resource(Device::new(device))
+        app.insert_resource(device.clone())
             .insert_resource(Queues::new(queues, self.max_frame_in_flight))
             .insert_resource(QueuesRouter::new(queues_router))
             .insert_resource(Allocator::new(allocator))
+            .insert_resource(DescriptorSetLayoutCache::new(device))
             .insert_non_send_resource(swapchain::NonSendResource::default())
             .add_system(swapchain::extract_windows.in_set(RenderSystems::SetUp));
     }

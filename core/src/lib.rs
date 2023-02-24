@@ -4,6 +4,7 @@
 #![feature(negative_impls)]
 #![feature(specialization)]
 #![feature(const_trait_impl)]
+#![feature(get_mut_unchecked)]
 #![feature(array_zip)]
 
 pub use cstr::cstr;

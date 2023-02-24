@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -11,16 +12,20 @@ pub fn use_state<T>(
         update(inner)
     }
     this.get_or_insert_with(init)
-    // TASK fors tomorrow: use_perframe_state
 }
 
-pub fn use_cached_state<T>(
+/// Creates a resource to be used by multiple frames. Generally this is applicable to resources
+/// that stay entirely on the device side.
+/// If `should_update` returns false, returns a reference to the current object.
+/// If `should_update` returns true, calls `create` to create a new object.
+/// The old object will be dropped when its reference count drops to zero.
+pub fn use_shared_state<T>(
     this: &mut Option<Arc<T>>,
     create: impl FnOnce() -> T,
     should_update: impl FnOnce(&T) -> bool,
 ) -> Arc<T> {
     if let Some(inner) = this {
-        if should_update(inner) {
+        if should_update(&inner) {
             *inner = Arc::new(create());
         }
         inner.clone()

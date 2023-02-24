@@ -1,4 +1,7 @@
-use std::{ops::Deref, sync::Arc};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use bevy_ecs::system::Resource;
 
@@ -13,6 +16,26 @@ impl Deref for Allocator {
     type Target = rhyolite::Allocator;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+#[derive(Resource)]
+pub struct DescriptorSetLayoutCache(rhyolite::descriptor::DescriptorSetLayoutCache);
+impl DescriptorSetLayoutCache {
+    pub fn new(device: Device) -> Self {
+        let inner = rhyolite::descriptor::DescriptorSetLayoutCache::new(device.0);
+        Self(inner)
+    }
+}
+impl Deref for DescriptorSetLayoutCache {
+    type Target = rhyolite::descriptor::DescriptorSetLayoutCache;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for DescriptorSetLayoutCache {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

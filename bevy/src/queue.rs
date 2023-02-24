@@ -93,11 +93,14 @@ impl Queues {
     pub fn current_frame(&mut self) -> &mut Frame {
         self.current_frame.as_mut().unwrap().inner_mut()
     }
-    pub fn submit<F: QueueFuture<Output = ()> + 'static>(
+    pub fn num_frame_in_flight(&self) -> u32 {
+        self.max_frame_in_flight as u32
+    }
+    pub fn submit<F: QueueFuture<Output = ()>>(
         &mut self,
         future: F,
         recycled_state: &mut F::RecycledState,
-    ) {
+    ) where F::Output: 'static, F::RetainedState: 'static {
         let current_frame: &mut Frame = self.current_frame.as_mut().unwrap().inner_mut();
         let future = self.queues.submit(
             future,

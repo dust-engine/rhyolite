@@ -40,7 +40,7 @@ impl Eq for DescriptorSetLayoutBindingInfo {}
 pub struct DescriptorSetLayout {
     device: Arc<Device>,
     raw: vk::DescriptorSetLayout,
-    binding_infos: Vec<DescriptorSetLayoutBindingInfo>,
+    pub binding_infos: Vec<DescriptorSetLayoutBindingInfo>,
 }
 impl Drop for DescriptorSetLayout {
     fn drop(&mut self) {
@@ -124,6 +124,12 @@ impl HasDevice for DescriptorSetLayoutCache {
 }
 
 impl DescriptorSetLayoutCache {
+    pub fn new(device: Arc<Device>) -> Self {
+        Self {
+            device,
+            cache: HashMap::new(),
+        }
+    }
     pub fn get(
         &mut self,
         bindings: Vec<DescriptorSetLayoutBindingInfo>,

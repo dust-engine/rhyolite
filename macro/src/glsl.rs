@@ -91,6 +91,7 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let binary = binary_result.as_binary();
     let reflect_result = spirq::ReflectConfig::new()
         .spv(binary)
+        .ref_all_rscs(true)
         .combine_img_samplers(true)
         .reflect()
         .unwrap();

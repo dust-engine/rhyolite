@@ -8,20 +8,14 @@ use std::{ops::Deref, pin::Pin};
 
 use crate::future::{Access, RenderImage, StageContextImage};
 use crate::{
-    Device, HasDevice, ImageLike, PhysicalDevice, QueueFuture, QueueFuturePoll, QueueMask,
-    QueueRef, QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait,
+    Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueFuture, QueueFuturePoll,
+    QueueMask, QueueRef, QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait,
     QueueSubmissionType, SharingMode, Surface,
 };
 
 pub struct SwapchainLoader {
     loader: khr::Swapchain,
     device: Arc<Device>,
-}
-
-impl crate::HasDevice for SwapchainLoader {
-    fn device(&self) -> &Arc<Device> {
-        &self.device
-    }
 }
 
 impl Deref for SwapchainLoader {
@@ -42,7 +36,8 @@ impl SwapchainLoader {
 pub struct SwapchainInner {
     device: Arc<Device>,
     swapchain: vk::SwapchainKHR,
-    images: Vec<vk::Image>,
+    images: Vec<(vk::Image, vk::ImageView)>,
+    format: vk::Format,
     generation: u64,
 
     surface: Arc<Surface>,
@@ -173,6 +168,36 @@ impl Swapchain {
                 .swapchain_loader()
                 .create_swapchain(&create_info, None)?;
             let images = device.swapchain_loader().get_swapchain_images(swapchain)?;
+            let images = images
+                .into_iter()
+                .map(|image| unsafe {
+                    let view = device
+                        .create_image_view(
+                            &vk::ImageViewCreateInfo {
+                                image,
+                                view_type: vk::ImageViewType::TYPE_2D,
+                                format: info.image_format,
+                                components: vk::ComponentMapping {
+                                    r: vk::ComponentSwizzle::R,
+                                    g: vk::ComponentSwizzle::G,
+                                    b: vk::ComponentSwizzle::B,
+                                    a: vk::ComponentSwizzle::A,
+                                },
+                                subresource_range: vk::ImageSubresourceRange {
+                                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                                    base_mip_level: 0,
+                                    level_count: 1,
+                                    base_array_layer: 0,
+                                    layer_count: 1,
+                                },
+                                ..Default::default()
+                            },
+                            None,
+                        )
+                        .unwrap();
+                    (image, view)
+                })
+                .collect();
             let inner = SwapchainInner {
                 device,
                 surface,
@@ -181,6 +206,7 @@ impl Swapchain {
                 generation: 0,
                 extent: info.image_extent,
                 layer_count: info.image_array_layers,
+                format: info.image_format,
             };
             Ok(Self {
                 inner: Arc::new(inner),
@@ -221,11 +247,42 @@ impl Swapchain {
                 .device
                 .swapchain_loader()
                 .create_swapchain(&create_info, None)?;
+
             let images = self
-                .inner
-                .device
+                .device()
                 .swapchain_loader()
                 .get_swapchain_images(swapchain)?;
+            let images = images
+                .into_iter()
+                .map(|image| unsafe {
+                    let view = self
+                        .device()
+                        .create_image_view(
+                            &vk::ImageViewCreateInfo {
+                                image,
+                                view_type: vk::ImageViewType::TYPE_2D,
+                                format: info.image_format,
+                                components: vk::ComponentMapping {
+                                    r: vk::ComponentSwizzle::R,
+                                    g: vk::ComponentSwizzle::G,
+                                    b: vk::ComponentSwizzle::B,
+                                    a: vk::ComponentSwizzle::A,
+                                },
+                                subresource_range: vk::ImageSubresourceRange {
+                                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                                    base_mip_level: 0,
+                                    level_count: 1,
+                                    base_array_layer: 0,
+                                    layer_count: 1,
+                                },
+                                ..Default::default()
+                            },
+                            None,
+                        )
+                        .unwrap();
+                    (image, view)
+                })
+                .collect();
             let inner = SwapchainInner {
                 device: self.inner.device.clone(),
                 surface: self.inner.surface.clone(),
@@ -234,6 +291,7 @@ impl Swapchain {
                 generation: self.inner.generation.wrapping_add(1),
                 extent: info.image_extent,
                 layer_count: info.image_array_layers,
+                format: info.image_format,
             };
             self.inner = Arc::new(inner);
         }
@@ -250,10 +308,13 @@ impl Swapchain {
             )
         }
         .unwrap();
-        let image = self.inner.images[image_indice as usize];
+        let (image, view) = self.inner.images[image_indice as usize];
         let swapchain_image = SwapchainImage {
+            device: self.device().clone(),
             swapchain: self.inner.swapchain,
+            format: self.inner.format,
             image,
+            view,
             indice: image_indice,
             suboptimal,
             generation: self.inner.generation,
@@ -269,8 +330,11 @@ impl Swapchain {
 }
 
 pub struct SwapchainImage {
+    device: Arc<Device>,
     swapchain: vk::SwapchainKHR,
     image: vk::Image,
+    view: vk::ImageView,
+    format: vk::Format,
     indice: u32,
     suboptimal: bool,
     generation: u64,
@@ -286,7 +350,11 @@ impl Drop for SwapchainImage {
         }
     }
 }
-
+impl HasDevice for SwapchainImage {
+    fn device(&self) -> &Arc<Device> {
+        &self.device
+    }
+}
 impl ImageLike for SwapchainImage {
     fn raw_image(&self) -> vk::Image {
         self.image
@@ -307,6 +375,15 @@ impl ImageLike for SwapchainImage {
             height: self.extent.height,
             depth: 1,
         }
+    }
+
+    fn format(&self) -> vk::Format {
+        self.format
+    }
+}
+impl ImageViewLike for SwapchainImage {
+    fn raw_image_view(&self) -> vk::ImageView {
+        self.view
     }
 }
 
@@ -400,7 +477,7 @@ impl QueueFuture for PresentFuture {
                     ..Default::default()
                 },
                 dst_queue_family: ctx.queues[this.queue.0 as usize].queue_family_index,
-                src_layout: swapchain.layout,
+                src_layout: swapchain.layout.get(),
                 dst_layout: vk::ImageLayout::PRESENT_SRC_KHR,
             };
             ctx.queues[tracking.queue_index.0 as usize]

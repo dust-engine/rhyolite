@@ -212,7 +212,6 @@ impl Allocator {
             size: buffer_info.size,
         })
     }
-
     /// Create uninitialized buffer only visible to the GPU.
     pub fn create_device_buffer_uninit(
         &self,

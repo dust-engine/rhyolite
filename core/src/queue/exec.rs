@@ -243,7 +243,7 @@ impl Queues {
             .collect()
     }
 
-    pub fn submit<F: QueueFuture>(
+    pub fn submit<'a, 'b, F: QueueFuture>(
         &mut self,
         mut future: F,
         // These pools are passed in as argument so that they can be cleaned on a regular basis (per frame) externally.
@@ -252,7 +252,11 @@ impl Queues {
         semaphore_pool: &mut TimelineSemaphorePool,
         fence_pool: &mut FencePool,
         recycled_state: &mut F::RecycledState,
-    ) -> impl std::future::Future<Output = F::Output> {
+    ) -> impl std::future::Future<Output = F::Output> + 'a
+    where
+        F::Output: 'a,
+        F::RetainedState: 'a,
+    {
         let mut future_pinned = unsafe { std::pin::Pin::new_unchecked(&mut future) };
         let mut submission_context = SubmissionContext {
             shared_command_pools,

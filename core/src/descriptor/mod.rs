@@ -1,6 +1,8 @@
 mod layout;
+mod pool;
 
 pub use layout::*;
+pub use pool::*;
 
 // descriptor pool should be a recycled resource.
 // It doesn't have to be per unique descriptor layout, but it can be made against a list of descriptor layouts.

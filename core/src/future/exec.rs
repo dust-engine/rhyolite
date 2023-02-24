@@ -4,11 +4,15 @@ use crate::{
 };
 use ash::vk;
 use std::{
-    cell::RefCell, collections::BTreeMap, marker::PhantomData, mem::ManuallyDrop, pin::Pin,
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    marker::PhantomData,
+    mem::ManuallyDrop,
+    pin::Pin,
     task::Poll,
 };
 
-use super::{Disposable, GPUCommandFuture};
+use super::{Disposable, Dispose, GPUCommandFuture};
 
 pub struct ResTrackingInfo {
     pub prev_stage_access: Access,
@@ -42,28 +46,13 @@ impl Default for ResTrackingInfo {
 }
 
 pub struct RenderRes<T> {
-    pub tracking_info: ManuallyDrop<RefCell<ResTrackingInfo>>,
-    pub inner: ManuallyDrop<T>,
+    pub tracking_info: RefCell<ResTrackingInfo>,
+    pub inner: T,
+    dispose_marker: Dispose<()>,
 }
 impl<T> Disposable for RenderRes<T> {
-    fn dispose(mut self) {
-        unsafe {
-            ManuallyDrop::drop(&mut self.tracking_info);
-            ManuallyDrop::drop(&mut self.inner);
-            std::mem::forget(self)
-        }
-    }
-}
-impl<T> Drop for RenderRes<T> {
-    fn drop(&mut self) {
-        if std::mem::needs_drop::<T>() && !std::thread::panicking() {
-            panic!("Res<{}> must be disposed!", std::any::type_name::<T>());
-        } else {
-            unsafe {
-                ManuallyDrop::drop(&mut self.tracking_info);
-                ManuallyDrop::drop(&mut self.inner);
-            }
-        }
+    fn dispose(self) {
+        self.dispose_marker.dispose();
     }
 }
 // TODO: Make Res error out when not retained / disposed properly.
@@ -71,7 +60,8 @@ impl<T> RenderRes<T> {
     pub fn new(inner: T) -> Self {
         Self {
             tracking_info: Default::default(),
-            inner: ManuallyDrop::new(inner),
+            inner,
+            dispose_marker: Dispose::new(()),
         }
     }
     pub fn inner(&self) -> &T {
@@ -82,23 +72,18 @@ impl<T> RenderRes<T> {
     }
 
     pub fn map<RET>(mut self, mapper: impl FnOnce(T) -> RET) -> RenderRes<RET> {
-        let (inner, tracking) = unsafe {
-            let inner = ManuallyDrop::take(&mut self.inner);
-            let tracking = ManuallyDrop::take(&mut self.tracking_info);
-            std::mem::forget(self);
-            (inner, tracking)
-        };
         RenderRes {
-            inner: ManuallyDrop::new((mapper)(inner)),
-            tracking_info: ManuallyDrop::new(tracking),
+            inner: (mapper)(self.inner),
+            tracking_info: self.tracking_info,
+            dispose_marker: self.dispose_marker,
         }
     }
 }
 
 pub struct RenderImage<T> {
     pub res: RenderRes<T>,
-    pub old_layout: vk::ImageLayout,
-    pub layout: vk::ImageLayout,
+    pub old_layout: Cell<vk::ImageLayout>,
+    pub layout: Cell<vk::ImageLayout>,
 }
 impl<T> Disposable for RenderImage<T> {
     fn dispose(self) {
@@ -109,8 +94,8 @@ impl<T> RenderImage<T> {
     pub fn new(inner: T, initial_layout: vk::ImageLayout) -> Self {
         Self {
             res: RenderRes::new(inner),
-            layout: initial_layout,
-            old_layout: initial_layout,
+            layout: Cell::new(initial_layout),
+            old_layout: Cell::new(initial_layout),
         }
     }
     pub fn inner(&self) -> &T {
@@ -238,19 +223,6 @@ pub(crate) struct StageContextImage {
     pub image: vk::Image,
     pub subresource_range: vk::ImageSubresourceRange,
     pub extent: vk::Extent3D,
-}
-impl ImageLike for StageContextImage {
-    fn raw_image(&self) -> vk::Image {
-        self.image
-    }
-
-    fn subresource_range(&self) -> vk::ImageSubresourceRange {
-        self.subresource_range
-    }
-
-    fn extent(&self) -> vk::Extent3D {
-        self.extent
-    }
 }
 
 impl PartialEq for StageContextImage {
@@ -566,13 +538,13 @@ impl StageContext {
             || tracking.last_accessed_timeline < self.timeline_index
         {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
-            res.old_layout = std::mem::replace(&mut res.layout, layout);
+            *res.old_layout.get_mut() = std::mem::replace(res.layout.get_mut(), layout);
         } else {
             assert_eq!(
                 tracking.queue_family, self.queue_family_index,
                 "Layout mismatch."
             );
-            assert_eq!(res.layout, layout, "Layout mismatch.");
+            assert_eq!(res.layout.get(), layout, "Layout mismatch.");
         }
         self.add_barrier_tracking(&mut tracking, &access);
 
@@ -606,7 +578,7 @@ impl StageContext {
     #[inline]
     pub fn read_image<T>(
         &mut self,
-        res: &mut RenderImage<T>,
+        res: &RenderImage<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
         layout: vk::ImageLayout,
@@ -623,13 +595,14 @@ impl StageContext {
             || tracking.last_accessed_timeline < self.timeline_index
         {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
-            res.old_layout = std::mem::replace(&mut res.layout, layout);
+            res.old_layout.replace(res.layout.get());
+            res.layout.replace(layout);
         } else {
             assert_eq!(
                 tracking.queue_family, self.queue_family_index,
                 "Queue family mismatch."
             );
-            assert_eq!(res.layout, layout, "Layout mismatch.");
+            assert_eq!(res.layout.get(), layout, "Layout mismatch.");
         }
         self.add_barrier_tracking(&mut tracking, &access);
 
@@ -642,7 +615,7 @@ impl StageContext {
             })
             .or_insert(StageImageBarrier {
                 barrier: Default::default(),
-                src_layout: res.old_layout,
+                src_layout: res.old_layout.get(),
                 dst_layout: layout,
                 src_queue_family: tracking.prev_queue_family,
                 dst_queue_family: self.queue_family_index,

@@ -72,7 +72,6 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
                 None,
             )
         }?;
-        let mut referenced_immutable_samplers: Vec<Arc<Sampler>> = Vec::new();
         let entry_points = self
             .entry_points
             .into_iter()
@@ -94,7 +93,6 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
             device: cache.device().clone(),
             module,
             entry_points,
-            _referenced_immutable_samplers: referenced_immutable_samplers,
         })
     }
 }
@@ -102,8 +100,7 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
 pub struct ShaderModule {
     device: Arc<Device>,
     module: vk::ShaderModule,
-    pub(crate) entry_points: HashMap<String, ShaderModuleEntryPoint>,
-    _referenced_immutable_samplers: Vec<Arc<Sampler>>,
+    pub entry_points: HashMap<String, ShaderModuleEntryPoint>,
 }
 impl ShaderModule {
     pub unsafe fn raw(&self) -> vk::ShaderModule {
@@ -115,7 +112,9 @@ impl HasDevice for ShaderModule {
         &self.device
     }
 }
-pub(crate) struct ShaderModuleEntryPoint {
+
+#[derive(Clone)]
+pub struct ShaderModuleEntryPoint {
     pub desc_sets: Vec<Arc<DescriptorSetLayout>>,
     pub push_constant_ranges: Vec<vk::PushConstantRange>,
 }

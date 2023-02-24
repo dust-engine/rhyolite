@@ -1,5 +1,5 @@
 use quote::ToTokens;
-use syn::punctuated::Punctuated;
+use syn::{punctuated::Punctuated, spanned::Spanned};
 
 use crate::transformer::CommandsTransformer;
 
@@ -22,6 +22,14 @@ impl State {
         quote::quote! {{
             #res_token_name = Some(#input_tokens)
         }}
+    }
+
+    fn using(&mut self, input_tokens: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let index = syn::Index::from(self.recycled_state_count);
+        self.recycled_state_count += 1;
+        quote::quote_spanned! {input_tokens.span()=>
+            &mut unsafe{&mut *__recycled_states}.#index
+        }
     }
 }
 impl Default for State {
@@ -129,6 +137,7 @@ impl CommandsTransformer for State {
             "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
             "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens)),
             "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
+            "using" => syn::Expr::Verbatim(self.using(&mac.mac.tokens)),
             _ => syn::Expr::Macro(mac.clone()),
         }
     }

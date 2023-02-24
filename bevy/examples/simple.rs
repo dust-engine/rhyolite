@@ -18,8 +18,6 @@ use rhyolite_bevy::{
 
 fn main() {
     let mut app = App::new();
-    let shader = glsl!("example.comp");
-    println!("{:#?}", shader.entry_points);
     app.add_plugin(bevy_log::LogPlugin::default())
         .add_plugin(bevy_core::TaskPoolPlugin::default())
         .add_plugin(bevy_core::TypeRegistrationPlugin::default())

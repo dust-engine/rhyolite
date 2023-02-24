@@ -1,59 +1,129 @@
 use ash::{prelude::VkResult, vk};
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
-use crate::{debug::DebugObject, Device, HasDevice};
+use crate::{debug::DebugObject, Allocator, Device, HasDevice, SharingMode};
 
-pub trait ImageLike: Send + Sync {
+pub trait ImageLike: HasDevice {
     fn raw_image(&self) -> vk::Image;
     fn subresource_range(&self) -> vk::ImageSubresourceRange;
+    fn extent(&self) -> vk::Extent3D;
+    fn offset(&self) -> vk::Offset3D {
+        Default::default()
+    }
+    fn format(&self) -> vk::Format;
 }
-
-pub trait ImageViewLike: ImageLike {
-    fn raw_image_view(&self) -> vk::ImageView;
-    fn subresource_range(&self) -> vk::ImageSubresourceRange;
+// This is in fact questionable
+impl<I: ImageLike, T: Deref<Target = I>> HasDevice for T {
+    fn device(&self) -> &Arc<Device> {
+        todo!()
+    }
 }
-
-impl ImageLike for vk::Image {
+// This is in fact very questionable
+impl<I: ImageLike, T: Deref<Target = I> + HasDevice> ImageLike for T {
     fn raw_image(&self) -> vk::Image {
-        *self
+        self.deref().raw_image()
     }
     fn subresource_range(&self) -> vk::ImageSubresourceRange {
-        unimplemented!("Raw image cannot be used here")
+        self.deref().subresource_range()
+    }
+    fn extent(&self) -> vk::Extent3D {
+        self.deref().extent()
+    }
+    fn offset(&self) -> vk::Offset3D {
+        self.deref().offset()
+    }
+    fn format(&self) -> vk::Format {
+        self.deref().format()
     }
 }
 
-pub struct Image {
-    device: Arc<Device>,
-    pub(crate) image: vk::Image,
-    format: vk::Format,
-}
+pub trait ImageExt {
+    fn crop(self, extent: vk::Extent3D, offset: vk::Offset3D) -> ImageSubregion<Self>
+    where
+        Self: ImageLike + Sized,
+    {
+        let sub_offset = self.offset();
+        let sub_extent = self.extent();
 
-impl HasDevice for Image {
+        let offset = vk::Offset3D {
+            x: sub_offset.x + offset.x,
+            y: sub_offset.y + offset.y,
+            z: sub_offset.z + offset.z,
+        };
+        assert!(
+            extent.width <= sub_extent.width
+                && extent.height <= sub_extent.height
+                && extent.depth <= sub_extent.depth
+        );
+        ImageSubregion {
+            inner: self,
+            extent,
+            offset,
+        }
+    }
+    fn as_2d_view(self) -> VkResult<super::image_view::ImageView<Self>>
+    where
+        Self: ImageLike + Sized,
+    {
+        super::image_view::ImageView::new(self, vk::ImageViewType::TYPE_2D)
+    }
+}
+impl<T> ImageExt for T where T: ImageLike {}
+
+pub struct ImageSubregion<T: ImageLike> {
+    inner: T,
+    extent: vk::Extent3D,
+    offset: vk::Offset3D,
+}
+impl<T: ImageLike> ImageSubregion<T> {
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+}
+impl<T: ImageLike> HasDevice for ImageSubregion<T> {
     fn device(&self) -> &Arc<Device> {
-        &self.device
+        self.inner.device()
+    }
+}
+impl<T: ImageLike> ImageLike for ImageSubregion<T> {
+    fn raw_image(&self) -> vk::Image {
+        self.inner.raw_image()
+    }
+
+    fn subresource_range(&self) -> vk::ImageSubresourceRange {
+        self.inner.subresource_range()
+    }
+
+    fn extent(&self) -> vk::Extent3D {
+        self.extent
+    }
+
+    fn offset(&self) -> vk::Offset3D {
+        self.offset
+    }
+
+    fn format(&self) -> vk::Format {
+        self.inner.format()
     }
 }
 
-impl DebugObject for Image {
-    fn object_handle(&mut self) -> u64 {
-        unsafe { std::mem::transmute(self.image) }
-    }
-
-    const OBJECT_TYPE: vk::ObjectType = vk::ObjectType::IMAGE;
+pub struct ResidentImage {
+    allocator: Allocator,
+    image: vk::Image,
+    allocation: vk_mem::Allocation,
+    extent: vk::Extent3D,
+    format: vk::Format,
+    level_count: u32,
+    layer_count: u32,
 }
 
-impl Image {
-    pub fn new(device: Arc<Device>, info: &vk::ImageCreateInfo) -> VkResult<Self> {
-        let image = unsafe { device.create_image(info, None)? };
-        Ok(Self {
-            device,
-            image,
-            format: info.format,
-        })
+impl HasDevice for ResidentImage {
+    fn device(&self) -> &Arc<Device> {
+        self.allocator.device()
     }
 }
 
-impl ImageLike for Image {
+impl ImageLike for ResidentImage {
     fn raw_image(&self) -> vk::Image {
         self.image
     }
@@ -72,82 +142,34 @@ impl ImageLike for Image {
         vk::ImageSubresourceRange {
             aspect_mask,
             base_mip_level: 0,
-            level_count: vk::REMAINING_MIP_LEVELS,
+            level_count: self.level_count,
             base_array_layer: 0,
-            layer_count: vk::REMAINING_ARRAY_LAYERS,
+            layer_count: self.layer_count,
         }
     }
-}
 
-impl<T: ImageLike> ImageLike for Arc<T> {
-    fn raw_image(&self) -> vk::Image {
-        let r: &T = self.as_ref();
-        r.raw_image()
+    fn extent(&self) -> vk::Extent3D {
+        self.extent
     }
-    fn subresource_range(&self) -> vk::ImageSubresourceRange {
-        let r: &T = self.as_ref();
-        r.subresource_range()
+
+    fn format(&self) -> vk::Format {
+        self.format
     }
 }
 
-impl Drop for Image {
+impl Drop for ResidentImage {
     fn drop(&mut self) {
         tracing::debug!(image = ?self.image, "drop image");
-        unsafe { self.device.destroy_image(self.image, None) }
-    }
-}
-
-/// Image bound to allocator memory
-pub struct MemImage {
-    allocator: Arc<Allocator>,
-    pub image: vk::Image,
-    pub memory: Allocation,
-    pub memory_flags: vk::MemoryPropertyFlags,
-    format: vk::Format,
-}
-
-impl ImageLike for MemImage {
-    fn raw_image(&self) -> vk::Image {
-        self.image
-    }
-    fn subresource_range(&self) -> vk::ImageSubresourceRange {
-        let aspect_mask = match self.format {
-            vk::Format::D16_UNORM | vk::Format::D32_SFLOAT | vk::Format::X8_D24_UNORM_PACK32 => {
-                vk::ImageAspectFlags::DEPTH
-            }
-            vk::Format::D16_UNORM_S8_UINT
-            | vk::Format::D24_UNORM_S8_UINT
-            | vk::Format::D32_SFLOAT_S8_UINT => {
-                vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
-            }
-            _ => vk::ImageAspectFlags::COLOR,
-        };
-        vk::ImageSubresourceRange {
-            aspect_mask,
-            base_mip_level: 0,
-            level_count: vk::REMAINING_MIP_LEVELS,
-            base_array_layer: 0,
-            layer_count: vk::REMAINING_ARRAY_LAYERS,
-        }
-    }
-}
-
-impl Drop for MemImage {
-    fn drop(&mut self) {
-        tracing::debug!(image = ?self.image, "drop mem image");
         unsafe {
-            let mut memory: Allocation = std::mem::zeroed();
-            std::mem::swap(&mut memory, &mut self.memory);
-            self.allocator.allocator.destroy_image(self.image, memory);
+            self.allocator
+                .inner()
+                .destroy_image(self.image, &mut self.allocation);
         }
     }
 }
 
 #[derive(Clone)]
 pub struct ImageRequest<'a> {
-    pub scenario: MemoryAllocScenario,
-    pub allocation_flags: AllocationCreateFlags,
-
     pub image_type: vk::ImageType,
     pub format: vk::Format,
     pub extent: vk::Extent3D,
@@ -156,16 +178,12 @@ pub struct ImageRequest<'a> {
     pub samples: vk::SampleCountFlags,
     pub tiling: vk::ImageTiling,
     pub usage: vk::ImageUsageFlags,
-    pub sharing_mode: vk::SharingMode,
-    pub queue_families: &'a [u32],
+    pub sharing_mode: SharingMode<'a>,
     pub initial_layout: vk::ImageLayout,
 }
 impl<'a> Default for ImageRequest<'a> {
     fn default() -> Self {
         Self {
-            scenario: MemoryAllocScenario::DeviceAccess,
-            allocation_flags: AllocationCreateFlags::empty(),
-
             image_type: vk::ImageType::TYPE_2D,
             format: vk::Format::R8G8B8A8_UNORM,
             extent: vk::Extent3D::default(),
@@ -174,17 +192,19 @@ impl<'a> Default for ImageRequest<'a> {
             samples: vk::SampleCountFlags::TYPE_1,
             tiling: vk::ImageTiling::OPTIMAL,
             usage: vk::ImageUsageFlags::empty(),
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            queue_families: &[],
+            sharing_mode: SharingMode::Exclusive,
             initial_layout: vk::ImageLayout::UNDEFINED,
         }
     }
 }
 
 impl Allocator {
-    pub fn allocate_image(self: &Arc<Self>, image_request: &ImageRequest) -> VkResult<MemImage> {
+    pub fn create_device_image_uninit(
+        &self,
+        image_request: &ImageRequest,
+    ) -> VkResult<ResidentImage> {
         use vk_mem::Alloc;
-        let build_info = vk::ImageCreateInfo {
+        let mut build_info = vk::ImageCreateInfo {
             flags: vk::ImageCreateFlags::empty(),
             image_type: image_request.image_type,
             format: image_request.format,
@@ -194,72 +214,33 @@ impl Allocator {
             samples: image_request.samples,
             tiling: image_request.tiling,
             usage: image_request.usage,
-            sharing_mode: image_request.sharing_mode,
-            queue_family_index_count: image_request.queue_families.len() as u32,
-            p_queue_family_indices: image_request.queue_families.as_ptr(),
             initial_layout: image_request.initial_layout,
             ..Default::default()
         };
-        let create_info =
-            self.create_info_by_scenario(image_request.allocation_flags, &image_request.scenario);
-        let (image, allocation) =
-            unsafe { self.allocator.create_image(&build_info, &create_info) }?;
-        let memory_flags = unsafe {
-            let allocation_info = self.allocator.get_allocation_info(&allocation).unwrap();
-            let memory_flags = self.types[allocation_info.memory_type as usize].property_flags;
-            memory_flags
+        match image_request.sharing_mode {
+            SharingMode::Concurrent {
+                queue_family_indices,
+            } => {
+                build_info.sharing_mode = vk::SharingMode::CONCURRENT;
+                build_info.p_queue_family_indices = queue_family_indices.as_ptr();
+                build_info.queue_family_index_count = queue_family_indices.len() as u32;
+            }
+            _ => (),
         };
-        Ok(MemImage {
+        let create_info = vk_mem::AllocationCreateInfo {
+            flags: vk_mem::AllocationCreateFlags::empty(),
+            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+            ..Default::default()
+        };
+        let (image, allocation) = unsafe { self.inner().create_image(&build_info, &create_info) }?;
+        Ok(ResidentImage {
             allocator: self.clone(),
             image,
-            memory: allocation,
-            memory_flags,
+            allocation,
+            extent: image_request.extent,
             format: image_request.format,
+            layer_count: image_request.array_layers,
+            level_count: image_request.mip_levels,
         })
-    }
-}
-
-pub struct ImageView<T: ImageLike> {
-    device: Arc<Device>,
-    image: T,
-    view: vk::ImageView,
-}
-impl<T: ImageLike> ImageView<T> {
-    pub fn new(
-        device: Arc<Device>,
-        image: T,
-        view_type: vk::ImageViewType,
-        format: vk::Format,
-        components: vk::ComponentMapping,
-        subresource_range: vk::ImageSubresourceRange,
-    ) -> VkResult<Self> {
-        let view = unsafe {
-            device.create_image_view(
-                &vk::ImageViewCreateInfo {
-                    image: image.raw_image(),
-                    view_type,
-                    format,
-                    components,
-                    subresource_range,
-                    ..Default::default()
-                },
-                None,
-            )?
-        };
-        Ok(Self {
-            device,
-            image,
-            view,
-        })
-    }
-    pub fn raw_image_view(&self) -> vk::ImageView {
-        self.view
-    }
-}
-impl<T: ImageLike> Drop for ImageView<T> {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_image_view(self.view, None);
-        }
     }
 }
