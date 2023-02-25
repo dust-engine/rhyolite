@@ -1,4 +1,5 @@
 #![feature(generators)]
+#![feature(int_roundings)]
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
 use bevy_window::{PrimaryWindow, Window};
@@ -87,6 +88,7 @@ struct GaussianBlurPipeline {
 impl FromWorld for GaussianBlurPipeline {
     fn from_world(world: &mut World) -> Self {
         let shader = glsl!("filter.comp");
+        println!("{:?}", shader.entry_points.get("main").unwrap());
         let num_frame_in_flight = world.resource::<Queues>().num_frame_in_flight();
         let mut desc_cache = world.resource_mut::<DescriptorSetLayoutCache>();
         let module = shader.build(&mut desc_cache).unwrap();
@@ -219,9 +221,19 @@ impl<
                 desc_set.as_slice(),
                 &[],
             );
+
+            let kernel_size: u32 = 4;
+            let kernel_size: [u8; 4] = unsafe{std::mem::transmute(kernel_size)};
+            device.cmd_push_constants(
+                command_buffer,
+                this.pipeline.pipeline.raw_layout(),
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                kernel_size.as_slice()
+            );
             device.cmd_dispatch(
                 command_buffer,
-                extent.width / 128,
+                extent.width.div_ceil(128),
                 extent.height,
                 extent.depth,
             );

@@ -9,6 +9,7 @@ pub struct PipelineLayout {
 }
 
 impl PipelineLayout {
+    /// Create pipeline layout for pipelines with only one shader entry point. Only applicable to compute shaders.
     pub fn for_layout(
         device: Arc<Device>,
         entry_point: ShaderModuleEntryPoint,
@@ -19,14 +20,16 @@ impl PipelineLayout {
             .iter()
             .map(|a| unsafe { a.raw() })
             .collect();
-        let info = vk::PipelineLayoutCreateInfo {
+        let mut info = vk::PipelineLayoutCreateInfo {
             flags,
             set_layout_count: set_layouts.len() as u32,
             p_set_layouts: set_layouts.as_ptr(),
-            push_constant_range_count: entry_point.push_constant_ranges.len() as u32,
-            p_push_constant_ranges: entry_point.push_constant_ranges.as_ptr(),
             ..Default::default()
         };
+        if let Some(push_constant_range) = entry_point.push_constant_range.as_ref() {
+            info.push_constant_range_count = 1;
+            info.p_push_constant_ranges = push_constant_range;
+        }
         let layout = unsafe { device.create_pipeline_layout(&info, None)? };
         Ok(Self {
             device,

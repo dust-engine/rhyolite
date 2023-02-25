@@ -16,7 +16,7 @@ pub use crate::descriptor::DescriptorSetLayoutCacheKey as SpirvDescriptorSet;
 #[derive(Debug)]
 pub struct SpirvEntryPoint {
     pub descriptor_sets: Vec<SpirvDescriptorSet>,
-    pub push_constant_ranges: Vec<vk::PushConstantRange>,
+    pub push_constant_range: Option<vk::PushConstantRange>,
 }
 
 impl<T: Deref<Target = [u32]>> SpirvShader<T> {
@@ -84,7 +84,7 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
                             .into_iter()
                             .map(|desc_set| cache.get(desc_set.bindings, Default::default()))
                             .collect(),
-                        push_constant_ranges: entry_point.push_constant_ranges.clone(),
+                        push_constant_range: entry_point.push_constant_range.clone(),
                     },
                 )
             })
@@ -116,7 +116,7 @@ impl HasDevice for ShaderModule {
 #[derive(Clone)]
 pub struct ShaderModuleEntryPoint {
     pub desc_sets: Vec<Arc<DescriptorSetLayout>>,
-    pub push_constant_ranges: Vec<vk::PushConstantRange>,
+    pub push_constant_range: Option<vk::PushConstantRange>,
 }
 impl Drop for ShaderModule {
     fn drop(&mut self) {

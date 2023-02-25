@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Write};
+use std::{fmt::{Debug, Write}, ops::Range};
 
 use ash::vk;
 
@@ -129,24 +129,26 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
                     }
                     sets
                 },
-                push_constant_ranges: entry_point
-                    .vars
-                    .iter()
-                    .filter_map(|var| match var {
-                        spirq::Variable::PushConstant {
-                            name: Some(name),
-                            ty,
-                        } if !name.starts_with('_') => {
-                            println!("{:?}", ty);
-                            Some(PushConstantRange {
-                                stage_flags: ShaderStageFlags(stage_flags),
-                                offset: 0,
-                                size: 0,
-                            })
-                        }
-                        _ => None,
-                    })
-                    .collect(),
+                push_constant_range: {
+                    let mut push_constants = entry_point.vars.iter().filter(|var| match var {
+                        spirq::Variable::PushConstant { .. } => true,
+                        _ => false,
+                    });
+                    if let Some(push_constant) = push_constants.next() {
+                        assert!(push_constants.next().is_none());
+                        let range = match push_constant {
+                            spirq::Variable::PushConstant { ty, .. } => push_constant_ranges(ty),
+                            _ => unreachable!(),
+                        };
+                        Some(PushConstantRange {
+                            stage_flags: ShaderStageFlags(stage_flags),
+                            size: range.end - range.start,
+                            offset: range.start
+                        })
+                    } else {
+                        None
+                    }
+                },
             },
         )
     });
@@ -270,15 +272,15 @@ impl Debug for SpirvDescriptorSet {
 
 struct SpirvEntryPoint {
     pub descriptor_sets: Vec<SpirvDescriptorSet>,
-    pub push_constant_ranges: Vec<PushConstantRange>,
+    pub push_constant_range: Option<PushConstantRange>,
 }
 impl Debug for SpirvEntryPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SpirvEntryPoint")
             .field("descriptor_sets", &ToVecFmt(&self.descriptor_sets))
             .field(
-                "push_constant_ranges",
-                &ToVecFmt(&self.push_constant_ranges),
+                "push_constant_range",
+                &self.push_constant_range,
             )
             .finish()?;
         Ok(())
@@ -327,4 +329,30 @@ fn spirv_desc_ty_to_vk(ty: &spirq::DescriptorType) -> vk::DescriptorType {
         InputAttachment(_) => vk::DescriptorType::INPUT_ATTACHMENT,
         AccelStruct() => vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
     }
+}
+
+fn push_constant_ranges(var: &spirq::ty::Type) -> Range<u32> {
+    fn push_constant_ranges_recursive(var: &spirq::ty::Type, offset: u32, ranges: &mut Range<u32>) {
+
+        match var {
+            spirq::ty::Type::Struct(ty) => {
+                for member in ty.members.iter() {
+                    if let Some(name) = member.name.as_ref() && name.starts_with('_'){
+                        continue;
+                    }
+                    push_constant_ranges_recursive(&member.ty, offset + member.offset as u32, ranges);
+                }
+            },
+            _ => {
+                let nbyte = var.nbyte().expect("Variable should be sized.") as u32;
+                ranges.start = ranges.start.min(offset);
+                ranges.end = ranges.end.max(offset + nbyte);
+            },
+        }
+    }
+
+    let mut range: Range<u32> = Range { start: u32::MAX, end: 0 };
+    push_constant_ranges_recursive(var, 0, &mut range);
+    assert!(range.start <= range.end);
+    range
 }
