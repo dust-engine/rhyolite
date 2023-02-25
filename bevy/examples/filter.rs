@@ -151,7 +151,7 @@ impl<
 
     type RetainedState = Dispose<(Arc<ComputePipeline>, RetainerHandle<DescriptorPool>, PerFrameContainer<Vec<vk::DescriptorSet>>)>;
 
-    type RecycledState = PerFrameState<Vec<vk::DescriptorSet>>;
+    type RecycledState = (PerFrameState<Vec<vk::DescriptorSet>>, u32);
 
     fn init(
         self: std::pin::Pin<&mut Self>,
@@ -163,13 +163,13 @@ impl<
     fn record(
         self: std::pin::Pin<&mut Self>,
         ctx: &mut rhyolite::future::CommandBufferRecordContext,
-        recycled_state: &mut Self::RecycledState,
+        (state_desc_sets, state_kernel_size): &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
         assert_eq!(this.src_img.inner().extent(), this.tmp_img.inner().extent());
         let extent = this.src_img.inner().extent();
 
-        let desc_set = use_per_frame_state(recycled_state, || {
+        let desc_set = use_per_frame_state(state_desc_sets, || {
             this
                 .pipeline
                 .desc_pool
@@ -177,6 +177,12 @@ impl<
                 .unwrap()
         }, |old| {
         });
+
+        let kernel_size = *state_kernel_size;
+        *state_kernel_size += 1;
+        if (*state_kernel_size > 32) {
+            *state_kernel_size = 0;
+        }
         unsafe {
             // TODO: optimize away redundant writes
             let image_infos = [
@@ -222,7 +228,6 @@ impl<
                 &[],
             );
 
-            let kernel_size: u32 = 4;
             let kernel_size: [u8; 4] = unsafe{std::mem::transmute(kernel_size)};
             device.cmd_push_constants(
                 command_buffer,

@@ -17,22 +17,20 @@ layout(push_constant) uniform constants
 shared vec3 workgroup_data[WORKGROUP_SIZE + MAX_KERNEL_SIZE * 2];
 
 void main() {
-    workgroup_data[gl_LocalInvocationID.x + WORKGROUP_SIZE] = imageLoad(imgInput, ivec2(gl_GlobalInvocationID.xy)).rgb;
+    uint padding = MAX_KERNEL_SIZE - PushConstants.kernal_size;
+    workgroup_data[gl_LocalInvocationID.x + MAX_KERNEL_SIZE] = imageLoad(imgInput, ivec2(gl_GlobalInvocationID.xy)).rgb;
     if (gl_LocalInvocationID.x < PushConstants.kernal_size) {
-        workgroup_data[gl_LocalInvocationID.x - PushConstants.kernal_size] = imageLoad(imgInput, ivec2(gl_GlobalInvocationID.xy - ivec2(PushConstants.kernal_size, 0))).rgb;
+        workgroup_data[gl_LocalInvocationID.x + padding] = imageLoad(imgInput, ivec2(gl_GlobalInvocationID.xy - ivec2(PushConstants.kernal_size, 0))).rgb;
     }
     if (gl_LocalInvocationID.x >= WORKGROUP_SIZE - PushConstants.kernal_size) {
-        workgroup_data[gl_LocalInvocationID.x + PushConstants.kernal_size] = imageLoad(imgInput, ivec2(gl_GlobalInvocationID.xy + ivec2(PushConstants.kernal_size, 0))).rgb;
+        workgroup_data[gl_LocalInvocationID.x + PushConstants.kernal_size + MAX_KERNEL_SIZE] = imageLoad(imgInput, ivec2(gl_GlobalInvocationID.xy + ivec2(PushConstants.kernal_size, 0))).rgb;
     }
     barrier();
-    memoryBarrier();
 
     vec3 value = vec3(0.0, 0.0, 0.0);
     for (uint i = 0; i <= PushConstants.kernal_size * 2; i++) {
-        value += workgroup_data[gl_LocalInvocationID.x + i];
+        value += workgroup_data[gl_LocalInvocationID.x + MAX_KERNEL_SIZE + i - PushConstants.kernal_size];
     }
     value /= float(PushConstants.kernal_size * 2 + 1);
-
-    //vec3 value = imageLoad(imgInput, ivec2(gl_GlobalInvocationID.xy)).rgb;
     imageStore(imgOutput, ivec2(gl_GlobalInvocationID.xy), vec4(value, 1.0));
 }
