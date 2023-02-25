@@ -405,7 +405,8 @@ impl StageContext {
                 }
 
                 let mut barrier = vk::MemoryBarrier2::default();
-                get_memory_access(&mut barrier, &tracking.prev_stage_access, access);
+                // TODO: Do we have to consider image layout transfers here?
+                get_memory_access(&mut barrier, &tracking.prev_stage_access, access, false);
 
                 self.semaphore_transitions
                     .push(StageContextSemaphoreTransition::Untracked {
@@ -418,7 +419,8 @@ impl StageContext {
             } else if tracking.prev_queue_family != vk::QUEUE_FAMILY_IGNORED {
                 assert!(!tracking.prev_queue_index.is_null());
                 let mut barrier = vk::MemoryBarrier2::default();
-                get_memory_access(&mut barrier, &tracking.prev_stage_access, access);
+                // TODO: Do we have to consider image layout transfers here?
+                get_memory_access(&mut barrier, &tracking.prev_stage_access, access,false);
                 self.semaphore_transitions
                     .push(StageContextSemaphoreTransition::Managed {
                         src_queue: tracking.prev_queue_index,
@@ -457,6 +459,7 @@ impl StageContext {
             &mut self.global_access,
             &tracking.prev_stage_access,
             &access,
+            false,
         );
         tracking.current_stage_access.write_access |= accesses;
         tracking.current_stage_access.write_stages |= stages;
@@ -491,6 +494,7 @@ impl StageContext {
                 &mut self.global_access,
                 &tracking.prev_stage_access,
                 &access,
+                false,
             );
         } else {
             let buffer_barrier = self
@@ -511,6 +515,7 @@ impl StageContext {
                 &mut buffer_barrier.barrier,
                 &tracking.prev_stage_access,
                 &access,
+                false,
             );
         }
         tracking.current_stage_access.read_access |= accesses;
@@ -568,6 +573,7 @@ impl StageContext {
             &mut image_barrier.barrier,
             &tracking.prev_stage_access,
             &access,
+            image_barrier.dst_layout != image_barrier.src_layout
         );
 
         tracking.current_stage_access.write_access |= accesses;
@@ -630,6 +636,7 @@ impl StageContext {
             &mut image_barrier.barrier,
             &tracking.prev_stage_access,
             &access,
+            image_barrier.dst_layout != image_barrier.src_layout
         );
 
         tracking.current_stage_access.read_access |= accesses;
@@ -772,8 +779,10 @@ fn get_memory_access(
     memory_barrier: &mut vk::MemoryBarrier2,
     before_access: &Access,
     after_access: &Access,
+    had_image_layout_transfer: bool
 ) {
-    if before_access.has_write() && after_access.has_write() {
+    let before_access_has_write = had_image_layout_transfer || before_access.has_write();
+    if before_access_has_write && after_access.has_write() {
         // Write after write
         memory_barrier.src_stage_mask |= before_access.write_stages;
         memory_barrier.dst_stage_mask |= after_access.write_stages;
@@ -786,7 +795,7 @@ fn get_memory_access(
         memory_barrier.dst_stage_mask |= after_access.write_stages;
         // No need for memory barrier
     }
-    if before_access.has_write() && after_access.has_read() {
+    if before_access_has_write && after_access.has_read() {
         // Read after write
         memory_barrier.src_stage_mask |= before_access.write_stages;
         memory_barrier.dst_stage_mask |= after_access.read_stages;
