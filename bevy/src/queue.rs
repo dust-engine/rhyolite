@@ -77,6 +77,8 @@ impl Queues {
             &mut current_frame.shared_semaphore_pool,
             &mut current_frame.shared_fence_pool,
             recycled_state,
+            // No need to signal final semaphores, because we're always going to detach the task and wait for it on the host.
+            false,
         );
 
         // By using a retainer to wrap around PerFrameContainer and drop the handle only after

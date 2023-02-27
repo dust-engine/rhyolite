@@ -243,7 +243,7 @@ impl Queues {
             .collect()
     }
 
-    pub fn submit<'a, 'b, F: QueueFuture>(
+    pub fn submit<'a, F: QueueFuture>(
         &mut self,
         mut future: F,
         // These pools are passed in as argument so that they can be cleaned on a regular basis (per frame) externally.
@@ -252,7 +252,8 @@ impl Queues {
         semaphore_pool: &mut TimelineSemaphorePool,
         fence_pool: &mut FencePool,
         recycled_state: &mut F::RecycledState,
-    ) -> impl std::future::Future<Output = F::Output> + 'a
+        apply_final_signal: bool,
+    ) -> QueueSubmitFuture<F::RetainedState, F::Output>
     where
         F::Output: 'a,
         F::RetainedState: 'a,
@@ -286,7 +287,7 @@ impl Queues {
         future_pinned
             .as_mut()
             .setup(&mut submission_context, recycled_state, QueueMask::empty());
-        let output = loop {
+        let (output, final_signals) = loop {
             match future_pinned
                 .as_mut()
                 .record(&mut submission_context, recycled_state)
@@ -294,7 +295,7 @@ impl Queues {
                 QueueFuturePoll::Barrier => {
                     continue;
                 }
-                QueueFuturePoll::Semaphore => {
+                QueueFuturePoll::Semaphore(additional_semaphores_to_wait) => {
                     let mut last_stage = std::mem::replace(
                         &mut current_stage,
                         CachedStageSubmissions::new(self.queues.len()),
@@ -304,6 +305,10 @@ impl Queues {
                         &submission_context,
                         &last_stage,
                         semaphore_pool,
+                    );
+                    current_stage.wait_additional_signals(
+                        &submission_context,
+                        additional_semaphores_to_wait,
                     );
                     submission_stages.push(last_stage);
 
@@ -373,9 +378,13 @@ impl Queues {
                         submission_stages[last_accessed_stage].queues[i]
                             .apply_exports(ctx, &self.device);
                     }
-
+                    let final_signals = if apply_final_signal {
+                        Some(current_stage.apply_final_signals(&submission_context, semaphore_pool))
+                    } else {
+                        None
+                    };
                     submission_stages.push(current_stage);
-                    break output;
+                    break (output, final_signals);
                 }
             }
         };
@@ -394,14 +403,7 @@ impl Queues {
         let fut_dispose = future.dispose();
 
         let device = self.device.clone();
-        async {
-            blocking::unblock(move || unsafe {
-                device.wait_for_fences(&fences_to_wait, true, !0).unwrap();
-            })
-            .await;
-            fut_dispose.dispose();
-            output
-        }
+        QueueSubmitFuture::new(device, fences_to_wait, final_signals, fut_dispose, output)
     }
     fn submit_batch(
         &mut self,
@@ -470,6 +472,190 @@ impl Queues {
             }
         }
         fences
+    }
+}
+
+#[pin_project]
+pub struct QueueSubmitFuture<Ret, Out> {
+    #[pin]
+    task: blocking::Task<()>,
+    retained_state: Option<Ret>,
+    output: Option<Out>,
+    semaphores: Option<Vec<(vk::Semaphore, u64)>>,
+}
+impl<Ret, Out> QueueSubmitFuture<Ret, Out> {
+    fn new(
+        device: Arc<Device>,
+        fences: Vec<vk::Fence>,
+        semaphores: Option<Vec<(vk::Semaphore, u64)>>,
+        retained_state: Ret,
+        output: Out,
+    ) -> Self {
+        let task = blocking::unblock(move || unsafe {
+            device.wait_for_fences(&fences, true, !0).unwrap();
+        });
+        Self {
+            task,
+            semaphores,
+            retained_state: Some(retained_state),
+            output: Some(output),
+        }
+    }
+}
+impl<Ret: Disposable, Out> std::future::Future for QueueSubmitFuture<Ret, Out> {
+    type Output = Out;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        match this.task.poll(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(_) => {
+                this.retained_state.take().unwrap().dispose();
+                return Poll::Ready(this.output.take().unwrap());
+            }
+        }
+    }
+}
+impl<Ret: Disposable + Send, Out> QueueFuture for QueueSubmitFuture<Ret, Out> {
+    type Output = Out;
+
+    type RecycledState = ();
+
+    type RetainedState = Ret;
+
+    fn setup(
+        self: Pin<&mut Self>,
+        ctx: &mut SubmissionContext,
+        recycled_state: &mut Self::RecycledState,
+        prev_queue: QueueMask,
+    ) {
+        let this = self.project();
+        assert!(this.semaphores.is_some(), "To use a QueueSubmitFuture in another future, it must have been created with `apply_final_signal=true`");
+    }
+
+    fn record(
+        self: Pin<&mut Self>,
+        ctx: &mut SubmissionContext,
+        recycled_state: &mut Self::RecycledState,
+    ) -> QueueFuturePoll<Self::Output> {
+        let this = self.project();
+        if this.task.is_finished() {
+            return QueueFuturePoll::Ready {
+                next_queue: QueueMask::empty(),
+                output: this.output.take().unwrap(),
+            };
+        }
+
+        QueueFuturePoll::Semaphore(std::mem::take(this.semaphores.as_mut().unwrap()))
+    }
+
+    fn dispose(mut self) -> Self::RetainedState {
+        self.retained_state.take().unwrap()
+    }
+}
+impl<Ret: Disposable + Send, Out> QueueSubmitFuture<Ret, Out> {
+    pub fn shared(
+        self,
+    ) -> (
+        SharedQueueSubmitFutureMain<Ret, Out>,
+        SharedQueueSubmitFuture<Out>,
+    ) {
+        let main = SharedQueueSubmitFutureMain {
+            task: Arc::new(self.task),
+            retained_state: self.retained_state,
+            output: Arc::new(self.output.unwrap()),
+            semaphores: self.semaphores.expect("To use a QueueSubmitFuture as shared, it must have been created with `apply_final_signal=true`"),
+        };
+        let shared = SharedQueueSubmitFuture {
+            task: main.task.clone(),
+            output: main.output.clone(),
+        };
+        (main, shared)
+    }
+}
+
+#[pin_project]
+pub struct SharedQueueSubmitFutureMain<Ret, Out> {
+    #[pin]
+    task: Arc<blocking::Task<()>>,
+    retained_state: Option<Ret>,
+    output: Arc<Out>,
+    semaphores: Vec<(vk::Semaphore, u64)>,
+}
+impl<Ret: Disposable + Send, Out> QueueFuture for SharedQueueSubmitFutureMain<Ret, Out> {
+    type Output = Arc<Out>;
+
+    type RecycledState = ();
+
+    type RetainedState = Ret;
+
+    fn setup(
+        self: Pin<&mut Self>,
+        ctx: &mut SubmissionContext,
+        recycled_state: &mut Self::RecycledState,
+        prev_queue: QueueMask,
+    ) {
+    }
+
+    fn record(
+        self: Pin<&mut Self>,
+        ctx: &mut SubmissionContext,
+        recycled_state: &mut Self::RecycledState,
+    ) -> QueueFuturePoll<Self::Output> {
+        let this = self.project();
+        if this.task.is_finished() {
+            // TODO: destroy semaphores
+            return QueueFuturePoll::Ready {
+                next_queue: QueueMask::empty(),
+                output: this.output.clone(),
+            };
+        }
+
+        QueueFuturePoll::Semaphore(std::mem::take(this.semaphores))
+    }
+
+    fn dispose(mut self) -> Self::RetainedState {
+        self.retained_state.take().unwrap()
+    }
+}
+
+#[derive(Clone)]
+#[pin_project]
+pub struct SharedQueueSubmitFuture<Out> {
+    #[pin]
+    task: Arc<blocking::Task<()>>,
+    output: Arc<Out>,
+}
+impl<Out> QueueFuture for SharedQueueSubmitFuture<Out> {
+    type Output = Arc<Out>;
+
+    type RecycledState = ();
+
+    type RetainedState = ();
+
+    fn setup(
+        self: Pin<&mut Self>,
+        ctx: &mut SubmissionContext,
+        recycled_state: &mut Self::RecycledState,
+        prev_queue: QueueMask,
+    ) {
+    }
+
+    fn record(
+        self: Pin<&mut Self>,
+        ctx: &mut SubmissionContext,
+        recycled_state: &mut Self::RecycledState,
+    ) -> QueueFuturePoll<Self::Output> {
+        let this = self.project();
+        assert!(this.task.is_finished());
+        return QueueFuturePoll::Ready {
+            next_queue: QueueMask::empty(),
+            output: this.output.clone(),
+        };
+    }
+
+    fn dispose(mut self) -> Self::RetainedState {
+        ()
     }
 }
 
@@ -707,6 +893,52 @@ impl CachedStageSubmissions {
                 }));
         }
     }
+
+    /// On the final stage of a QueueFuture, we can call this method to have each queue to signal one
+    /// additional timeline semaphore.
+    fn apply_final_signals(
+        &mut self,
+        submission_context: &SubmissionContext,
+        semaphore_pool: &mut TimelineSemaphorePool,
+    ) -> Vec<(vk::Semaphore, u64)> {
+        submission_context
+            .queues
+            .iter()
+            .zip(self.queues.iter_mut())
+            .filter_map(|(ctx, cache)| {
+                if ctx.stage_index == 0 {
+                    // Didn't actually do anything in this queue.
+                    return None;
+                }
+                // TODO: Figure out the right pipeline stages
+                let signal = semaphore_pool.signal();
+                cache
+                    .signals
+                    .insert(vk::PipelineStageFlags2::ALL_COMMANDS, signal);
+                return Some(signal);
+            })
+            .collect()
+    }
+    /// The timeline semaphores signaled in `apply_final_signals` will be awaited here.
+    fn wait_additional_signals(
+        &mut self,
+        submission_context: &SubmissionContext,
+        semaphores: Vec<(vk::Semaphore, u64)>,
+    ) {
+        for (ctx, cache) in submission_context.queues.iter().zip(self.queues.iter_mut()) {
+            if ctx.stage_index == 0 {
+                // Didn't actually do anything in this queue.
+                continue;
+            }
+            // TODO: Figure out the right pipeline stages
+            cache
+                .waits
+                .extend(semaphores.iter().map(|(semaphore, timeline)| {
+                    (*semaphore, *timeline, vk::PipelineStageFlags2::ALL_COMMANDS)
+                }));
+        }
+        // TODO: destroy these semaphores
+    }
     /// Called on the current stage.
     fn apply_submissions(
         &mut self,
@@ -732,6 +964,7 @@ impl CachedStageSubmissions {
                             .get(src_stages)
                             .unwrap();
                         if *value != u64::MAX {
+                            // NOTE: Here's a potential issue: is it possible for the same semaphore to be `waited` on multiple times?
                             semaphore_pool.waited(*semaphore, *value);
 
                             (*semaphore, *value, *dst_stages)
@@ -1066,8 +1299,12 @@ impl Drop for SubmissionBatch {
 
 pub enum QueueFuturePoll<OUT> {
     Barrier,
-    Semaphore,
-    Ready { next_queue: QueueMask, output: OUT },
+    /// Contains a list of additional semaphores to wait.
+    Semaphore(Vec<(vk::Semaphore, u64)>),
+    Ready {
+        next_queue: QueueMask,
+        output: OUT,
+    },
 }
 
 /// We don't know what are the semaphores to signal, until later stages tell us.
@@ -1109,7 +1346,7 @@ pub trait QueueFuture {
 pub trait QueueFutureBlockGenerator<Return, RecycledState, RetainedState> = Generator<
     (QueueMask, *mut (), *mut RecycledState),
     Return = (QueueMask, RetainedState, Return),
-    Yield = bool,
+    Yield = Option<Vec<(vk::Semaphore, u64)>>,
 >;
 
 #[pin_project]
@@ -1171,8 +1408,8 @@ where
             recycled_state,
         )) {
             std::ops::GeneratorState::Yielded(is_semaphore) => {
-                if is_semaphore {
-                    QueueFuturePoll::Semaphore
+                if let Some(additional_semaphores) = is_semaphore {
+                    QueueFuturePoll::Semaphore(additional_semaphores)
                 } else {
                     QueueFuturePoll::Barrier
                 }
@@ -1403,7 +1640,7 @@ impl<I: GPUCommandFuture> QueueFuture for RunCommandsQueueFuture<I> {
             let ret = if *this.prev_queue == queue {
                 QueueFuturePoll::Barrier
             } else {
-                QueueFuturePoll::Semaphore
+                QueueFuturePoll::Semaphore(Vec::new())
             };
             *this.prev_queue = QueueMask::empty();
             return ret;

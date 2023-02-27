@@ -168,6 +168,20 @@ impl ResidentBuffer {
             }
         }
     }
+
+    pub fn contents_mut(&self) -> Option<&mut [u8]> {
+        let info = self.allocator.inner().get_allocation_info(&self.allocation);
+        if info.mapped_data.is_null() {
+            None
+        } else {
+            unsafe {
+                Some(std::slice::from_raw_parts_mut(
+                    info.mapped_data as *mut u8,
+                    info.size as usize,
+                ))
+            }
+        }
+    }
 }
 
 impl BufferLike for ResidentBuffer {
@@ -229,6 +243,55 @@ impl Allocator {
         };
         self.create_resident_buffer(&buffer_create_info, &alloc_info)
     }
+    /// Crate a small device-local buffer with uninitialized data, guaranteed local to the GPU.
+    /// The data will be host visible on ResizableBar, Bar, and UMA memory models.
+    /// TRANSFER_DST usage flag will be automatically added to the created buffer.
+    /// Suitable for small amount of dynamic data.
+    pub fn create_upload_buffer_uninit(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> VkResult<ResidentBuffer> {
+        let mut create_info = vk::BufferCreateInfo {
+            size,
+            usage,
+            ..Default::default()
+        };
+
+        let dst_buffer = match self.device().physical_device().memory_model() {
+            PhysicalDeviceMemoryModel::UMA
+            | PhysicalDeviceMemoryModel::Bar
+            | PhysicalDeviceMemoryModel::ResizableBar => {
+                let buf = self.create_resident_buffer(
+                    &create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        flags: vk_mem::AllocationCreateFlags::MAPPED
+                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                        required_flags: vk::MemoryPropertyFlags::empty(),
+                        preferred_flags: vk::MemoryPropertyFlags::empty(),
+                        memory_type_bits: 0,
+                        user_data: 0,
+                        priority: 0.0,
+                    },
+                )?;
+                buf
+            }
+            PhysicalDeviceMemoryModel::Discrete => {
+                create_info.usage |= vk::BufferUsageFlags::TRANSFER_DST;
+                let dst_buffer = self.create_resident_buffer(
+                    &create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        flags: vk_mem::AllocationCreateFlags::empty(),
+                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                        ..Default::default()
+                    },
+                )?;
+                dst_buffer
+            }
+        };
+        Ok(dst_buffer)
+    }
 
     /// Create uninitialized, cached buffer on the host-side
     pub fn create_readback_buffer(&self, size: vk::DeviceSize) -> VkResult<ResidentBuffer> {
@@ -246,78 +309,71 @@ impl Allocator {
         self.create_resident_buffer(&buffer_create_info, &alloc_info)
     }
 
+    pub fn create_staging_buffer(&self, size: vk::DeviceSize) -> VkResult<ResidentBuffer> {
+        self.create_resident_buffer(
+            &vk::BufferCreateInfo {
+                size,
+                usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                ..Default::default()
+            },
+            &vk_mem::AllocationCreateInfo {
+                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                usage: vk_mem::MemoryUsage::AutoPreferHost,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Crate a small device-local buffer with a writer callback, only visible to the GPU.
+    /// The data will be directly written to the buffer on ResizableBar, Bar, and UMA memory models.
+    /// We will create a temporary staging buffer on Discrete GPUs with no host-accessible device-local memory.
+    /// TRANSFER_DST usage flag will be automatically added to the created buffer.
+    /// Suitable for small amount of dynamic data.
+    pub fn create_device_buffer_with_writer(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        writer: impl for<'a> FnOnce(&'a mut [u8]),
+    ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
+        let dst_buffer = self.create_upload_buffer_uninit(size, usage)?;
+        let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {
+            writer(contents);
+            None
+        } else {
+            let staging_buffer = self.create_staging_buffer(size)?;
+            writer(staging_buffer.contents_mut().unwrap());
+            Some(staging_buffer)
+        };
+
+        Ok(commands! {
+            let mut dst_buffer = RenderRes::new(dst_buffer);
+            if let Some(staging_buffer) = staging_buffer {
+                let staging_buffer = RenderRes::new(staging_buffer);
+                copy_buffer(&staging_buffer, &mut dst_buffer).await;
+                retain!(staging_buffer);
+            }
+            dst_buffer
+        })
+    }
+
     /// Crate a small device-local buffer with pre-populated data, only visible to the GPU.
     /// The data will be directly written to the buffer on ResizableBar, Bar, and UMA memory models.
-    /// We will create a temporary staging buffer on all other cases.
+    /// We will create a temporary staging buffer on Discrete GPUs with no host-accessible device-local memory.
+    /// TRANSFER_DST usage flag will be automatically added to the created buffer.
+    /// Suitable for small amount of dynamic data.
     pub fn create_device_buffer_with_data(
         &self,
         data: &[u8],
         usage: vk::BufferUsageFlags,
     ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
-        let create_info = vk::BufferCreateInfo {
-            size: data.len() as u64,
-            usage,
-            ..Default::default()
-        };
-
-        let (staging_buffer, dst_buffer) = match self.device().physical_device().memory_model() {
-            PhysicalDeviceMemoryModel::UMA
-            | PhysicalDeviceMemoryModel::Bar
-            | PhysicalDeviceMemoryModel::ResizableBar => {
-                let buf = self.create_resident_buffer(
-                    &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::MAPPED
-                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
-                        required_flags: vk::MemoryPropertyFlags::empty(),
-                        preferred_flags: vk::MemoryPropertyFlags::empty(),
-                        memory_type_bits: 0,
-                        user_data: 0,
-                        priority: 0.0,
-                    },
-                )?;
-                unsafe {
-                    let info = self.inner().get_allocation_info(&buf.allocation);
-                    std::ptr::copy_nonoverlapping(
-                        data.as_ptr(),
-                        info.mapped_data as *mut u8,
-                        data.len(),
-                    )
-                }
-                (None, buf)
-            }
-            PhysicalDeviceMemoryModel::Discrete => {
-                let staging_buffer = self.create_resident_buffer(
-                    &vk::BufferCreateInfo {
-                        size: data.len() as u64,
-                        usage: vk::BufferUsageFlags::TRANSFER_SRC,
-                        ..Default::default()
-                    },
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                        usage: vk_mem::MemoryUsage::AutoPreferHost,
-                        ..Default::default()
-                    },
-                )?;
-                unsafe {
-                    let info = self.inner().get_allocation_info(&staging_buffer.allocation);
-                    std::ptr::copy_nonoverlapping(
-                        data.as_ptr(),
-                        info.mapped_data as *mut u8,
-                        data.len(),
-                    )
-                }
-                let dst_buffer = self.create_resident_buffer(
-                    &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::empty(),
-                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
-                        ..Default::default()
-                    },
-                )?;
-                (Some(staging_buffer), dst_buffer)
-            }
+        let dst_buffer = self.create_upload_buffer_uninit(data.len() as u64, usage)?;
+        let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {
+            contents[..data.len()].copy_from_slice(data);
+            None
+        } else {
+            let staging_buffer = self.create_staging_buffer(data.len() as u64)?;
+            staging_buffer.contents_mut().unwrap()[..data.len()].copy_from_slice(data);
+            Some(staging_buffer)
         };
 
         Ok(commands! {

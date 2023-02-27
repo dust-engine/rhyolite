@@ -383,7 +383,7 @@ impl QueueFuture for PresentFuture {
 
         if !this.prev_queue.is_empty() {
             *this.prev_queue = QueueMask::empty();
-            return QueueFuturePoll::Semaphore;
+            return QueueFuturePoll::Semaphore(Vec::new());
         }
         for swapchain in this.swapchain.iter() {
             let tracking = swapchain.res.tracking_info.borrow_mut();

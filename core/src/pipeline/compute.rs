@@ -2,6 +2,7 @@ use std::ffi::CString;
 
 use ash::{prelude::VkResult, vk};
 
+use super::PipelineCache;
 use crate::{shader::SpecializationInfo, HasDevice, ShaderModule};
 
 use super::PipelineLayout;
@@ -39,6 +40,7 @@ pub struct ComputePipelineCreateInfo<'a> {
     pub pipeline_create_flags: vk::PipelineCreateFlags,
     pub compute_stage_flags: vk::PipelineShaderStageCreateFlags,
     pub entry_point: &'a str,
+    pub pipeline_cache: Option<&'a PipelineCache>,
 }
 
 impl<'a> ComputePipelineCreateInfo<'a> {
@@ -51,6 +53,7 @@ impl<'a> ComputePipelineCreateInfo<'a> {
             entry_point: "main",
             specialization: &Self::DEFAULT_SPECIALIZATION,
             module,
+            pipeline_cache: None,
         }
     }
 }
@@ -78,7 +81,7 @@ impl ComputePipeline {
             };
             (device.fp_v1_0().create_compute_pipelines)(
                 device.handle(),
-                vk::PipelineCache::null(),
+                info.pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
                 1,
                 &vk::ComputePipelineCreateInfo {
                     flags: info.pipeline_create_flags,

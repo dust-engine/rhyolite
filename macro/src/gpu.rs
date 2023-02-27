@@ -113,8 +113,8 @@ impl CommandsTransformer for State {
                         __current_queue = next_queue;
                         break output;
                     },
-                    ::rhyolite::queue::QueueFuturePoll::Semaphore => (__initial_queue, __ctx, __recycled_states) = yield true,
-                    ::rhyolite::queue::QueueFuturePoll::Barrier => (__initial_queue, __ctx, __recycled_states) = yield false,
+                    ::rhyolite::queue::QueueFuturePoll::Semaphore(s) => (__initial_queue, __ctx, __recycled_states) = yield Some(s),
+                    ::rhyolite::queue::QueueFuturePoll::Barrier => (__initial_queue, __ctx, __recycled_states) = yield None,
                 };
             };
             #dispose_token_name.replace(Some(::rhyolite::QueueFuture::dispose(fut)));

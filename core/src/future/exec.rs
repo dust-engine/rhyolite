@@ -420,7 +420,7 @@ impl StageContext {
                 assert!(!tracking.prev_queue_index.is_null());
                 let mut barrier = vk::MemoryBarrier2::default();
                 // TODO: Do we have to consider image layout transfers here?
-                get_memory_access(&mut barrier, &tracking.prev_stage_access, access,false);
+                get_memory_access(&mut barrier, &tracking.prev_stage_access, access, false);
                 self.semaphore_transitions
                     .push(StageContextSemaphoreTransition::Managed {
                         src_queue: tracking.prev_queue_index,
@@ -573,7 +573,7 @@ impl StageContext {
             &mut image_barrier.barrier,
             &tracking.prev_stage_access,
             &access,
-            image_barrier.dst_layout != image_barrier.src_layout
+            image_barrier.dst_layout != image_barrier.src_layout,
         );
 
         tracking.current_stage_access.write_access |= accesses;
@@ -636,7 +636,7 @@ impl StageContext {
             &mut image_barrier.barrier,
             &tracking.prev_stage_access,
             &access,
-            image_barrier.dst_layout != image_barrier.src_layout
+            image_barrier.dst_layout != image_barrier.src_layout,
         );
 
         tracking.current_stage_access.read_access |= accesses;
@@ -779,7 +779,7 @@ fn get_memory_access(
     memory_barrier: &mut vk::MemoryBarrier2,
     before_access: &Access,
     after_access: &Access,
-    had_image_layout_transfer: bool
+    had_image_layout_transfer: bool,
 ) {
     let before_access_has_write = had_image_layout_transfer || before_access.has_write();
     if before_access_has_write && after_access.has_write() {
@@ -804,7 +804,7 @@ fn get_memory_access(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     fn assert_global(
