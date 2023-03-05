@@ -72,10 +72,3 @@ impl<T: ImageLike> ImageView<T> {
         Ok(Self { view, image })
     }
 }
-
-// This is in fact very questionable
-impl<I: ImageViewLike, T: Deref<Target = I> + ImageLike> ImageViewLike for T {
-    fn raw_image_view(&self) -> vk::ImageView {
-        self.deref().raw_image_view()
-    }
-}

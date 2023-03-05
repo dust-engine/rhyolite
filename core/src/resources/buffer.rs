@@ -77,9 +77,11 @@ pub struct CopyBufferFuture<
     SRef: Deref<Target = RenderRes<S>>,
     TRef: DerefMut<Target = RenderRes<T>>,
 > {
-    pub str: &'static str,
     pub src: SRef,
     pub dst: TRef,
+
+    /// Buffer regions to copy. If empty, no-op. If None, copy everything.
+    pub regions: Option<Vec<vk::BufferCopy>>,
 }
 impl<
         S: BufferLike,
@@ -98,19 +100,26 @@ impl<
         _recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
+        if let Some(regions) = this.regions && regions.is_empty() {
+            return Poll::Ready(((), ()))
+        }
         let src = this.src.deref().inner();
         let dst = this.dst.deref_mut().inner_mut();
-        let region = vk::BufferCopy {
+        let entire_region = [vk::BufferCopy {
             src_offset: src.offset(),
             dst_offset: dst.offset(),
             size: src.size().min(dst.size()),
-        };
+        }];
         ctx.record(|ctx, command_buffer| unsafe {
             ctx.device().cmd_copy_buffer(
                 command_buffer,
                 src.raw_buffer(),
                 dst.raw_buffer(),
-                &[region],
+                if let Some(regions) = this.regions.as_ref() {
+                    regions.as_slice()
+                } else {
+                    &entire_region
+                },
             );
         });
         Poll::Ready(((), ()))
@@ -141,9 +150,25 @@ pub fn copy_buffer<
     dst: TRef,
 ) -> CopyBufferFuture<S, T, SRef, TRef> {
     CopyBufferFuture {
-        str: "aaa",
         src,
         dst,
+        regions: None,
+    }
+}
+pub fn copy_buffer_regions<
+    S: BufferLike,
+    T: BufferLike,
+    SRef: Deref<Target = RenderRes<S>>,
+    TRef: DerefMut<Target = RenderRes<T>>,
+>(
+    src: SRef,
+    dst: TRef,
+    regions: Vec<vk::BufferCopy>,
+) -> CopyBufferFuture<S, T, SRef, TRef> {
+    CopyBufferFuture {
+        src,
+        dst,
+        regions: Some(regions),
     }
 }
 
@@ -243,10 +268,66 @@ impl Allocator {
         };
         self.create_resident_buffer(&buffer_create_info, &alloc_info)
     }
+    /// Crate a small host-visible buffer with uninitialized data, preferably local to the GPU.
+    ///
+    /// The buffer will be device-local, host visible on ResizableBar, Bar, and UMA memory models.
+    /// The specified usage flags will be applied.
+    ///
+    /// The buffer will be host-visible on Discrete memory model. TRANSFER_SRC will be applied.
+    ///
+    /// Suitable for small amount of dynamic data, with device-local buffer created separately
+    /// and transfers manually scheduled on devices without device-local, host-visible memory.
+    pub fn create_dynamic_buffer_uninit(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> VkResult<ResidentBuffer> {
+        let mut create_info = vk::BufferCreateInfo {
+            size,
+            usage,
+            ..Default::default()
+        };
+
+        let dst_buffer = match self.device().physical_device().memory_model() {
+            PhysicalDeviceMemoryModel::UMA
+            | PhysicalDeviceMemoryModel::Bar
+            | PhysicalDeviceMemoryModel::ResizableBar => {
+                let buf = self.create_resident_buffer(
+                    &create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        flags: vk_mem::AllocationCreateFlags::MAPPED
+                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                        required_flags: vk::MemoryPropertyFlags::empty(),
+                        preferred_flags: vk::MemoryPropertyFlags::empty(),
+                        memory_type_bits: 0,
+                        user_data: 0,
+                        priority: 0.0,
+                    },
+                )?;
+                buf
+            }
+            PhysicalDeviceMemoryModel::Discrete => {
+                create_info.usage |= vk::BufferUsageFlags::TRANSFER_SRC;
+                let dst_buffer = self.create_resident_buffer(
+                    &create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        flags: vk_mem::AllocationCreateFlags::MAPPED
+                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vk_mem::MemoryUsage::AutoPreferHost,
+                        ..Default::default()
+                    },
+                )?;
+                dst_buffer
+            }
+        };
+        Ok(dst_buffer)
+    }
+
     /// Crate a small device-local buffer with uninitialized data, guaranteed local to the GPU.
     /// The data will be host visible on ResizableBar, Bar, and UMA memory models.
     /// TRANSFER_DST usage flag will be automatically added to the created buffer.
-    /// Suitable for small amount of dynamic data.
+    /// Suitable for small amount of dynamic data, with staging buffer created separately.
     pub fn create_upload_buffer_uninit(
         &self,
         size: vk::DeviceSize,

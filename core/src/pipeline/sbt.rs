@@ -4,8 +4,9 @@
 
 use std::{
     alloc::Layout,
-    collections::{BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     hash::Hash,
+    ops::{Deref, DerefMut},
     sync::{Arc, Weak},
 };
 
@@ -14,12 +15,15 @@ use macros::{commands, gpu};
 
 use crate::{
     commands::SharedCommandPool,
-    copy_buffer,
+    copy_buffer, copy_buffer_regions,
     future::{
-        use_per_frame_state, GPUCommandFuture, GPUCommandFutureExt, PerFrameState, RenderRes,
+        use_per_frame_state, use_shared_state, GPUCommandFuture, GPUCommandFutureExt,
+        PerFrameState, RenderRes, SharedDeviceStateHostContainer,
     },
-    Allocator, FencePool, QueueFuture, QueueRef, QueueSubmitFuture, Queues, QueuesRouter,
-    RayTracingPipeline, ResidentBuffer, SbtHandles, TimelineSemaphorePool,
+    utils::{merge_ranges::MergeRangeIteratorExt, retainer::Retainer},
+    Allocator, BufferLike, FencePool, HasDevice, PhysicalDeviceMemoryModel, QueueFuture, QueueRef,
+    QueueSubmitFuture, Queues, QueuesRouter, RayTracingPipeline, ResidentBuffer, SbtHandles,
+    TimelineSemaphorePool,
 };
 
 pub trait HitgroupSbtEntry: Hash + Eq + Clone {
@@ -37,14 +41,14 @@ impl Drop for HitgroupSbtHandleInner {
         self.sender.send(self.id).unwrap();
     }
 }
-pub struct HitgroupSbtHandle(Arc<HitgroupSbtHandleInner>);
 
-pub struct HitgroupSbtBuffer {
-    buffer: ResidentBuffer,
-}
+// This is to be included on the component of entities.
+#[derive(Clone)]
+pub struct HitgroupSbtHandle(Arc<HitgroupSbtHandleInner>);
 
 pub struct HitgroupSbtVec<T: HitgroupSbtEntry> {
     allocator: Allocator,
+    layout: SbtLayout,
     total_raytype: u32,
     shader_group_handles: SbtHandles,
     /// A map of (item -> (id, generation, handle))
@@ -56,37 +60,23 @@ pub struct HitgroupSbtVec<T: HitgroupSbtEntry> {
     sender: std::sync::mpsc::Sender<usize>,
     available_indices: std::sync::mpsc::Receiver<usize>,
 
-    changeset: BTreeSet<usize>,
-    frames: Option<Arc<ResidentBuffer>>,
+    changeset: BTreeMap<vk::Buffer, BTreeSet<usize>>,
+    frames: PerFrameState<ResidentBuffer>,
+    /// If None, `frames` are assumed to be device-local and are to be used directly by the GPU.
+    device_buffer: Option<SharedDeviceStateHostContainer<ResidentBuffer>>,
 }
 
-struct QueueSubmitInfo<'a> {
-    queue: &'a mut Queues,
-    shared_command_pools: &'a mut [Option<SharedCommandPool>],
-
-    semaphore_pool: &'a mut TimelineSemaphorePool,
-    fence_pool: &'a mut FencePool,
-    apply_final_signal: bool,
-}
-impl<'a> QueueSubmitInfo<'a> {
-    fn submit<F: QueueFuture<RecycledState = ((),)>>(
-        &mut self,
-        future: F,
-    ) -> QueueSubmitFuture<F::RetainedState, F::Output> {
-        self.queue.submit(
-            future,
-            self.shared_command_pools,
-            self.semaphore_pool,
-            self.fence_pool,
-            &mut ((),),
-            self.apply_final_signal,
-        )
+impl<T: HitgroupSbtEntry> HasDevice for HitgroupSbtVec<T> {
+    fn device(&self) -> &Arc<crate::Device> {
+        self.allocator.device()
     }
 }
 
 impl<T: HitgroupSbtEntry> HitgroupSbtVec<T> {
     pub fn new(pipeline: &RayTracingPipeline, allocator: Allocator) -> Self {
         let (sender, receiver) = std::sync::mpsc::channel();
+        let shader_group_handles = pipeline.get_shader_group_handles();
+        let layout = SbtLayout::new::<T>(&shader_group_handles, 1);
         Self {
             allocator,
             total_raytype: 1,
@@ -94,9 +84,11 @@ impl<T: HitgroupSbtEntry> HitgroupSbtVec<T> {
             entries: Vec::new(),
             sender,
             available_indices: receiver,
-            changeset: BTreeSet::new(),
-            frames: None,
+            changeset: Default::default(),
+            frames: Default::default(),
             shader_group_handles: pipeline.get_shader_group_handles(),
+            device_buffer: None,
+            layout,
         }
     }
     pub fn get(&self, handle: &HitgroupSbtHandle) -> &T {
@@ -166,92 +158,226 @@ impl<T: HitgroupSbtEntry> HitgroupSbtVec<T> {
     }
 
     fn record_location_update(&mut self, location: usize) {
-        self.changeset.insert(location);
-    }
-    fn get_sbt_buffer(
-        &mut self,
-        mut submit_commands: QueueSubmitInfo,
-        transfer_queue: QueueRef,
-    ) -> VkResult<()> {
-        if let Some(old_buffer) = self.frames.as_ref() {
-            // copy everything over.
-            // apply changeset updates.
-        } else {
-            let new_sbt = self.create_full_sbt()?;
-            let sbt_buffer = submit_commands.submit(new_sbt.schedule_on_queue(transfer_queue));
+        for (_, changes) in self.changeset.iter_mut() {
+            // Iterate over all device-owned buffers, and defer the changes
+            changes.insert(location);
         }
-        todo!()
+    }
+    pub fn get_sbt_buffer(
+        &mut self,
+    ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<Box<dyn BufferLike>>>> {
+        let entry_layout_all = self
+            .layout
+            .one_entry
+            .repeat(self.entries.capacity())
+            .unwrap()
+            .0;
+        let expected_buffer_size = entry_layout_all.pad_to_align().size() as u64;
+        let needs_copy = matches!(
+            self.device().physical_device().memory_model(),
+            PhysicalDeviceMemoryModel::Discrete
+        );
+
+        // Only non-empty when Selective Updating with `needs_copy == true`
+        let mut changes: Vec<vk::BufferCopy> = Vec::new();
+        let frame = self
+            .frames
+            .use_state(|| {
+                let buffer = self
+                    .allocator
+                    .create_dynamic_buffer_uninit(
+                        expected_buffer_size,
+                        vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
+                    )
+                    .unwrap();
+                let contents = buffer.contents_mut().unwrap();
+                for i in 0..self.entries.len() {
+                    Self::write_sbt_entry(
+                        &self.layout,
+                        &self.shader_group_handles,
+                        &self.entries,
+                        self.total_raytype,
+                        contents,
+                        i,
+                    );
+                }
+                self.changeset
+                    .insert(buffer.raw_buffer(), Default::default());
+                buffer
+            })
+            .reuse(|old_buffer| {
+                if old_buffer.size() == expected_buffer_size {
+                    // Selective updates
+                    let write_target = old_buffer.contents_mut().unwrap();
+                    let changeset =
+                        std::mem::take(self.changeset.get_mut(&old_buffer.raw_buffer()).unwrap());
+                    for changed_location in changeset.iter() {
+                        Self::write_sbt_entry(
+                            &self.layout,
+                            &self.shader_group_handles,
+                            &self.entries,
+                            self.total_raytype,
+                            write_target,
+                            *changed_location,
+                        );
+                    }
+                    if needs_copy {
+                        changes.extend(changeset.into_iter().merge_ranges().map(
+                            |(start, size)| {
+                                let offset = self
+                                    .layout
+                                    .one_entry
+                                    .repeat(start)
+                                    .unwrap()
+                                    .0
+                                    .pad_to_align()
+                                    .size() as u64;
+                                let size =
+                                    self.layout.one_entry.repeat(size).unwrap().0.size() as u64;
+                                vk::BufferCopy {
+                                    src_offset: offset,
+                                    dst_offset: offset,
+                                    size,
+                                }
+                            },
+                        ));
+                    }
+                } else {
+                    // Need to recreate the buffer
+                    let buffer = self
+                        .allocator
+                        .create_dynamic_buffer_uninit(
+                            expected_buffer_size,
+                            vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
+                        )
+                        .unwrap();
+
+                    self.changeset.remove(&old_buffer.raw_buffer());
+                    self.changeset
+                        .insert(buffer.raw_buffer(), Default::default());
+                    let contents = buffer.contents_mut().unwrap();
+                    for i in 0..self.entries.len() {
+                        Self::write_sbt_entry(
+                            &self.layout,
+                            &self.shader_group_handles,
+                            &self.entries,
+                            self.total_raytype,
+                            contents,
+                            i,
+                        );
+                    }
+                    *old_buffer = buffer
+                }
+            });
+        let device_buffer = if needs_copy {
+            let device_buffer = use_shared_state(
+                &mut self.device_buffer,
+                || {
+                    let buffer = self
+                        .allocator
+                        .create_device_buffer_uninit(
+                            expected_buffer_size,
+                            vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
+                        )
+                        .unwrap();
+                    buffer
+                },
+                |a| expected_buffer_size != a.size(),
+            );
+            Some(device_buffer)
+        } else {
+            None
+        };
+        let future = commands! {
+            let updated_buffer = RenderRes::new(frame);
+            if let Some(device_buffer) = device_buffer {
+                let mut device_buffer = RenderRes::new(device_buffer);
+                if changes.is_empty() {
+                    copy_buffer(&updated_buffer, &mut device_buffer)
+                } else {
+                    copy_buffer_regions(&updated_buffer, &mut device_buffer, changes)
+                }.await;
+                device_buffer.map(|a| Box::new(a) as Box<dyn BufferLike>)
+            } else {
+                updated_buffer.map(|a| Box::new(a) as Box<dyn BufferLike>)
+            }
+        };
+        Ok(future)
     }
 
-    fn create_full_sbt(
-        &self,
-    ) -> VkResult<impl GPUCommandFuture<RecycledState = ((),), Output = RenderRes<ResidentBuffer>>>
-    {
-        let handle_size = self
-            .shader_group_handles
-            .handle_layout()
-            .pad_to_align()
-            .size();
-        let entry_layout_one_raytype = self
-            .shader_group_handles
+    fn write_sbt_entry(
+        layout: &SbtLayout,
+        shader_group_handles: &SbtHandles,
+        entries: &[T],
+        total_raytype: u32,
+        write_target: &mut [u8],
+        location: usize,
+    ) {
+        let size = layout.one_entry.pad_to_align().size();
+        let entry_write_target = &mut write_target[size * location..size * (location + 1)];
+
+        let entry = &entries[location];
+        // For each raytype
+        for i in 0..total_raytype {
+            let size = layout.one_raytype.pad_to_align().size();
+            let raytype_write_target =
+                &mut entry_write_target[size * i as usize..size * (i as usize + 1)];
+
+            let hitgroup_index = entry.hitgroup_index(i);
+            let shader_data = shader_group_handles.hitgroup(hitgroup_index);
+            raytype_write_target[..shader_data.len()].copy_from_slice(shader_data);
+
+            let parameters = entry.parameter(i);
+            let parameters_slice = unsafe {
+                std::slice::from_raw_parts(
+                    &parameters as *const _ as *const u8,
+                    std::mem::size_of_val(&parameters),
+                )
+            };
+            raytype_write_target[layout.handle_size..layout.handle_size + parameters_slice.len()]
+                .copy_from_slice(parameters_slice);
+        }
+    }
+}
+
+struct SbtLayout {
+    /// The layout for one raytype.
+    /// | Raytype 1                                    |
+    /// | shader_handles | inline_parameters | padding |
+    /// | <--              size           -> | align   |
+    one_raytype: Layout,
+
+    // The layout for one entry with all its raytypes
+    /// | Raytype 1                                    | Raytype 2                                    |
+    /// | shader_handles | inline_parameters | padding | shader_handles | inline_parameters | padding |
+    /// | <---                                      size                               ---> |  align  |
+    one_entry: Layout,
+
+    /// The size of the shader group handles, padded.
+    /// | Raytype 1                                    |
+    /// | shader_handles | inline_parameters | padding |
+    /// | <--- size ---> |
+    handle_size: usize,
+}
+
+impl SbtLayout {
+    pub fn new<T: HitgroupSbtEntry>(
+        shader_group_handles: &SbtHandles,
+        total_raytypes: u32,
+    ) -> Self {
+        let one_raytype = shader_group_handles
             .handle_layout()
             .extend(Layout::new::<T::ShaderParameter>())
             .unwrap()
             .0;
 
-        let entry_layout_one = entry_layout_one_raytype
-            .repeat(self.total_raytype as usize)
-            .unwrap()
-            .0;
+        let one_entry = one_raytype.repeat(total_raytypes as usize).unwrap().0;
 
-        let entry_layout_all = entry_layout_one.repeat(self.entries.len()).unwrap().0;
-        let buffer_size = entry_layout_all.pad_to_align().size();
-        let buffer = self.allocator.create_upload_buffer_uninit(
-            buffer_size as u64,
-            vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
-        )?;
-
-        let mut staging_buffer = None;
-        let write_target = if let Some(buffer_content) = buffer.contents_mut() {
-            buffer_content
-        } else {
-            // Need to create staging buffer.
-            staging_buffer = Some(self.allocator.create_staging_buffer(buffer_size as u64)?);
-            staging_buffer.as_ref().unwrap().contents_mut().unwrap()
-        };
-
-        for (i, entry) in self.entries.iter().enumerate() {
-            let size = entry_layout_one.pad_to_align().size();
-            let entry_write_target = &mut write_target[size * i..size * (i + 1)];
-            // For each raytype
-            for i in 0..self.total_raytype {
-                let size = entry_layout_one_raytype.pad_to_align().size();
-                let raytype_write_target =
-                    &mut entry_write_target[size * i as usize..size * (i as usize + 1)];
-
-                let hitgroup_index = entry.hitgroup_index(i);
-                let shader_data = self.shader_group_handles.hitgroup(hitgroup_index);
-                raytype_write_target[..shader_data.len()].copy_from_slice(shader_data);
-
-                let parameters = entry.parameter(i);
-                let parameters_slice = unsafe {
-                    std::slice::from_raw_parts(
-                        &parameters as *const _ as *const u8,
-                        std::mem::size_of_val(&parameters),
-                    )
-                };
-                raytype_write_target[handle_size..handle_size + parameters_slice.len()]
-                    .copy_from_slice(parameters_slice);
-            }
+        let handle_size = shader_group_handles.handle_layout().pad_to_align().size();
+        Self {
+            one_raytype,
+            one_entry,
+            handle_size,
         }
-        Ok(commands! {
-            let mut dst_buffer = RenderRes::new(buffer);
-            if let Some(staging_buffer) = staging_buffer {
-                let staging_buffer = RenderRes::new(staging_buffer);
-                copy_buffer(&staging_buffer, &mut dst_buffer).await;
-                retain!(staging_buffer);
-            }
-            dst_buffer
-        })
     }
 }

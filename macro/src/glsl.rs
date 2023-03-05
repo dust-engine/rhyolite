@@ -1,4 +1,7 @@
-use std::{fmt::{Debug, Write}, ops::Range};
+use std::{
+    fmt::{Debug, Write},
+    ops::Range,
+};
 
 use ash::vk;
 
@@ -143,7 +146,7 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
                         Some(PushConstantRange {
                             stage_flags: ShaderStageFlags(stage_flags),
                             size: range.end - range.start,
-                            offset: range.start
+                            offset: range.start,
                         })
                     } else {
                         None
@@ -278,10 +281,7 @@ impl Debug for SpirvEntryPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SpirvEntryPoint")
             .field("descriptor_sets", &ToVecFmt(&self.descriptor_sets))
-            .field(
-                "push_constant_range",
-                &self.push_constant_range,
-            )
+            .field("push_constant_range", &self.push_constant_range)
             .finish()?;
         Ok(())
     }
@@ -333,25 +333,31 @@ fn spirv_desc_ty_to_vk(ty: &spirq::DescriptorType) -> vk::DescriptorType {
 
 fn push_constant_ranges(var: &spirq::ty::Type) -> Range<u32> {
     fn push_constant_ranges_recursive(var: &spirq::ty::Type, offset: u32, ranges: &mut Range<u32>) {
-
         match var {
             spirq::ty::Type::Struct(ty) => {
                 for member in ty.members.iter() {
                     if let Some(name) = member.name.as_ref() && name.starts_with('_'){
                         continue;
                     }
-                    push_constant_ranges_recursive(&member.ty, offset + member.offset as u32, ranges);
+                    push_constant_ranges_recursive(
+                        &member.ty,
+                        offset + member.offset as u32,
+                        ranges,
+                    );
                 }
-            },
+            }
             _ => {
                 let nbyte = var.nbyte().expect("Variable should be sized.") as u32;
                 ranges.start = ranges.start.min(offset);
                 ranges.end = ranges.end.max(offset + nbyte);
-            },
+            }
         }
     }
 
-    let mut range: Range<u32> = Range { start: u32::MAX, end: 0 };
+    let mut range: Range<u32> = Range {
+        start: u32::MAX,
+        end: 0,
+    };
     push_constant_ranges_recursive(var, 0, &mut range);
     assert!(range.start <= range.end);
     range

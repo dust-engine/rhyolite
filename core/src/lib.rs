@@ -1,6 +1,5 @@
 #![feature(generators, generator_trait)]
 #![feature(trait_alias)]
-#![feature(cstr_from_bytes_until_nul)]
 #![feature(negative_impls)]
 #![feature(specialization)]
 #![feature(const_trait_impl)]
@@ -9,6 +8,7 @@
 #![feature(result_option_inspect)]
 #![feature(alloc_layout_extra)]
 #![feature(type_alias_impl_trait)]
+#![feature(let_chains)]
 
 pub use cstr::cstr;
 

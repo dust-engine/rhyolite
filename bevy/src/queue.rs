@@ -35,17 +35,15 @@ impl Queues {
     }
     /// May block.
     pub fn next_frame(&mut self) {
-        self.current_frame = Some(Retainer::new(use_per_frame_state_blocking(
-            &mut self.frames,
-            self.max_frame_in_flight,
-            || Frame {
+        let frame =
+            use_per_frame_state_blocking(&mut self.frames, self.max_frame_in_flight, || Frame {
                 shared_command_pools: self.queues.make_shared_command_pools(),
                 shared_fence_pool: rhyolite::FencePool::new(self.queues.device().clone()),
                 shared_semaphore_pool: rhyolite::TimelineSemaphorePool::new(
                     self.queues.device().clone(),
                 ),
-            },
-            |frame| {
+            })
+            .reuse(|frame| {
                 for i in frame.shared_command_pools.iter_mut() {
                     if let Some(i) = i {
                         i.reset(false);
@@ -53,8 +51,8 @@ impl Queues {
                 }
                 frame.shared_fence_pool.reset();
                 frame.shared_semaphore_pool.reset();
-            },
-        )));
+            });
+        self.current_frame = Some(Retainer::new(frame));
     }
     pub fn current_frame(&mut self) -> &mut Frame {
         self.current_frame.as_mut().unwrap().deref_mut()

@@ -6,7 +6,10 @@ use bevy_window::{PrimaryWindow, Window};
 use pin_project::pin_project;
 use rhyolite::ash::vk;
 use rhyolite::descriptor::DescriptorPool;
-use rhyolite::future::{Dispose, GPUCommandFutureExt, RenderImage, use_per_frame_state, PerFrameState, PerFrameContainer};
+use rhyolite::future::{
+    use_per_frame_state, Dispose, GPUCommandFutureExt, PerFrameContainer, PerFrameState,
+    RenderImage,
+};
 use rhyolite::macros::glsl;
 use rhyolite::utils::retainer::{Retainer, RetainerHandle};
 use rhyolite::{
@@ -149,7 +152,11 @@ impl<
 {
     type Output = ();
 
-    type RetainedState = Dispose<(Arc<ComputePipeline>, RetainerHandle<DescriptorPool>, PerFrameContainer<Vec<vk::DescriptorSet>>)>;
+    type RetainedState = Dispose<(
+        Arc<ComputePipeline>,
+        RetainerHandle<DescriptorPool>,
+        PerFrameContainer<Vec<vk::DescriptorSet>>,
+    )>;
 
     type RecycledState = (PerFrameState<Vec<vk::DescriptorSet>>, u32);
 
@@ -170,12 +177,10 @@ impl<
         let extent = this.src_img.inner().extent();
 
         let desc_set = use_per_frame_state(state_desc_sets, || {
-            this
-                .pipeline
+            this.pipeline
                 .desc_pool
                 .allocate_for_pipeline_layout(this.pipeline.pipeline.layout())
                 .unwrap()
-        }, |old| {
         });
 
         let kernel_size = *state_kernel_size;
@@ -211,7 +216,6 @@ impl<
             );
         }
 
-
         ctx.record(|ctx, command_buffer| unsafe {
             let device = ctx.device();
             device.cmd_bind_pipeline(
@@ -228,13 +232,13 @@ impl<
                 &[],
             );
 
-            let kernel_size: [u8; 4] = unsafe{std::mem::transmute(kernel_size)};
+            let kernel_size: [u8; 4] = unsafe { std::mem::transmute(kernel_size) };
             device.cmd_push_constants(
                 command_buffer,
                 this.pipeline.pipeline.raw_layout(),
                 vk::ShaderStageFlags::COMPUTE,
                 0,
-                kernel_size.as_slice()
+                kernel_size.as_slice(),
             );
             device.cmd_dispatch(
                 command_buffer,
@@ -248,7 +252,7 @@ impl<
             Dispose::new((
                 this.pipeline.pipeline.clone(),
                 this.pipeline.desc_pool.handle(),
-                desc_set
+                desc_set,
             )),
         ))
     }

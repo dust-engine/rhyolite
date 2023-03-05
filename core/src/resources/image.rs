@@ -12,30 +12,6 @@ pub trait ImageLike: HasDevice {
     }
     fn format(&self) -> vk::Format;
 }
-// This is in fact questionable
-impl<I: ImageLike, T: Deref<Target = I>> HasDevice for T {
-    fn device(&self) -> &Arc<Device> {
-        todo!()
-    }
-}
-// This is in fact very questionable
-impl<I: ImageLike, T: Deref<Target = I> + HasDevice> ImageLike for T {
-    fn raw_image(&self) -> vk::Image {
-        self.deref().raw_image()
-    }
-    fn subresource_range(&self) -> vk::ImageSubresourceRange {
-        self.deref().subresource_range()
-    }
-    fn extent(&self) -> vk::Extent3D {
-        self.deref().extent()
-    }
-    fn offset(&self) -> vk::Offset3D {
-        self.deref().offset()
-    }
-    fn format(&self) -> vk::Format {
-        self.deref().format()
-    }
-}
 
 pub trait ImageExt {
     fn crop(self, extent: vk::Extent3D, offset: vk::Offset3D) -> ImageSubregion<Self>
