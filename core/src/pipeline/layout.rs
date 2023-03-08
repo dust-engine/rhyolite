@@ -1,14 +1,25 @@
-use crate::{shader::ShaderModuleEntryPoint, Device, HasDevice, ShaderModule};
+use crate::{
+    descriptor::DescriptorSetLayout, shader::ShaderModuleEntryPoint, Device, HasDevice,
+    ShaderModule,
+};
 use ash::{prelude::VkResult, vk};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 pub struct PipelineLayout {
     device: Arc<Device>,
     inner: vk::PipelineLayout,
-    pub info: ShaderModuleEntryPoint,
+
+    desc_sets: Vec<Arc<DescriptorSetLayout>>,
+    push_constant_range: Vec<vk::PushConstantRange>,
 }
 
 impl PipelineLayout {
+    pub fn desc_sets(&self) -> &[Arc<DescriptorSetLayout>] {
+        &self.desc_sets
+    }
+    pub fn push_constant_range(&self) -> &[vk::PushConstantRange] {
+        &self.push_constant_range
+    }
     /// Create pipeline layout for pipelines with only one shader entry point. Only applicable to compute shaders.
     pub fn for_layout(
         device: Arc<Device>,
@@ -34,7 +45,12 @@ impl PipelineLayout {
         Ok(Self {
             device,
             inner: layout,
-            info: entry_point,
+            desc_sets: entry_point.desc_sets,
+            push_constant_range: if let Some(range) = entry_point.push_constant_range {
+                vec![range]
+            } else {
+                Vec::new()
+            },
         })
     }
     pub unsafe fn raw(&self) -> vk::PipelineLayout {
@@ -51,5 +67,61 @@ impl Drop for PipelineLayout {
         unsafe {
             self.device.destroy_pipeline_layout(self.inner, None);
         }
+    }
+}
+
+pub struct PipelineLayoutBuilder {
+    desc_sets: Vec<Arc<DescriptorSetLayout>>,
+    push_constant_range: BTreeMap<vk::ShaderStageFlags, vk::PushConstantRange>,
+    device: Arc<Device>,
+    flags: vk::PipelineLayoutCreateFlags,
+}
+impl PipelineLayoutBuilder {
+    pub fn new(device: Arc<Device>, flags: vk::PipelineLayoutCreateFlags) -> Self {
+        Self {
+            device,
+            flags,
+            push_constant_range: BTreeMap::new(),
+            desc_sets: Vec::new(),
+        }
+    }
+    pub fn add_entry_point(&mut self, entry_point: &ShaderModuleEntryPoint) {
+        self.desc_sets.extend(entry_point.desc_sets.iter().cloned());
+        if let Some(push_constant_range) = entry_point.push_constant_range {
+            self.push_constant_range
+                .entry(push_constant_range.stage_flags)
+                .and_modify(|old| {
+                    let min = old.offset.min(push_constant_range.offset);
+                    let max = (old.offset + old.size)
+                        .max(push_constant_range.offset + push_constant_range.size);
+                    old.offset = min;
+                    old.size = max - min;
+                })
+                .or_insert(push_constant_range);
+        }
+    }
+    pub fn build(self) -> VkResult<PipelineLayout> {
+        let set_layouts: Vec<_> = self.desc_sets.iter().map(|a| unsafe { a.raw() }).collect();
+        let push_constant_range: Vec<_> = self.push_constant_range.into_values().collect();
+
+        let layout = unsafe {
+            self.device.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo {
+                    flags: self.flags,
+                    set_layout_count: self.desc_sets.len() as u32,
+                    p_set_layouts: set_layouts.as_ptr(),
+                    push_constant_range_count: push_constant_range.len() as u32,
+                    p_push_constant_ranges: push_constant_range.as_ptr(),
+                    ..Default::default()
+                },
+                None,
+            )?
+        };
+        Ok(PipelineLayout {
+            device: self.device,
+            inner: layout,
+            desc_sets: self.desc_sets,
+            push_constant_range,
+        })
     }
 }

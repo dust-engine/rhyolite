@@ -21,8 +21,7 @@ impl DescriptorPool {
         pipeline: &PipelineLayout,
     ) -> VkResult<Vec<vk::DescriptorSet>> {
         let set_layouts: Vec<_> = pipeline
-            .info
-            .desc_sets
+            .desc_sets()
             .iter()
             .map(|a| unsafe { a.raw() })
             .collect();
@@ -47,13 +46,13 @@ impl DescriptorPool {
         let mut device: Option<Arc<Device>> = None;
         for pipeline_layout in layouts.into_iter() {
             let pipeline_layout = pipeline_layout.deref();
-            max_sets += pipeline_layout.info.desc_sets.len() as u32;
+            max_sets += pipeline_layout.desc_sets().len() as u32;
             if let Some(device) = device.as_ref() {
                 Arc::ptr_eq(device, pipeline_layout.device());
             } else {
                 device.replace(pipeline_layout.device().clone());
             }
-            for desc_set_layout in pipeline_layout.info.desc_sets.iter() {
+            for desc_set_layout in pipeline_layout.desc_sets().iter() {
                 for binding in desc_set_layout.binding_infos.iter() {
                     if binding.immutable_samplers.is_empty() {
                         let count = desc_types.entry(binding.descriptor_type).or_insert(0);

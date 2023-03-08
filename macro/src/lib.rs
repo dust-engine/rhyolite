@@ -8,7 +8,7 @@ mod commands;
 mod commands_join;
 mod glsl;
 mod transformer;
-
+mod set_layout;
 mod gpu;
 
 struct ExprGpuAsync {

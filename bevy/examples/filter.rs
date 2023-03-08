@@ -18,7 +18,8 @@ use rhyolite::{
     ImageExt, QueueType,
 };
 use rhyolite::{
-    ComputePipeline, ComputePipelineCreateInfo, HasDevice, ImageLike, ImageRequest, ImageViewLike,
+    cstr, ComputePipeline, ComputePipelineCreateInfo, HasDevice, ImageLike, ImageRequest,
+    ImageViewLike,
 };
 use rhyolite_bevy::{
     Allocator, DescriptorSetLayoutCache, Queues, QueuesRouter, RenderSystems, Swapchain,
@@ -95,9 +96,10 @@ impl FromWorld for GaussianBlurPipeline {
         let num_frame_in_flight = world.resource::<Queues>().num_frame_in_flight();
         let mut desc_cache = world.resource_mut::<DescriptorSetLayoutCache>();
         let module = shader.build(&mut desc_cache).unwrap();
-        let pipeline = ComputePipeline::create(ComputePipelineCreateInfo {
-            ..ComputePipelineCreateInfo::with_module(&module)
-        })
+        let pipeline = ComputePipeline::create_with_shader(
+            module.specialized(cstr!("main")),
+            Default::default(),
+        )
         .unwrap();
         let desc_pool = DescriptorPool::for_pipeline_layouts(
             std::iter::once(pipeline.layout().deref()),

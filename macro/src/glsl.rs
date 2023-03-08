@@ -104,6 +104,7 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         (
             entry_point.name,
             SpirvEntryPoint {
+                stage: stage_flags,
                 descriptor_sets: {
                     let mut sets: Vec<SpirvDescriptorSet> = Vec::new();
 
@@ -274,12 +275,14 @@ impl Debug for SpirvDescriptorSet {
 }
 
 struct SpirvEntryPoint {
+    pub stage: vk::ShaderStageFlags,
     pub descriptor_sets: Vec<SpirvDescriptorSet>,
     pub push_constant_range: Option<PushConstantRange>,
 }
 impl Debug for SpirvEntryPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SpirvEntryPoint")
+            .field("stage", &ShaderStageFlags(self.stage))
             .field("descriptor_sets", &ToVecFmt(&self.descriptor_sets))
             .field("push_constant_range", &self.push_constant_range)
             .finish()?;

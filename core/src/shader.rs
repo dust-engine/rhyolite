@@ -1,5 +1,6 @@
 use ash::prelude::VkResult;
 use ash::vk;
+use std::ffi::CStr;
 use std::ops::Deref;
 use std::{collections::HashMap, sync::Arc};
 
@@ -15,6 +16,7 @@ pub use crate::descriptor::DescriptorSetLayoutBindingInfo as SpirvDescriptorSetB
 pub use crate::descriptor::DescriptorSetLayoutCacheKey as SpirvDescriptorSet;
 #[derive(Debug)]
 pub struct SpirvEntryPoint {
+    pub stage: vk::ShaderStageFlags,
     pub descriptor_sets: Vec<SpirvDescriptorSet>,
     pub push_constant_range: Option<vk::PushConstantRange>,
 }
@@ -79,6 +81,7 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
                 (
                     name.clone(),
                     ShaderModuleEntryPoint {
+                        stage: entry_point.stage,
                         desc_sets: entry_point
                             .descriptor_sets
                             .into_iter()
@@ -106,6 +109,14 @@ impl ShaderModule {
     pub unsafe fn raw(&self) -> vk::ShaderModule {
         self.module
     }
+    pub fn specialized<'a>(&'a self, entry_point: &'a CStr) -> SpecializedShader {
+        SpecializedShader {
+            flags: vk::PipelineShaderStageCreateFlags::empty(),
+            shader: self,
+            specialization_info: Default::default(),
+            entry_point,
+        }
+    }
 }
 impl HasDevice for ShaderModule {
     fn device(&self) -> &Arc<Device> {
@@ -115,6 +126,7 @@ impl HasDevice for ShaderModule {
 
 #[derive(Clone)]
 pub struct ShaderModuleEntryPoint {
+    pub stage: vk::ShaderStageFlags,
     pub desc_sets: Vec<Arc<DescriptorSetLayout>>,
     pub push_constant_range: Option<vk::PushConstantRange>,
 }
@@ -132,6 +144,14 @@ pub struct SpecializationInfo {
     pub(super) entries: Vec<vk::SpecializationMapEntry>,
 }
 impl SpecializationInfo {
+    pub unsafe fn raw_info(&self) -> vk::SpecializationInfo {
+        vk::SpecializationInfo {
+            map_entry_count: self.entries.len() as u32,
+            p_map_entries: self.entries.as_ptr(),
+            data_size: self.data.len(),
+            p_data: self.data.as_ptr() as *const _,
+        }
+    }
     pub const fn new() -> Self {
         Self {
             data: Vec::new(),
@@ -173,5 +193,29 @@ impl SpecializationInfo {
             );
             self.data.set_len(self.data.len() + size);
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct SpecializedShader<'a> {
+    pub flags: vk::PipelineShaderStageCreateFlags,
+    pub shader: &'a ShaderModule,
+    pub specialization_info: SpecializationInfo,
+    pub entry_point: &'a CStr,
+}
+impl<'a> SpecializedShader<'a> {
+    pub fn stage(&self) -> vk::ShaderStageFlags {
+        todo!()
+    }
+    pub fn entry_point(&self) -> &ShaderModuleEntryPoint {
+        self.shader
+            .entry_points
+            .get(self.entry_point.to_str().unwrap())
+            .unwrap()
+    }
+}
+impl<'a> HasDevice for SpecializedShader<'a> {
+    fn device(&self) -> &Arc<Device> {
+        &self.shader.device
     }
 }

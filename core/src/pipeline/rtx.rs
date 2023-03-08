@@ -2,7 +2,10 @@ use std::{alloc::Layout, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
 
-use crate::{HasDevice, PipelineLayout};
+use crate::{
+    shader::{self, SpecializedShader},
+    HasDevice, PipelineCache, PipelineLayout, PipelineLayoutBuilder, ShaderModule,
+};
 
 pub struct RayTracingPipeline {
     layout: Arc<PipelineLayout>,
@@ -11,6 +14,91 @@ pub struct RayTracingPipeline {
 impl HasDevice for RayTracingPipeline {
     fn device(&self) -> &Arc<crate::Device> {
         self.layout.device()
+    }
+}
+
+pub struct RayTracingPipelineLibrary {
+    layout: Arc<PipelineLayout>,
+    pipeline: vk::Pipeline,
+}
+
+pub struct RayTracingPipelineLibraryCreateInfo<'a> {
+    pub pipeline_cache: Option<&'a PipelineCache>,
+    pipeline_create_flags: vk::PipelineCreateFlags,
+    pipeline_layout_create_flags: vk::PipelineLayoutCreateFlags,
+    max_pipeline_ray_recursion_depth: u32,
+}
+impl RayTracingPipelineLibrary {
+    pub fn create_for_shaders<'a>(
+        shaders: &[SpecializedShader<'a>],
+        info: RayTracingPipelineLibraryCreateInfo<'a>,
+    ) -> VkResult<Self> {
+        unsafe {
+            let specialization_infos: Vec<_> = shaders
+                .iter()
+                .map(|shader| shader.specialization_info.raw_info())
+                .collect();
+            let mut layout_builder: Option<PipelineLayoutBuilder> = None;
+            let (stages, groups): (Vec<_>, Vec<_>) = shaders
+                .iter()
+                .enumerate()
+                .map(|(i, shader)| {
+                    let stage = vk::PipelineShaderStageCreateInfo {
+                        flags: shader.flags,
+                        stage: shader.stage(),
+                        module: shader.shader.raw(),
+                        p_name: shader.entry_point.as_ptr(),
+                        p_specialization_info: specialization_infos.as_ptr().add(i),
+                        ..Default::default()
+                    };
+                    let group = vk::RayTracingShaderGroupCreateInfoKHR {
+                        ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+                        general_shader: i as u32,
+                        ..Default::default()
+                    };
+                    if layout_builder.is_none() {
+                        layout_builder = Some(PipelineLayoutBuilder::new(
+                            shader.device().clone(),
+                            info.pipeline_layout_create_flags,
+                        ));
+                    }
+                    layout_builder
+                        .as_mut()
+                        .unwrap()
+                        .add_entry_point(shader.entry_point());
+                    (stage, group)
+                })
+                .unzip();
+            let layout = layout_builder.unwrap().build()?;
+
+            let mut pipeline = vk::Pipeline::null();
+            (layout
+                .device()
+                .rtx_loader()
+                .fp()
+                .create_ray_tracing_pipelines_khr)(
+                    layout.device().handle(),
+                    vk::DeferredOperationKHR::null(),
+                    info.pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
+                    1,
+                    &vk::RayTracingPipelineCreateInfoKHR {
+                        flags: vk::PipelineCreateFlags::LIBRARY_KHR | info.pipeline_create_flags,
+                        stage_count: stages.len() as u32,
+                        p_stages: stages.as_ptr(),
+                        group_count: groups.len() as u32,
+                        p_groups: groups.as_ptr(),
+                        max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
+                        layout: layout.raw(),
+                        ..Default::default()
+                    },
+                    std::ptr::null(),
+                    &mut pipeline,
+                ).result()?;
+            Ok(Self {
+                layout: Arc::new(layout),
+                pipeline,
+            })
+        }
     }
 }
 
@@ -73,6 +161,10 @@ impl SbtHandles {
     }
 
     pub fn rgen(&self, index: usize) -> &[u8] {
+        // Note that
+        // VUID-vkGetRayTracingShaderGroupHandlesKHR-dataSize-02420
+        // dataSize must be at least VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupHandleSize × groupCount
+        // This implies all handles are tightly packed. No need to call `pad_to_align` here
         let start = self.handle_layout.size() * index;
         let end = start + self.handle_layout.size();
         &self.data[start..end]
