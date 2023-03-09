@@ -7,9 +7,9 @@ extern crate proc_macro;
 mod commands;
 mod commands_join;
 mod glsl;
-mod transformer;
-mod set_layout;
 mod gpu;
+mod set_layout;
+mod transformer;
 
 struct ExprGpuAsync {
     pub mv: Option<syn::Token![move]>,
@@ -41,6 +41,11 @@ pub fn join(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 #[cfg(feature = "glsl")]
 #[proc_macro]
-pub fn glsl(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    glsl::glsl(input.into()).into()
+pub fn glsl_reflected(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    glsl::glsl_reflected(input.into()).into()
+}
+
+#[proc_macro]
+pub fn set_layout(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    set_layout::set_layout(input.into()).into()
 }

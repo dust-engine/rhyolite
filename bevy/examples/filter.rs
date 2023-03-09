@@ -10,7 +10,7 @@ use rhyolite::future::{
     use_per_frame_state, Dispose, GPUCommandFutureExt, PerFrameContainer, PerFrameState,
     RenderImage,
 };
-use rhyolite::macros::glsl;
+use rhyolite::macros::glsl_reflected;
 use rhyolite::utils::retainer::{Retainer, RetainerHandle};
 use rhyolite::{
     copy_buffer_to_image,
@@ -22,8 +22,7 @@ use rhyolite::{
     ImageViewLike,
 };
 use rhyolite_bevy::{
-    Allocator, DescriptorSetLayoutCache, Queues, QueuesRouter, RenderSystems, Swapchain,
-    SwapchainConfigExt,
+    Allocator, Device, Queues, QueuesRouter, RenderSystems, Swapchain, SwapchainConfigExt,
 };
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -91,12 +90,13 @@ struct GaussianBlurPipeline {
 
 impl FromWorld for GaussianBlurPipeline {
     fn from_world(world: &mut World) -> Self {
-        let shader = glsl!("filter.comp");
+        let shader = glsl_reflected!("filter.comp");
         println!("{:?}", shader.entry_points.get("main").unwrap());
         let num_frame_in_flight = world.resource::<Queues>().num_frame_in_flight();
-        let mut desc_cache = world.resource_mut::<DescriptorSetLayoutCache>();
-        let module = shader.build(&mut desc_cache).unwrap();
-        let pipeline = ComputePipeline::create_with_shader(
+        let module = shader
+            .build(world.resource::<Device>().inner().clone())
+            .unwrap();
+        let pipeline = ComputePipeline::create_with_reflected_shader(
             module.specialized(cstr!("main")),
             Default::default(),
         )
@@ -187,7 +187,7 @@ impl<
 
         let kernel_size = *state_kernel_size;
         *state_kernel_size += 1;
-        if (*state_kernel_size > 32) {
+        if *state_kernel_size > 32 {
             *state_kernel_size = 0;
         }
         unsafe {

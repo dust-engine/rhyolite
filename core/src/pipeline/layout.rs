@@ -1,6 +1,6 @@
 use crate::{
     descriptor::DescriptorSetLayout, shader::ShaderModuleEntryPoint, Device, HasDevice,
-    ShaderModule,
+    ReflectedShaderModule,
 };
 use ash::{prelude::VkResult, vk};
 use std::{collections::BTreeMap, sync::Arc};

@@ -6,7 +6,7 @@ use std::{
 use ash::vk;
 
 #[cfg(feature = "glsl")]
-pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+pub fn glsl_reflected(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     use std::fmt::Debug;
 
     let input = match syn::parse2::<syn::LitStr>(input) {
@@ -84,8 +84,10 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
             let err = err.to_string();
             input.span().unwrap().error(err).emit();
             return quote::quote! {
-                ::rhyolite::shader::SpirvShader {
-                    data: &[]
+                ::rhyolite::shader::ReflectedSpirvShader {
+                    shader: ::rhyolite::shader::SpirvShader {
+                        data: &[]
+                    }
                 }
             };
         }
@@ -178,10 +180,12 @@ pub fn glsl(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     return quote::quote! {{
         use ::rhyolite::shader::{SpirvEntryPoint, SpirvDescriptorSetBinding, SpirvDescriptorSet};
         use ::rhyolite::ash::vk::{PushConstantRange, ShaderStageFlags, DescriptorType, DescriptorSetLayoutCreateFlags};
-        ::rhyolite::shader::SpirvShader {
-            data: {
-                let slice: &[u32] = #bin.as_slice();
-                slice
+        ::rhyolite::shader::ReflectedSpirvShader {
+            shader: ::rhyolite::shader::SpirvShader {
+                data: {
+                    let slice: &[u32] = #bin.as_slice();
+                    slice
+                }
             },
             entry_points: [#entry_points_stream].into(),
         }

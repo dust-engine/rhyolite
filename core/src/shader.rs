@@ -4,11 +4,32 @@ use std::ffi::CStr;
 use std::ops::Deref;
 use std::{collections::HashMap, sync::Arc};
 
-use crate::descriptor::{DescriptorSetLayout, DescriptorSetLayoutCache};
+use crate::descriptor::DescriptorSetLayout;
 use crate::sampler::Sampler;
 use crate::{device, Device, HasDevice};
+
 pub struct SpirvShader<T: Deref<Target = [u32]>> {
     pub data: T,
+}
+
+impl<T: Deref<Target = [u32]>> SpirvShader<T> {
+    pub fn build(self, device: Arc<Device>) -> VkResult<ShaderModule> {
+        let module = unsafe {
+            device.create_shader_module(
+                &vk::ShaderModuleCreateInfo {
+                    code_size: std::mem::size_of_val(self.data.as_ref()),
+                    p_code: self.data.as_ref().as_ptr(),
+                    ..Default::default()
+                },
+                None,
+            )
+        }?;
+        Ok(ShaderModule { device, module })
+    }
+}
+
+pub struct ReflectedSpirvShader<T: Deref<Target = [u32]>> {
+    pub shader: SpirvShader<T>,
     pub entry_points: HashMap<String, SpirvEntryPoint>,
 }
 
@@ -21,7 +42,7 @@ pub struct SpirvEntryPoint {
     pub push_constant_range: Option<vk::PushConstantRange>,
 }
 
-impl<T: Deref<Target = [u32]>> SpirvShader<T> {
+impl<T: Deref<Target = [u32]>> ReflectedSpirvShader<T> {
     pub fn set_flags(
         &mut self,
         entry_point: &str,
@@ -63,17 +84,7 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
         );
         binding.immutable_samplers = samplers;
     }
-    pub fn build(self, cache: &mut DescriptorSetLayoutCache) -> VkResult<ShaderModule> {
-        let module = unsafe {
-            cache.device().create_shader_module(
-                &vk::ShaderModuleCreateInfo {
-                    code_size: std::mem::size_of_val(self.data.as_ref()),
-                    p_code: self.data.as_ref().as_ptr(),
-                    ..Default::default()
-                },
-                None,
-            )
-        }?;
+    pub fn build(self, device: Arc<Device>) -> VkResult<ReflectedShaderModule> {
         let entry_points = self
             .entry_points
             .into_iter()
@@ -85,16 +96,15 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
                         desc_sets: entry_point
                             .descriptor_sets
                             .into_iter()
-                            .map(|desc_set| cache.get(desc_set.bindings, Default::default()))
+                            .map(|desc_set| Arc::new(desc_set.build(device.clone()).unwrap()))
                             .collect(),
                         push_constant_range: entry_point.push_constant_range.clone(),
                     },
                 )
             })
             .collect();
-        Ok(ShaderModule {
-            device: cache.device().clone(),
-            module,
+        Ok(ReflectedShaderModule {
+            module: self.shader.build(device)?,
             entry_points,
         })
     }
@@ -103,7 +113,6 @@ impl<T: Deref<Target = [u32]>> SpirvShader<T> {
 pub struct ShaderModule {
     device: Arc<Device>,
     module: vk::ShaderModule,
-    pub entry_points: HashMap<String, ShaderModuleEntryPoint>,
 }
 impl ShaderModule {
     pub unsafe fn raw(&self) -> vk::ShaderModule {
@@ -118,9 +127,41 @@ impl ShaderModule {
         }
     }
 }
+
 impl HasDevice for ShaderModule {
     fn device(&self) -> &Arc<Device> {
         &self.device
+    }
+}
+impl Drop for ShaderModule {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_shader_module(self.module, None);
+        }
+    }
+}
+
+pub struct ReflectedShaderModule {
+    module: ShaderModule,
+    pub entry_points: HashMap<String, ShaderModuleEntryPoint>,
+}
+impl ReflectedShaderModule {
+    pub unsafe fn raw(&self) -> vk::ShaderModule {
+        self.module.module
+    }
+    pub fn specialized<'a>(&'a self, entry_point: &'a CStr) -> SpecializedReflectedShader {
+        SpecializedReflectedShader {
+            flags: vk::PipelineShaderStageCreateFlags::empty(),
+            shader: self,
+            specialization_info: Default::default(),
+            entry_point,
+        }
+    }
+}
+
+impl HasDevice for ReflectedShaderModule {
+    fn device(&self) -> &Arc<Device> {
+        &self.module.device
     }
 }
 
@@ -129,13 +170,6 @@ pub struct ShaderModuleEntryPoint {
     pub stage: vk::ShaderStageFlags,
     pub desc_sets: Vec<Arc<DescriptorSetLayout>>,
     pub push_constant_range: Option<vk::PushConstantRange>,
-}
-impl Drop for ShaderModule {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_shader_module(self.module, None);
-        }
-    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -203,10 +237,20 @@ pub struct SpecializedShader<'a> {
     pub specialization_info: SpecializationInfo,
     pub entry_point: &'a CStr,
 }
-impl<'a> SpecializedShader<'a> {
-    pub fn stage(&self) -> vk::ShaderStageFlags {
-        todo!()
+impl<'a> HasDevice for SpecializedShader<'a> {
+    fn device(&self) -> &Arc<Device> {
+        &self.shader.device
     }
+}
+
+#[derive(Clone)]
+pub struct SpecializedReflectedShader<'a> {
+    pub flags: vk::PipelineShaderStageCreateFlags,
+    pub shader: &'a ReflectedShaderModule,
+    pub specialization_info: SpecializationInfo,
+    pub entry_point: &'a CStr,
+}
+impl<'a> SpecializedReflectedShader<'a> {
     pub fn entry_point(&self) -> &ShaderModuleEntryPoint {
         self.shader
             .entry_points
@@ -214,8 +258,8 @@ impl<'a> SpecializedShader<'a> {
             .unwrap()
     }
 }
-impl<'a> HasDevice for SpecializedShader<'a> {
+impl<'a> HasDevice for SpecializedReflectedShader<'a> {
     fn device(&self) -> &Arc<Device> {
-        &self.shader.device
+        self.shader.device()
     }
 }

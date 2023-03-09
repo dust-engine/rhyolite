@@ -1,10 +1,11 @@
 use std::{alloc::Layout, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
+use macros::set_layout;
 
 use crate::{
-    shader::{self, SpecializedShader},
-    HasDevice, PipelineCache, PipelineLayout, PipelineLayoutBuilder, ShaderModule,
+    shader::{self, SpecializedReflectedShader},
+    HasDevice, PipelineCache, PipelineLayout, PipelineLayoutBuilder, ReflectedShaderModule,
 };
 
 pub struct RayTracingPipeline {
@@ -30,7 +31,7 @@ pub struct RayTracingPipelineLibraryCreateInfo<'a> {
 }
 impl RayTracingPipelineLibrary {
     pub fn create_for_shaders<'a>(
-        shaders: &[SpecializedShader<'a>],
+        shaders: &[SpecializedReflectedShader<'a>],
         info: RayTracingPipelineLibraryCreateInfo<'a>,
     ) -> VkResult<Self> {
         unsafe {
@@ -45,7 +46,7 @@ impl RayTracingPipelineLibrary {
                 .map(|(i, shader)| {
                     let stage = vk::PipelineShaderStageCreateInfo {
                         flags: shader.flags,
-                        stage: shader.stage(),
+                        stage: shader.entry_point().stage,
                         module: shader.shader.raw(),
                         p_name: shader.entry_point.as_ptr(),
                         p_specialization_info: specialization_infos.as_ptr().add(i),
@@ -77,23 +78,24 @@ impl RayTracingPipelineLibrary {
                 .rtx_loader()
                 .fp()
                 .create_ray_tracing_pipelines_khr)(
-                    layout.device().handle(),
-                    vk::DeferredOperationKHR::null(),
-                    info.pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
-                    1,
-                    &vk::RayTracingPipelineCreateInfoKHR {
-                        flags: vk::PipelineCreateFlags::LIBRARY_KHR | info.pipeline_create_flags,
-                        stage_count: stages.len() as u32,
-                        p_stages: stages.as_ptr(),
-                        group_count: groups.len() as u32,
-                        p_groups: groups.as_ptr(),
-                        max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
-                        layout: layout.raw(),
-                        ..Default::default()
-                    },
-                    std::ptr::null(),
-                    &mut pipeline,
-                ).result()?;
+                layout.device().handle(),
+                vk::DeferredOperationKHR::null(),
+                info.pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
+                1,
+                &vk::RayTracingPipelineCreateInfoKHR {
+                    flags: vk::PipelineCreateFlags::LIBRARY_KHR | info.pipeline_create_flags,
+                    stage_count: stages.len() as u32,
+                    p_stages: stages.as_ptr(),
+                    group_count: groups.len() as u32,
+                    p_groups: groups.as_ptr(),
+                    max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
+                    layout: layout.raw(),
+                    ..Default::default()
+                },
+                std::ptr::null(),
+                &mut pipeline,
+            )
+            .result()?;
             Ok(Self {
                 layout: Arc::new(layout),
                 pipeline,

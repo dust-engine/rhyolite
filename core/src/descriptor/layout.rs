@@ -113,37 +113,8 @@ pub struct DescriptorSetLayoutCacheKey {
     pub bindings: Vec<DescriptorSetLayoutBindingInfo>,
     pub flags: vk::DescriptorSetLayoutCreateFlags,
 }
-pub struct DescriptorSetLayoutCache {
-    device: Arc<Device>,
-    cache: HashMap<DescriptorSetLayoutCacheKey, Arc<DescriptorSetLayout>>,
-}
-impl HasDevice for DescriptorSetLayoutCache {
-    fn device(&self) -> &Arc<Device> {
-        &self.device
-    }
-}
-
-impl DescriptorSetLayoutCache {
-    pub fn new(device: Arc<Device>) -> Self {
-        Self {
-            device,
-            cache: HashMap::new(),
-        }
-    }
-    pub fn get(
-        &mut self,
-        bindings: Vec<DescriptorSetLayoutBindingInfo>,
-        flags: vk::DescriptorSetLayoutCreateFlags,
-    ) -> Arc<DescriptorSetLayout> {
-        let key = DescriptorSetLayoutCacheKey { bindings, flags };
-        if let Some(a) = self.cache.get_mut(&key) {
-            a.clone()
-        } else {
-            let value = Arc::new(
-                DescriptorSetLayout::new(self.device.clone(), key.bindings.clone(), flags).unwrap(),
-            );
-            self.cache.insert(key, value.clone());
-            value
-        }
+impl DescriptorSetLayoutCacheKey {
+    pub fn build(self, device: Arc<Device>) -> VkResult<DescriptorSetLayout> {
+        DescriptorSetLayout::new(device, self.bindings, self.flags)
     }
 }

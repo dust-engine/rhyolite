@@ -1,5 +1,9 @@
 use quote::spanned::Spanned;
-use syn::{parse::{Parse, ParseStream}, punctuated::Punctuated};
+use syn::{
+    parse::{Parse, ParseStream},
+    punctuated::Punctuated,
+    Attribute,
+};
 
 pub struct SetLayoutBinding {
     attrs: Vec<syn::Attribute>,
@@ -16,12 +20,12 @@ pub enum SetLayoutBindingDescriptorType {
         ty: syn::Expr,
         semi_token: syn::Token![;],
         len: syn::Expr,
-    }
+    },
 }
 
 pub struct SetLayout {
-    brace_token: syn::token::Brace,
-    bindings: Punctuated<SetLayoutBinding, syn::Token![,]>
+    attrs: Vec<Attribute>,
+    bindings: Punctuated<SetLayoutBinding, syn::Token![,]>,
 }
 
 impl Parse for SetLayoutBindingDescriptorType {
@@ -53,14 +57,12 @@ impl Parse for SetLayoutBinding {
 
 impl Parse for SetLayout {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let content;
         Ok(SetLayout {
-            brace_token: syn::braced!(content in input),
-            bindings: content.parse_terminated(SetLayoutBinding::parse)?,
+            attrs: input.call(syn::Attribute::parse_inner)?,
+            bindings: input.parse_terminated(SetLayoutBinding::parse)?,
         })
     }
 }
-
 
 pub fn set_layout(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let input = match syn::parse2::<SetLayout>(input) {
@@ -69,62 +71,90 @@ pub fn set_layout(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     };
 
     let mut requires_specify_binding = false;
-    let binding_infos = input.bindings.into_iter().enumerate().map(|(i, input_binding)| {
-        let (descriptor_type, descriptor_count) = match input_binding.descriptor_type {
-            SetLayoutBindingDescriptorType::Single(ty) => {
-                let lit = syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Int(syn::LitInt::new("1", ty.__span())),
-                    attrs: Vec::new()
+    let flags: Vec<_> = input
+        .attrs
+        .iter()
+        .filter(|attr| attr.path.is_ident("flag"))
+        .map(|attr| attr.tokens.clone())
+        .collect();
+    let binding_infos = input
+        .bindings
+        .into_iter()
+        .enumerate()
+        .map(|(i, input_binding)| {
+            let (descriptor_type, descriptor_count) = match input_binding.descriptor_type {
+                SetLayoutBindingDescriptorType::Single(ty) => {
+                    let lit = syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Int(syn::LitInt::new("1u32", ty.__span())),
+                        attrs: Vec::new(),
+                    });
+                    (ty, lit)
+                }
+                SetLayoutBindingDescriptorType::Multi {
+                    bracket_token: _,
+                    ty,
+                    semi_token: _,
+                    len,
+                } => (ty, len),
+            };
+            let binding = input_binding
+                .attrs
+                .iter()
+                .find(|attr| attr.path.is_ident("binding"))
+                .map(|attr| {
+                    let token_stream: proc_macro2::TokenStream = attr.tokens.clone().into();
+                    token_stream
                 });
-                (ty, lit)
-            },
-            SetLayoutBindingDescriptorType::Multi { bracket_token: _, ty, semi_token: _, len } => {
-                (ty, len)
-            }
-        };
-        let binding = input_binding.attrs.iter().find(|attr| {
-            attr.path.is_ident("binding")
-        }).map(|attr| {
-            let token_stream: proc_macro2::TokenStream = attr.tokens.clone().into();
-            token_stream
-        });
-        let binding = if let Some(binding) = binding {
-            requires_specify_binding = true;
-            binding
-        } else {
-            if requires_specify_binding {
-                // Throw error
-                todo!()
+            let binding = if let Some(binding) = binding {
+                requires_specify_binding = true;
+                binding
             } else {
-                // Default binding number
-                quote::quote!(#i)
-            }
-        };
-        let shader_flags = input_binding.attrs.iter().find(|attr| {
-            attr.path.is_ident("shader")
-        }).map(|attr| {
-            let token_stream: proc_macro2::TokenStream = attr.tokens.clone().into();
-            token_stream
-        }).unwrap_or_else(|| {
+                if requires_specify_binding {
+                    // Throw error
+                    todo!()
+                } else {
+                    // Default binding number
+                    let i = i as u32;
+                    quote::quote!(#i)
+                }
+            };
+            let shader_flags = input_binding
+                .attrs
+                .iter()
+                .find(|attr| attr.path.is_ident("shader"))
+                .map(|attr| {
+                    let token_stream: proc_macro2::TokenStream = attr.tokens.clone().into();
+                    token_stream
+                })
+                .unwrap_or_else(|| {
+                    quote::quote! {
+                        Default::default()
+                    }
+                });
             quote::quote! {
-                Default::default()
+                ::rhyolite::descriptor::DescriptorSetLayoutBindingInfo {
+                    binding: #binding,
+                    descriptor_type: #descriptor_type,
+                    descriptor_count: #descriptor_count,
+                    stage_flags: #shader_flags,
+                    immutable_samplers: Vec::new(),
+                }
             }
         });
+
+    let flags = if flags.len() == 0 {
         quote::quote! {
-            ::rhyolite::descriptor::DescriptorSetLayoutBindingInfo {
-                binding: #binding,
-                descriptor_type: #descriptor_type,
-                descriptor_count: #descriptor_count,
-                stage_flags: #shader_flags,
-                immutable_samplers: Vec::new(),
-            }
+            Default::default()
         }
-    });
+    } else {
+        quote::quote!(#(#flags)|*)
+    };
     quote::quote! {
         ::rhyolite::descriptor::DescriptorSetLayoutCacheKey {
             bindings: vec![
                 #(#binding_infos),*
-            ]
+            ],
+            flags: #flags
         }
     }
 }

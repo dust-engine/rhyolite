@@ -133,7 +133,6 @@ impl Plugin for RenderPlugin {
             .insert_resource(Queues::new(queues, self.max_frame_in_flight))
             .insert_resource(QueuesRouter::new(queues_router))
             .insert_resource(Allocator::new(allocator))
-            .insert_resource(DescriptorSetLayoutCache::new(device))
             .insert_non_send_resource(swapchain::NonSendResource::default())
             .add_system(swapchain::extract_windows.in_set(RenderSystems::SetUp));
     }

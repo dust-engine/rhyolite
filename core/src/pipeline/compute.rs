@@ -4,8 +4,8 @@ use ash::{prelude::VkResult, vk};
 
 use super::PipelineCache;
 use crate::{
-    shader::{SpecializationInfo, SpecializedShader},
-    HasDevice, ShaderModule,
+    shader::{SpecializationInfo, SpecializedReflectedShader},
+    HasDevice, ReflectedShaderModule,
 };
 
 use super::PipelineLayout;
@@ -53,8 +53,8 @@ impl<'a> Default for ComputePipelineCreateInfo<'a> {
 }
 
 impl ComputePipeline {
-    pub fn create_with_shader<'a>(
-        shader: SpecializedShader<'a>,
+    pub fn create_with_reflected_shader<'a>(
+        shader: SpecializedReflectedShader<'a>,
         info: ComputePipelineCreateInfo<'a>,
     ) -> VkResult<Self> {
         let device = shader.device().clone();
