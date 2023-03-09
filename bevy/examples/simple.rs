@@ -5,7 +5,6 @@ use bevy_ecs::prelude::*;
 use bevy_window::{PrimaryWindow, Window};
 use rhyolite::ash::vk;
 use rhyolite::future::GPUCommandFutureExt;
-use rhyolite::macros::glsl;
 use rhyolite::{
     copy_buffer, copy_buffer_to_image,
     future::RenderRes,

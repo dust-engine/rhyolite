@@ -115,11 +115,16 @@ pub struct ShaderModule {
     module: vk::ShaderModule,
 }
 impl ShaderModule {
-    pub unsafe fn raw(&self) -> vk::ShaderModule {
+    pub fn raw(&self) -> vk::ShaderModule {
         self.module
     }
-    pub fn specialized<'a>(&'a self, entry_point: &'a CStr) -> SpecializedShader {
+    pub fn specialized<'a>(
+        &'a self,
+        entry_point: &'a CStr,
+        stage: vk::ShaderStageFlags,
+    ) -> SpecializedShader {
         SpecializedShader {
+            stage,
             flags: vk::PipelineShaderStageCreateFlags::empty(),
             shader: self,
             specialization_info: Default::default(),
@@ -232,6 +237,7 @@ impl SpecializationInfo {
 
 #[derive(Clone)]
 pub struct SpecializedShader<'a> {
+    pub stage: vk::ShaderStageFlags,
     pub flags: vk::PipelineShaderStageCreateFlags,
     pub shader: &'a ShaderModule,
     pub specialization_info: SpecializationInfo,

@@ -75,7 +75,7 @@ impl<T: HitgroupSbtEntry> HasDevice for HitgroupSbtVec<T> {
 impl<T: HitgroupSbtEntry> HitgroupSbtVec<T> {
     pub fn new(pipeline: &RayTracingPipeline, allocator: Allocator) -> Self {
         let (sender, receiver) = std::sync::mpsc::channel();
-        let shader_group_handles = pipeline.get_shader_group_handles();
+        let shader_group_handles = pipeline.get_shader_group_handles().unwrap();
         let layout = SbtLayout::new::<T>(&shader_group_handles, 1);
         Self {
             allocator,
@@ -86,7 +86,7 @@ impl<T: HitgroupSbtEntry> HitgroupSbtVec<T> {
             available_indices: receiver,
             changeset: Default::default(),
             frames: Default::default(),
-            shader_group_handles: pipeline.get_shader_group_handles(),
+            shader_group_handles,
             device_buffer: None,
             layout,
         }
