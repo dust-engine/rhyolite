@@ -311,6 +311,9 @@ impl BufferLike for StageContextBuffer {
     fn offset(&self) -> vk::DeviceSize {
         self.offset
     }
+    fn device_address(&self) -> vk::DeviceAddress {
+        unimplemented!()
+    }
 }
 impl PartialEq for StageContextBuffer {
     fn eq(&self, other: &Self) -> bool {

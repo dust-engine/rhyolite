@@ -57,6 +57,9 @@ impl<T: BufferLike> BufferLike for SharedDeviceState<T> {
     fn offset(&self) -> ash::vk::DeviceSize {
         self.0.offset()
     }
+    fn device_address(&self) -> ash::vk::DeviceAddress {
+        self.0.device_address()
+    }
 }
 impl<T: ImageViewLike> ImageViewLike for SharedDeviceState<T> {
     fn raw_image_view(&self) -> ash::vk::ImageView {
@@ -255,6 +258,9 @@ impl<T: BufferLike> BufferLike for PerFrameContainer<T> {
     }
     fn offset(&self) -> ash::vk::DeviceSize {
         self.item.as_ref().unwrap().offset()
+    }
+    fn device_address(&self) -> ash::vk::DeviceAddress {
+        self.item.as_ref().unwrap().device_address()
     }
 }
 impl<T: ImageViewLike> ImageViewLike for PerFrameContainer<T> {

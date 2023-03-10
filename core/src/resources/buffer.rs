@@ -21,48 +21,7 @@ pub trait BufferLike {
         0
     }
     fn size(&self) -> vk::DeviceSize;
-}
-impl BufferLike for vk::Buffer {
-    fn raw_buffer(&self) -> vk::Buffer {
-        *self
-    }
-    fn size(&self) -> vk::DeviceSize {
-        u64::MAX
-    }
-}
-impl<T> BufferLike for &T
-where
-    T: BufferLike,
-{
-    fn raw_buffer(&self) -> vk::Buffer {
-        let this: &T = self;
-        this.raw_buffer()
-    }
-    fn offset(&self) -> vk::DeviceSize {
-        let this: &T = self;
-        this.offset()
-    }
-    fn size(&self) -> vk::DeviceSize {
-        let this: &T = self;
-        this.size()
-    }
-}
-impl<T> BufferLike for &mut T
-where
-    T: BufferLike,
-{
-    fn raw_buffer(&self) -> vk::Buffer {
-        let this: &T = self;
-        this.raw_buffer()
-    }
-    fn offset(&self) -> vk::DeviceSize {
-        let this: &T = self;
-        this.offset()
-    }
-    fn size(&self) -> vk::DeviceSize {
-        let this: &T = self;
-        this.size()
-    }
+    fn device_address(&self) -> vk::DeviceAddress;
 }
 
 // Everyone wants a mutable refence to outer.
@@ -217,6 +176,17 @@ impl BufferLike for ResidentBuffer {
     fn size(&self) -> vk::DeviceSize {
         self.size
     }
+
+    fn device_address(&self) -> vk::DeviceAddress {
+        unsafe {
+            self.allocator
+                .device()
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                    buffer: self.buffer,
+                    ..Default::default()
+                })
+        }
+    }
 }
 
 impl Drop for ResidentBuffer {
@@ -267,6 +237,36 @@ impl Allocator {
             ..Default::default()
         };
         self.create_resident_buffer(&buffer_create_info, &alloc_info)
+    }
+    /// Create uninitialized buffer only visible to the GPU.
+    pub fn create_device_buffer_uninit_aligned(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        min_alignment: vk::DeviceSize,
+    ) -> VkResult<ResidentBuffer> {
+        let buffer_create_info = vk::BufferCreateInfo {
+            size,
+            usage,
+            ..Default::default()
+        };
+        let alloc_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+            ..Default::default()
+        };
+        let (buffer, allocation) = unsafe {
+            self.inner().create_buffer_with_alignment(
+                &buffer_create_info,
+                &alloc_info,
+                min_alignment,
+            )
+        }?;
+        Ok(ResidentBuffer {
+            allocator: self.clone(),
+            buffer,
+            allocation,
+            size,
+        })
     }
     /// Crate a small host-visible buffer with uninitialized data, preferably local to the GPU.
     ///

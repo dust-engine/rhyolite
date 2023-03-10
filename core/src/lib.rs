@@ -9,6 +9,7 @@
 #![feature(alloc_layout_extra)]
 #![feature(type_alias_impl_trait)]
 #![feature(let_chains)]
+#![feature(int_roundings)]
 
 pub use cstr::cstr;
 
@@ -16,6 +17,7 @@ pub extern crate ash;
 pub extern crate rhyolite_macro as macros;
 pub extern crate self as rhyolite;
 
+pub mod accel_struct;
 mod allocator;
 pub mod commands;
 pub mod debug;
