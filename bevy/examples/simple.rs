@@ -26,6 +26,7 @@ fn main() {
         .add_plugin(bevy_diagnostic::DiagnosticsPlugin::default())
         .add_plugin(bevy_input::InputPlugin::default())
         .add_plugin(bevy_window::WindowPlugin::default())
+        .add_plugin(bevy_a11y::AccessibilityPlugin)
         .add_plugin(bevy_winit::WinitPlugin::default())
         .add_plugin(rhyolite_bevy::RenderPlugin::default())
         .add_plugin(bevy_time::TimePlugin::default())
