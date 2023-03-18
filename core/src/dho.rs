@@ -4,12 +4,13 @@ use ash::{
     vk::{self},
 };
 use crossbeam_channel::Sender;
+use event_listener::Event;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU32},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicI32},
         Arc,
     },
-    thread::JoinHandle,
+    thread::JoinHandle, future::Future,
 };
 
 pub struct DeferredOperation {
@@ -53,17 +54,22 @@ impl DeferredOperation {
             result => Some(result),
         }
     }
+    pub fn raw(&self) -> vk::DeferredOperationKHR {
+        self.raw
+    }
 }
 
 pub struct Task {
     op: DeferredOperation,
     concurrency: AtomicU32,
+    event: Event,
 }
 
 pub struct DeferredOperationTaskPool {
     sender: Sender<Arc<Task>>,
     terminate: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
+    available_parallelism: u32,
 }
 impl Drop for DeferredOperationTaskPool {
     fn drop(&mut self) {
@@ -79,7 +85,8 @@ impl DeferredOperationTaskPool {
     pub fn new(device: Arc<Device>) -> Self {
         let (sender, receiver) = crossbeam_channel::unbounded::<Arc<Task>>();
         let terminate = Arc::new(AtomicBool::new(false));
-        let threads: Vec<_> = (0..std::thread::available_parallelism().unwrap().get())
+        let available_parallelism = std::thread::available_parallelism().unwrap().get() as u32;
+        let threads: Vec<_> = (0..available_parallelism)
             .map(|_| {
                 let sender = sender.clone();
                 let receiver = receiver.clone();
@@ -111,10 +118,6 @@ impl DeferredOperationTaskPool {
                                 device.handle(), task.op.raw
                             )
                         } {
-                            vk::Result::SUCCESS => {
-                                task.concurrency
-                                    .store(0, std::sync::atomic::Ordering::Relaxed);
-                            }
                             vk::Result::THREAD_DONE_KHR => {
                                 // A return value of VK_THREAD_DONE_KHR indicates that the deferred operation is not complete,
                                 // but there is no work remaining to assign to threads. Future calls to vkDeferredOperationJoinKHR
@@ -139,7 +142,11 @@ impl DeferredOperationTaskPool {
                                     sender.send(task.clone()).unwrap();
                                 }
                             }
-                            _ => panic!(),
+                            result => {
+                                task.concurrency
+                                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                                task.event.notify_relaxed(1);
+                            },
                         }
                     }
                 })
@@ -149,6 +156,23 @@ impl DeferredOperationTaskPool {
             sender,
             terminate,
             threads,
+            available_parallelism
+        }
+    }
+    pub fn schedule_deferred_operation(&self, op: DeferredOperation) -> impl Future<Output = vk::Result> {
+        let concurrency = op.get_max_concurrency().max(self.available_parallelism);
+        let event = Event::new();
+        let task = Task {
+            event,
+            op,
+            concurrency: AtomicU32::new(concurrency),
+        };
+        let task = Arc::new(task);
+        let listener = task.event.listen();
+        self.sender.send(task.clone()).unwrap();
+        async move {
+            listener.await;
+            task.op.status().unwrap()
         }
     }
 }

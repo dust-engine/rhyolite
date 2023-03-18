@@ -5,11 +5,14 @@ use std::{
 
 use bevy_ecs::system::Resource;
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct Allocator(rhyolite::Allocator);
 impl Allocator {
     pub fn new(inner: rhyolite::Allocator) -> Self {
         Allocator(inner)
+    }
+    pub fn into_inner(self) -> rhyolite::Allocator {
+        self.0
     }
 }
 impl Deref for Allocator {
@@ -59,5 +62,13 @@ impl<'a> From<&'a SharingMode> for rhyolite::SharingMode<'a> {
                 queue_family_indices: &queue_family_indices,
             },
         }
+    }
+}
+
+#[derive(Resource, Clone)]
+pub struct PipelineCache(Arc<rhyolite::PipelineCache>);
+impl PipelineCache {
+    pub fn inner(&self) -> &Arc<rhyolite::PipelineCache> {
+        &self.0
     }
 }

@@ -122,7 +122,7 @@ impl ShaderModule {
         &'a self,
         entry_point: &'a CStr,
         stage: vk::ShaderStageFlags,
-    ) -> SpecializedShader {
+    ) -> SpecializedShader<&'a ShaderModule> {
         SpecializedShader {
             stage,
             flags: vk::PipelineShaderStageCreateFlags::empty(),
@@ -236,14 +236,14 @@ impl SpecializationInfo {
 }
 
 #[derive(Clone)]
-pub struct SpecializedShader<'a> {
+pub struct SpecializedShader<'a, S: Deref<Target = ShaderModule>> {
     pub stage: vk::ShaderStageFlags,
     pub flags: vk::PipelineShaderStageCreateFlags,
-    pub shader: &'a ShaderModule,
+    pub shader: S,
     pub specialization_info: SpecializationInfo,
     pub entry_point: &'a CStr,
 }
-impl<'a> HasDevice for SpecializedShader<'a> {
+impl<'a, S: Deref<Target = ShaderModule>> HasDevice for SpecializedShader<'a, S> {
     fn device(&self) -> &Arc<Device> {
         &self.shader.device
     }

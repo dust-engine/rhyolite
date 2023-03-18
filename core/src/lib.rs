@@ -24,6 +24,7 @@ pub mod debug;
 pub mod descriptor;
 mod device;
 mod dho;
+pub use dho::*;
 pub mod future;
 mod instance;
 mod physical_device;
