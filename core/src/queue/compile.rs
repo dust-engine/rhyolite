@@ -5,7 +5,7 @@ use ash::vk;
 use crate::{QueueFuture, SubmissionContext, QueueSubmissionContext, QueueMask, QueueFuturePoll, QueueSubmissionType, SubmissionBatch, commands::SharedCommandPool, TimelineSemaphorePool, FencePool, utils::retainer::Retainer, HasDevice};
 use super::exec::CachedStageSubmissions;
 
-pub(super) trait QueueCompileExt: QueueFuture {
+pub trait QueueCompileExt: QueueFuture {
     fn compile<'a>(
         mut self,
         // These pools are passed in as argument so that they can be cleaned on a regular basis (per frame) externally.
@@ -169,11 +169,11 @@ pub(super) trait QueueCompileExt: QueueFuture {
     }
 }
 
-pub(super) struct CompiledQueueFuture<'a, F: QueueFuture> {
-    pub(super) submission_batch: Vec<CachedStageSubmissions>,
-    pub(super) fut_dispose: F::RetainedState,
-    pub(super) final_signals: Option<Vec<(vk::Semaphore, u64)>>,
-    pub(super) output: F::Output,
+pub struct CompiledQueueFuture<'a, F: QueueFuture> {
+    pub submission_batch: Vec<CachedStageSubmissions>,
+    pub fut_dispose: F::RetainedState,
+    pub final_signals: Option<Vec<(vk::Semaphore, u64)>>,
+    pub output: F::Output,
     _marker: PhantomData<&'a ()>
 }
 

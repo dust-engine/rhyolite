@@ -5,15 +5,16 @@ pub use exec::*;
 
 mod router;
 pub use router::{QueueType, QueuesRouter};
+pub use compile::{QueueCompileExt, CompiledQueueFuture};
 mod compile;
 
 
 pub struct QueueInfo {
     /// (Queue family, index in that family) indexed by queue index
-    queues: Vec<(u32, u32)>,
+    pub queues: Vec<(u32, u32)>,
 
     /// Mapping from queue families to queue refs
-    families: Vec<QueueMask>,
+    pub families: Vec<QueueMask>,
 }
 impl QueueInfo {
     pub fn new(num_queue_family: u32, queue_create_infos: &[vk::DeviceQueueCreateInfo]) -> Self {

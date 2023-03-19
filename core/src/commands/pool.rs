@@ -1,7 +1,7 @@
 use crate::{Device, HasDevice};
 use ash::vk;
 
-use std::sync::Arc;
+use std::{sync::Arc, rc::Rc, cell::{RefCell, Cell}};
 
 /// An unsafe command pool. Command buffer lifecycles are unmanaged.
 pub struct UnsafeCommandPool {
@@ -37,26 +37,27 @@ impl UnsafeCommandPool {
     }
     /// Marked unsafe because allocated command buffers won't be recycled automatically.
     pub unsafe fn allocate_n<const N: usize>(&self, secondary: bool) -> [vk::CommandBuffer; N] {
-        unsafe {
-            let mut command_buffer = [vk::CommandBuffer::null(); N];
-            (self.device.fp_v1_0().allocate_command_buffers)(
-                self.device.handle(),
-                &vk::CommandBufferAllocateInfo {
-                    command_pool: self.command_pool,
-                    level: if secondary {
-                        vk::CommandBufferLevel::SECONDARY
-                    } else {
-                        vk::CommandBufferLevel::PRIMARY
-                    },
-                    command_buffer_count: N as u32,
-                    ..Default::default()
+        let mut command_buffer = [vk::CommandBuffer::null(); N];
+        (self.device.fp_v1_0().allocate_command_buffers)(
+            self.device.handle(),
+            &vk::CommandBufferAllocateInfo {
+                command_pool: self.command_pool,
+                level: if secondary {
+                    vk::CommandBufferLevel::SECONDARY
+                } else {
+                    vk::CommandBufferLevel::PRIMARY
                 },
-                command_buffer.as_mut_ptr(),
-            )
-            .result()
-            .unwrap();
-            command_buffer
-        }
+                command_buffer_count: N as u32,
+                ..Default::default()
+            },
+            command_buffer.as_mut_ptr(),
+        )
+        .result()
+        .unwrap();
+        command_buffer
+    }
+    pub unsafe fn free(&self, bufs: &[vk::CommandBuffer]) {
+        self.device.free_command_buffers(self.command_pool, bufs)
     }
     /// Marked unsafe because allocated command buffers won't be recycled automatically.
     pub unsafe fn allocate_one(&self, secondary: bool) -> vk::CommandBuffer {
@@ -126,6 +127,7 @@ impl SharedCommandPool {
         }
     }
     pub fn reset(&mut self, release_resources: bool) {
+        self.indice = 0;
         self.pool.reset(release_resources);
     }
 }

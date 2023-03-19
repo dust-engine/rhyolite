@@ -162,6 +162,8 @@ pub enum QueueSubmissionType {
     Present(Vec<(vk::SwapchainKHR, u32)>),
     Unknown,
 }
+/// TODO: This is not Send because SparseBind is bad, it contains raw ptrs. Fix this.
+unsafe impl Send for QueueSubmissionType {}
 impl Default for QueueSubmissionType {
     fn default() -> Self {
         Self::Unknown
@@ -219,27 +221,9 @@ impl Queues {
             families: device.queue_info().families.clone(),
         }
     }
-    /// Create SharedCommandPool for all queue family with at least one queue
-    pub fn make_shared_command_pools(&self) -> Vec<Option<SharedCommandPool>> {
-        self.families
-            .iter()
-            .enumerate()
-            .map(|(queue_family_index, queues)| {
-                if queues.is_empty() {
-                    None
-                } else {
-                    Some(SharedCommandPool::new(
-                        self.device.clone(),
-                        queue_family_index as u32,
-                    ))
-                }
-            })
-            .collect()
-    }
-
     pub fn submit<'a, F: QueueFuture>(
         &mut self,
-        mut future: F,
+        future: F,
         // These pools are passed in as argument so that they can be cleaned on a regular basis (per frame) externally.
         // The lifetime parameter prevents the caller from dropping the polls before awaiting the returned future.
         shared_command_pools: &mut [Option<SharedCommandPool>],
@@ -269,10 +253,25 @@ impl Queues {
         let device = self.device.clone();
         QueueSubmitFuture::new(device, fences_to_wait, compiled.final_signals, compiled.fut_dispose, compiled.output)
     }
+    /// Safety: Users must manage lifetimes of command buffers and fences manually
+    pub unsafe fn submit_compiled(
+        &mut self,
+        submissions: impl Iterator<Item = CachedStageSubmissions>,
+        fence_pool: &mut impl FencePoolLike
+    ) -> Vec<vk::Fence> {
+
+        let mut submission_batch = SubmissionBatch::new(self.queues.len());
+        for stage in submissions {
+            submission_batch.add_stage(stage);
+        }
+
+        let fences_to_wait = self.submit_batch(submission_batch, fence_pool);
+        fences_to_wait
+    }
     fn submit_batch(
         &mut self,
         batch: SubmissionBatch,
-        fence_pool: &mut FencePool,
+        fence_pool: &mut impl FencePoolLike,
     ) -> Vec<vk::Fence> {
         let mut fences: Vec<vk::Fence> = Vec::new();
         for (queue, queue_batch) in self
@@ -566,7 +565,7 @@ impl TimelineSemaphorePool {
         self.semaphore_ops.push((semaphore, timeline));
     }
     pub fn get_binary_semaphore(&mut self) -> vk::Semaphore {
-        if self.binary_indice <= self.binary_semaphores.len() {
+        if self.binary_indice >= self.binary_semaphores.len() {
             let semaphore = unsafe {
                 self.device
                     .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
@@ -620,7 +619,7 @@ impl FencePool {
         }
     }
     pub fn get(&mut self) -> vk::Fence {
-        if self.indice <= self.all_fences.len() {
+        if self.indice >= self.all_fences.len() {
             let fence = unsafe {
                 self.device
                     .create_fence(&vk::FenceCreateInfo::default(), None)
@@ -650,6 +649,15 @@ impl Drop for FencePool {
                 self.device.destroy_fence(*fence, None);
             }
         }
+    }
+}
+
+pub trait FencePoolLike {
+    fn get(&mut self) -> vk::Fence;
+}
+impl FencePoolLike for FencePool {
+    fn get(&mut self) -> vk::Fence {
+        self.get()
     }
 }
 
@@ -730,7 +738,7 @@ impl CachedQueueStageSubmissions {
     }
 }
 /// Represents one stage of submissions
-pub(super) struct CachedStageSubmissions {
+pub struct CachedStageSubmissions {
     // Indexed by QueueId
     pub(super) queues: Vec<CachedQueueStageSubmissions>,
 }

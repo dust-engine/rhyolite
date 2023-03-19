@@ -6,6 +6,8 @@ use std::{
 pub struct Retainer<T> {
     inner: Arc<T>,
 }
+unsafe impl<T: Send> Send for Retainer<T>{}
+unsafe impl<T: Sync> Sync for Retainer<T>{}
 
 pub struct RetainerHandle<T> {
     inner: Arc<T>,

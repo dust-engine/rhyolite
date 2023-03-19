@@ -90,6 +90,7 @@ pub fn use_shared_state<T>(
     }
 }
 
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 
 use crate::utils::retainer::Retainer;
@@ -99,56 +100,33 @@ use crate::ImageLike;
 use crate::ImageViewLike;
 // probably needs a mpsc channel.
 pub struct PerFrameState<T> {
-    receiver: mpsc::Receiver<T>,
-    sender: mpsc::Sender<T>,
-    items: Vec<T>,
+    receiver: crossbeam_channel::Receiver<T>,
+    sender: crossbeam_channel::Sender<T>,
 
     /// Total number of items stored inside this container,
     /// including owned items and pending (taken) items.
-    total_items: usize,
+    total_items: AtomicUsize,
 }
 impl<T> PerFrameState<T> {
-    fn try_recv(&mut self) -> Option<T> {
-        self.items.pop().or_else(|| match self.receiver.try_recv() {
+    fn try_recv(&self) -> Option<T> {
+        match self.receiver.try_recv() {
             Ok(item) => Some(item),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => panic!(),
-        })
-    }
-    fn recv(&mut self) -> T {
-        self.items
-            .pop()
-            .unwrap_or_else(|| match self.receiver.recv() {
-                Ok(item) => item,
-                Err(mpsc::RecvError) => panic!(),
-            })
-    }
-    fn purge_receiver(&mut self) {
-        while let Some(item) = self
-            .receiver
-            .try_recv()
-            .map_err(|err| {
-                if err == mpsc::TryRecvError::Disconnected {
-                    panic!();
-                }
-                err
-            })
-            .ok()
-        {
-            self.items.push(item);
+            Err(crossbeam_channel::TryRecvError::Empty) => None,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => panic!(),
         }
     }
-    /// Return a slice over all host-accessible items.
-    pub fn items_mut(&mut self) -> &mut [T] {
-        self.purge_receiver();
-        self.items.as_mut_slice()
+    fn recv(&self) -> T {
+        match self.receiver.recv() {
+            Ok(item) => item,
+            Err(crossbeam_channel::RecvError) => panic!(),
+        }
     }
-    pub fn use_state(&mut self, create: impl FnOnce() -> T) -> PerFrameContainer<T> {
+    pub fn use_state(&self, create: impl FnOnce() -> T) -> PerFrameContainer<T> {
         let (item, reused) = self
             .try_recv()
             .map(|mut item| (item, true))
             .unwrap_or_else(|| {
-                self.total_items += 1;
+                self.total_items.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 (create(), false)
             });
         PerFrameContainer {
@@ -159,17 +137,19 @@ impl<T> PerFrameState<T> {
     }
 
     pub fn use_blocking(
-        &mut self,
+        // &mut self ensures we can't run into a race condition where two threads call use_blocking at the same time
+        // in which case we might exceed the max_items limitation
+        &mut self, 
         max_items: usize,
         create: impl FnOnce() -> T,
     ) -> PerFrameContainer<T> {
-        if self.total_items < max_items {
+        if *self.total_items.get_mut() < max_items {
             self.use_state(create)
         } else {
             // When this branch was selected, we're acquiring images faster than we can process them.
             // This is usually due to a max_frame_in_flight number that is smaller than the swapchain image count.
             // When max_frame_in_flight >= swapchain image count, this branch usually shouldn't be triggered.
-            let mut item = self.recv();
+            let item = self.recv();
 
             PerFrameContainer {
                 sender: self.sender.clone(),
@@ -183,17 +163,16 @@ impl<T> PerFrameState<T> {
 unsafe impl<T> Sync for PerFrameState<T> {}
 impl<T> Default for PerFrameState<T> {
     fn default() -> Self {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = crossbeam_channel::unbounded();
         Self {
-            items: Vec::new(),
             receiver,
             sender,
-            total_items: 0,
+            total_items: AtomicUsize::new(0),
         }
     }
 }
 pub struct PerFrameContainer<T> {
-    sender: mpsc::Sender<T>,
+    sender: crossbeam_channel::Sender<T>,
     item: Option<T>,
     reused: bool,
 }

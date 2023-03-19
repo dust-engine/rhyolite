@@ -99,6 +99,7 @@ impl Swapchain {
     }
 }
 
+/// Runs in RenderSystems::SetUp
 pub(super) fn extract_windows(
     mut commands: Commands,
     device: Res<Device>,

@@ -128,9 +128,11 @@ impl Plugin for RenderPlugin {
             .unwrap();
         let allocator = rhyolite::Allocator::new(device.clone());
         let device = Device::new(device);
+        let queues = Queues::new(queues, self.max_frame_in_flight);
 
         app.insert_resource(device.clone())
-            .insert_resource(Queues::new(queues, self.max_frame_in_flight))
+            .insert_resource(queues.async_queues.clone())
+            .insert_resource(queues)
             .insert_resource(QueuesRouter::new(queues_router))
             .insert_resource(Allocator::new(allocator))
             .insert_non_send_resource(swapchain::NonSendResource::default())
