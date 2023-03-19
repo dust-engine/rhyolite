@@ -9,6 +9,7 @@ use std::{
 };
 
 use ash::vk;
+use super::compile::{QueueCompileExt, CompiledQueueFuture};
 
 use pin_project::pin_project;
 
@@ -18,7 +19,7 @@ use crate::{
         CommandBufferRecordContext, Disposable, GPUCommandFuture, StageContextBuffer,
         StageContextImage, StageContextSemaphoreTransition,
     },
-    Device, HasDevice,
+    Device, HasDevice, QueueInfo,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -167,7 +168,7 @@ impl Default for QueueSubmissionType {
     }
 }
 impl QueueSubmissionType {
-    fn end(&mut self, device: &crate::Device) {
+    pub fn end(&mut self, device: &crate::Device) {
         if let QueueSubmissionType::Submit {
             command_buffers,
             recording_command_buffer,
@@ -190,6 +191,7 @@ pub struct Queues {
     queues: Vec<(vk::Queue, u32)>,
 
     /// Mapping from queue families to queue refs
+    /// TODO: this field is unnecessary
     families: Vec<QueueMask>,
 }
 
@@ -203,29 +205,21 @@ impl Queues {
     /// This function can only be called once per device.
     pub(crate) unsafe fn new(
         device: Arc<Device>,
-        num_queue_family: u32,
-        queue_create_infos: &[vk::DeviceQueueCreateInfo],
     ) -> Self {
-        let mut families = vec![QueueMask::empty(); num_queue_family as usize];
-
-        let mut queues: Vec<(vk::Queue, u32)> = Vec::new();
-
-        for info in queue_create_infos.iter() {
-            for i in 0..info.queue_count {
-                families[info.queue_family_index as usize].set_queue(QueueRef(queues.len() as u8));
-                queues.push((
-                    device.get_device_queue(info.queue_family_index, i),
-                    info.queue_family_index,
-                ));
-            }
-        }
+        let mut queues: Vec<(vk::Queue, u32)> = device.queue_info().queues.iter().map(|(family, index)| {
+            let queue = unsafe {
+                device.get_device_queue(*family, *index)
+            };
+            (queue, *family)
+        }).collect();
 
         Self {
             device: device.clone(),
             queues,
-            families,
+            families: device.queue_info().families.clone(),
         }
     }
+    /// Create SharedCommandPool for all queue family with at least one queue
     pub fn make_shared_command_pools(&self) -> Vec<Option<SharedCommandPool>> {
         self.families
             .iter()
@@ -258,152 +252,22 @@ impl Queues {
         F::Output: 'a,
         F::RetainedState: 'a,
     {
-        let mut future_pinned = unsafe { std::pin::Pin::new_unchecked(&mut future) };
-        let mut submission_context = SubmissionContext {
+        let compiled = future.compile(
             shared_command_pools,
-            queues: self
-                .queues
-                .iter()
-                .map(|(_queue, queue_family_index)| QueueSubmissionContext {
-                    queue_family_index: *queue_family_index,
-                    stage_index: 0,
-                    timeline_index: 1,
-                    signals: Default::default(),
-                    waits: Default::default(),
-                    exports: Default::default(),
-                })
-                .collect(),
-            submission: self
-                .queues
-                .iter()
-                .map(|_| QueueSubmissionType::Unknown)
-                .collect(),
-        };
-
-        let mut current_stage = CachedStageSubmissions::new(self.queues.len());
-        let mut submission_stages: Vec<CachedStageSubmissions> = Vec::new();
-        let mut last_submit_stage_index = vec![usize::MAX; self.queues.len()];
-
-        future_pinned
-            .as_mut()
-            .setup(&mut submission_context, recycled_state, QueueMask::empty());
-        let (output, final_signals) = loop {
-            match future_pinned
-                .as_mut()
-                .record(&mut submission_context, recycled_state)
-            {
-                QueueFuturePoll::Barrier => {
-                    continue;
-                }
-                QueueFuturePoll::Semaphore(additional_semaphores_to_wait) => {
-                    let mut last_stage = std::mem::replace(
-                        &mut current_stage,
-                        CachedStageSubmissions::new(self.queues.len()),
-                    );
-                    last_stage.apply_signals(&submission_context, semaphore_pool);
-                    current_stage.apply_submissions(
-                        &submission_context,
-                        &last_stage,
-                        semaphore_pool,
-                    );
-                    current_stage.wait_additional_signals(
-                        &submission_context,
-                        additional_semaphores_to_wait,
-                    );
-                    submission_stages.push(last_stage);
-
-                    for (i, (src, dst)) in submission_context
-                        .submission
-                        .iter_mut()
-                        .zip(current_stage.queues.iter_mut())
-                        .enumerate()
-                    {
-                        dst.ty = std::mem::replace(src, QueueSubmissionType::Unknown);
-                        if let QueueSubmissionType::Submit { .. } = &dst.ty {
-                            last_submit_stage_index[i] = submission_stages.len();
-                        }
-                    }
-
-                    for (i, ctx) in submission_context.queues.iter().enumerate() {
-                        if ctx.exports.is_empty() {
-                            continue;
-                        }
-
-                        let last_accessed_stage = last_submit_stage_index[i];
-                        submission_stages[last_accessed_stage].queues[i]
-                            .apply_exports(ctx, &self.device);
-                    }
-
-                    for ctx in submission_context.queues.iter_mut() {
-                        ctx.stage_index = 0;
-                        ctx.timeline_index += 1;
-                        ctx.waits.clear();
-                        ctx.signals.clear();
-                        ctx.exports.clear();
-                    }
-                }
-                QueueFuturePoll::Ready {
-                    next_queue: _,
-                    output,
-                } => {
-                    let mut last_stage = std::mem::replace(
-                        &mut current_stage,
-                        CachedStageSubmissions::new(self.queues.len()),
-                    );
-                    last_stage.apply_signals(&submission_context, semaphore_pool);
-                    current_stage.apply_submissions(
-                        &submission_context,
-                        &last_stage,
-                        semaphore_pool,
-                    );
-                    submission_stages.push(last_stage);
-
-                    for (i, (src, dst)) in submission_context
-                        .submission
-                        .iter_mut()
-                        .zip(current_stage.queues.iter_mut())
-                        .enumerate()
-                    {
-                        dst.ty = std::mem::replace(src, QueueSubmissionType::Unknown);
-                        if let QueueSubmissionType::Submit { .. } = &dst.ty {
-                            last_submit_stage_index[i] = submission_stages.len();
-                        }
-                    }
-                    for (i, ctx) in submission_context.queues.iter().enumerate() {
-                        if ctx.exports.is_empty() {
-                            continue;
-                        }
-
-                        let last_accessed_stage = last_submit_stage_index[i];
-                        submission_stages[last_accessed_stage].queues[i]
-                            .apply_exports(ctx, &self.device);
-                    }
-                    let final_signals = if apply_final_signal {
-                        Some(current_stage.apply_final_signals(&submission_context, semaphore_pool))
-                    } else {
-                        None
-                    };
-                    submission_stages.push(current_stage);
-                    break (output, final_signals);
-                }
-            }
-        };
+            semaphore_pool,
+            recycled_state,
+            apply_final_signal
+        );
 
         let mut submission_batch = SubmissionBatch::new(self.queues.len());
-        for mut stage in submission_stages.into_iter() {
-            for q in stage.queues.iter_mut() {
-                q.ty.end(&self.device);
-            }
+        for mut stage in compiled.submission_batch.into_iter() {
             submission_batch.add_stage(stage);
         }
 
         let fences_to_wait = self.submit_batch(submission_batch, fence_pool);
 
-        // No more touching of future! It's getting moved.
-        let fut_dispose = future.dispose();
-
         let device = self.device.clone();
-        QueueSubmitFuture::new(device, fences_to_wait, final_signals, fut_dispose, output)
+        QueueSubmitFuture::new(device, fences_to_wait, compiled.final_signals, compiled.fut_dispose, compiled.output)
     }
     fn submit_batch(
         &mut self,
@@ -668,6 +532,11 @@ pub struct TimelineSemaphorePool {
     binary_semaphores: Vec<vk::Semaphore>,
     binary_indice: usize,
 }
+impl HasDevice for TimelineSemaphorePool {
+    fn device(&self) -> &Arc<Device> {
+        &self.device
+    }
+}
 impl TimelineSemaphorePool {
     pub fn new(device: Arc<Device>) -> Self {
         Self {
@@ -786,9 +655,9 @@ impl Drop for FencePool {
 
 /// Represents one queue of one stage of submissions
 #[derive(Default)]
-struct CachedQueueStageSubmissions {
+pub(super) struct CachedQueueStageSubmissions {
     // Indexed
-    ty: QueueSubmissionType,
+    pub ty: QueueSubmissionType,
     waits: Vec<(vk::Semaphore, u64, vk::PipelineStageFlags2)>,
     signals: BTreeMap<vk::PipelineStageFlags2, (vk::Semaphore, u64)>,
 }
@@ -861,9 +730,9 @@ impl CachedQueueStageSubmissions {
     }
 }
 /// Represents one stage of submissions
-struct CachedStageSubmissions {
+pub(super) struct CachedStageSubmissions {
     // Indexed by QueueId
-    queues: Vec<CachedQueueStageSubmissions>,
+    pub(super) queues: Vec<CachedQueueStageSubmissions>,
 }
 impl CachedStageSubmissions {
     pub fn new(num_queues: usize) -> Self {
@@ -874,7 +743,7 @@ impl CachedStageSubmissions {
         }
     }
     /// Called on the previous stage.
-    fn apply_signals(
+    pub fn apply_signals(
         &mut self,
         submission_context: &SubmissionContext,
         semaphore_pool: &mut TimelineSemaphorePool,
@@ -896,7 +765,7 @@ impl CachedStageSubmissions {
 
     /// On the final stage of a QueueFuture, we can call this method to have each queue to signal one
     /// additional timeline semaphore.
-    fn apply_final_signals(
+    pub fn apply_final_signals(
         &mut self,
         submission_context: &SubmissionContext,
         semaphore_pool: &mut TimelineSemaphorePool,
@@ -920,7 +789,7 @@ impl CachedStageSubmissions {
             .collect()
     }
     /// The timeline semaphores signaled in `apply_final_signals` will be awaited here.
-    fn wait_additional_signals(
+    pub fn wait_additional_signals(
         &mut self,
         submission_context: &SubmissionContext,
         semaphores: Vec<(vk::Semaphore, u64)>,
@@ -940,7 +809,7 @@ impl CachedStageSubmissions {
         // TODO: destroy these semaphores
     }
     /// Called on the current stage.
-    fn apply_submissions(
+    pub fn apply_submissions(
         &mut self,
         submission_context: &SubmissionContext,
         prev_stage: &Self,

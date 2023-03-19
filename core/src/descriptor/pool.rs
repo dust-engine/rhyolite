@@ -48,7 +48,7 @@ impl DescriptorPool {
             let pipeline_layout = pipeline_layout.deref();
             max_sets += pipeline_layout.desc_sets().len() as u32;
             if let Some(device) = device.as_ref() {
-                Arc::ptr_eq(device, pipeline_layout.device());
+                assert!(Arc::ptr_eq(device, pipeline_layout.device()));
             } else {
                 device.replace(pipeline_layout.device().clone());
             }

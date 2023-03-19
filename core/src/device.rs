@@ -3,6 +3,8 @@ use ash::vk;
 
 use crate::Instance;
 use crate::PhysicalDevice;
+use crate::QueueInfo;
+use crate::QueueMask;
 use std::collections::BTreeSet;
 use std::ffi::CStr;
 use std::ops::Deref;
@@ -27,9 +29,14 @@ pub struct Device {
     rtx_loader: Option<Box<ash::extensions::khr::RayTracingPipeline>>,
     accel_struct_loader: Option<Box<ash::extensions::khr::AccelerationStructure>>,
     deferred_host_operation_loader: Option<Box<ash::extensions::khr::DeferredHostOperations>>,
+
+    queue_info: QueueInfo
 }
 
 impl Device {
+    pub fn queue_info(&self) -> &QueueInfo {
+        &self.queue_info
+    }
     pub fn swapchain_loader(&self) -> &ash::extensions::khr::Swapchain {
         self.swapchain_loader
             .as_ref()
@@ -54,6 +61,7 @@ impl Device {
         instance: Arc<Instance>,
         physical_device: PhysicalDevice,
         create_info: vk::DeviceCreateInfo,
+        queue_info: QueueInfo
     ) -> VkResult<Self> {
         // Safety: No Host Syncronization rules for VkCreateDevice.
         // Device retains a reference to Instance, ensuring that Instance is dropped later than Device.
@@ -107,6 +115,7 @@ impl Device {
             rtx_loader,
             accel_struct_loader,
             deferred_host_operation_loader,
+            queue_info
         })
     }
     pub fn instance(&self) -> &Arc<Instance> {
