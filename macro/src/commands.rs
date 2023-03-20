@@ -53,16 +53,33 @@ impl CommandsTransformer for CommandsTransformState {
             }));
         output_tokens
     }
-    fn async_transform(&mut self, input: &syn::ExprAwait) -> syn::Expr {
+    fn async_transform(&mut self, input: &syn::ExprAwait, is_inloop: bool) -> syn::Expr {
         let index = syn::Index::from(self.recycled_state_count);
         let global_future_variable_name =
             quote::format_ident!("__future_retain_{}", self.retained_state_count);
         self.retained_state_count += 1;
         self.recycled_state_count += 1;
 
-        self.retain_bindings.extend(quote::quote! {
-            let mut #global_future_variable_name = None;
-        });
+        if is_inloop {
+            self.retain_bindings.extend(quote::quote! {
+                let mut #global_future_variable_name = Vec::new();
+            });
+        } else {
+            self.retain_bindings.extend(quote::quote! {
+                let mut #global_future_variable_name = None;
+            });
+        }
+        let dispose_replace_stmt = if is_inloop {
+            quote::quote! {
+                #global_future_variable_name.push(retain);
+            }
+        } else {
+            quote::quote! {
+                #global_future_variable_name = Some(retain);
+            }
+        };
+
+
         self.retained_states
             .push(syn::Expr::Verbatim(quote::quote! {
                 #global_future_variable_name
@@ -79,15 +96,15 @@ impl CommandsTransformer for CommandsTransformState {
                 unsafe {
                     let mut fut_pinned = std::pin::Pin::new_unchecked(&mut fut);
                     if let Some((out, retain)) = ::rhyolite::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
-                        #global_future_variable_name = Some(retain);
+                        #dispose_replace_stmt
                         out
                     } else {
                         (__fut_global_ctx_ptr, __recycled_states) = yield ::rhyolite::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
                         __fut_global_ctx = ::rhyolite::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
                         loop {
                             match ::rhyolite::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
-                                ::std::task::Poll::Ready((output, retained_state)) => {
-                                    #global_future_variable_name = Some(retained_state);
+                                ::std::task::Poll::Ready((output, retain)) => {
+                                    #dispose_replace_stmt
                                     break output
                                 },
                                 ::std::task::Poll::Pending => {
@@ -102,13 +119,13 @@ impl CommandsTransformer for CommandsTransformState {
         };
         syn::Expr::Verbatim(tokens)
     }
-    fn macro_transform(&mut self, mac: &syn::ExprMacro) -> syn::Expr {
+    fn macro_transform(&mut self, mac: &syn::ExprMacro, in_loop: bool) -> syn::Expr {
         let path = &mac.mac.path;
         if path.segments.len() != 1 {
             return syn::Expr::Macro(mac.clone());
         }
         match path.segments[0].ident.to_string().as_str() {
-            "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens)),
+            "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens, in_loop)),
             "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
             "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
             "fork" => syn::Expr::Verbatim(self.fork_transform(&mac.mac.tokens)),
@@ -140,7 +157,7 @@ impl CommandsTransformer for CommandsTransformState {
     }
 }
 impl CommandsTransformState {
-    fn retain(&mut self, input_tokens: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    fn retain(&mut self, input_tokens: &proc_macro2::TokenStream, in_loop: bool) -> proc_macro2::TokenStream {
         let global_res_variable_name =
             quote::format_ident!("__future_retain_{}", self.retained_state_count);
         self.retained_state_count += 1;
@@ -192,7 +209,7 @@ impl CommandsTransformState {
             stmts: scope
                 .stmts
                 .iter()
-                .map(|stmt| self.transform_stmt(stmt))
+                .map(|stmt| self.transform_stmt(stmt, false))
                 .collect(),
         };
         quote::quote! {{
@@ -249,7 +266,7 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
     let mut inner_closure_stmts: Vec<_> = input
         .stmts
         .iter()
-        .map(|stmt| state.transform_stmt(stmt))
+        .map(|stmt| state.transform_stmt(stmt, false))
         .collect();
 
     // Transform the final return

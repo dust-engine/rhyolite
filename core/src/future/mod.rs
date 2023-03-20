@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::task::Poll;
@@ -15,29 +16,43 @@ pub use state::*;
 pub trait Disposable {
     fn dispose(self);
 }
-pub struct Dispose<T>(ManuallyDrop<T>);
+pub struct Dispose<T>(PhantomData<T>);
 impl<T> Dispose<T> {
-    pub fn new(inner: T) -> Self {
-        Self(ManuallyDrop::new(inner))
+    pub fn new() -> Self {
+        Self(PhantomData)
     }
 }
 impl<T> Disposable for Dispose<T> {
     fn dispose(mut self) {
-        unsafe {
-            ManuallyDrop::drop(&mut self.0);
-        }
         std::mem::forget(self)
     }
 }
 impl<T> Drop for Dispose<T> {
     fn drop(&mut self) {
         if !std::thread::panicking() {
-            panic!("Res<{}> must be disposed!", std::any::type_name::<T>());
-        } else {
-            unsafe {
-                ManuallyDrop::drop(&mut self.0);
-            }
+            panic!("Dispose<{}> must be disposed!", std::any::type_name::<T>());
         }
+    }
+}
+
+pub struct DisposeContainer<T> {
+    inner: ManuallyDrop<T>,
+    marker: Dispose<T>
+}
+impl<T> DisposeContainer<T> {
+    pub fn new(item: T) -> Self {
+        Self {
+            inner: ManuallyDrop::new(item),
+            marker: Dispose::new()
+        }
+    }
+}
+impl<T> Disposable for DisposeContainer<T> {
+    fn dispose(mut self) {
+        unsafe {
+            ManuallyDrop::drop(&mut self.inner);
+        }
+        self.marker.dispose();
     }
 }
 

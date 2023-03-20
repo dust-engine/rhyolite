@@ -4,7 +4,7 @@ use bevy_ecs::system::{Resource, ResMut};
 use crossbeam_channel::{Sender, Receiver};
 use rhyolite::{
     commands::{SharedCommandPool},
-    future::{use_per_frame_state_blocking, PerFrameContainer, PerFrameState},
+    future::{use_per_frame_state_blocking, PerFrameContainer, PerFrameState, Disposable},
     utils::retainer::Retainer,
     FencePool, HasDevice, QueueFuture, TimelineSemaphorePool, CachedStageSubmissions, ash::vk, FencePoolLike,
 };
@@ -104,10 +104,12 @@ impl AsyncQueues {
             // awaiting on the future, we ensure that old frames aren't getting reused by newer frames
             // before the old frame actually finishes rendering.
             let out = compiled.output;
+            let dispose = compiled.fut_dispose;
             async {
                 if let Some(listener) = listener {
                     listener.await;
                 }
+                dispose.dispose();
                 drop(guard);
                 out
             }

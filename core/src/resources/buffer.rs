@@ -398,7 +398,7 @@ impl Allocator {
                 ..Default::default()
             },
             &vk_mem::AllocationCreateInfo {
-                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE | vk_mem::AllocationCreateFlags::MAPPED,
                 usage: vk_mem::MemoryUsage::AutoPreferHost,
                 ..Default::default()
             },

@@ -11,17 +11,28 @@ struct State {
     recycled_state_count: usize,
 }
 impl State {
-    fn retain(&mut self, input_tokens: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    fn retain(&mut self, input_tokens: &proc_macro2::TokenStream, is_inloop: bool) -> proc_macro2::TokenStream {
         let res_token_name = quote::format_ident!("__future_res_{}", self.current_dispose_index);
         self.current_dispose_index += 1;
-        self.dispose_forward_decl.extend(quote::quote! {
-            let mut #res_token_name = None;
-        });
+
         self.dispose_ret_expr
             .push(syn::Expr::Verbatim(res_token_name.to_token_stream()));
-        quote::quote! {{
-            #res_token_name = Some(#input_tokens)
-        }}
+
+        if is_inloop {
+            self.dispose_forward_decl.extend(quote::quote! {
+                let mut #res_token_name = Vec::new();
+            });
+            quote::quote! {{
+                #res_token_name.push(#input_tokens)
+            }}
+        } else {
+            self.dispose_forward_decl.extend(quote::quote! {
+                let mut #res_token_name = None;
+            });
+            quote::quote! {{
+                #res_token_name = Some(#input_tokens)
+            }}
+        }
     }
 
     fn using(&mut self, input_tokens: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
@@ -69,7 +80,7 @@ impl CommandsTransformer for State {
         }
     }
 
-    fn async_transform(&mut self, input: &syn::ExprAwait) -> syn::Expr {
+    fn async_transform(&mut self, input: &syn::ExprAwait, is_inloop: bool) -> syn::Expr {
         let base = input.base.clone();
 
         let dispose_token_name =
@@ -82,9 +93,26 @@ impl CommandsTransformer for State {
         // its dispose method into this location.
         // This needs to be a cell because __dispose_fn_future "pre-mutably-borrows" the value.
         // This value also needs to be written by the .await statement, creating a double borrow.
-        self.dispose_forward_decl.extend(quote::quote! {
-            let mut #dispose_token_name = None;
-        });
+        if is_inloop {
+            self.dispose_forward_decl.extend(quote::quote! {
+                let mut #dispose_token_name = Vec::new();
+            });
+        } else {
+            self.dispose_forward_decl.extend(quote::quote! {
+                let mut #dispose_token_name = None;
+            });
+        }
+        let dispose_replace_stmt = if is_inloop {
+            quote::quote! {
+                #dispose_token_name.push(::rhyolite::QueueFuture::dispose(fut));
+            }
+        } else {
+            quote::quote! {
+                #dispose_token_name.replace(Some(::rhyolite::QueueFuture::dispose(fut)));
+            }
+        };
+
+
         // The program may return at different locations, and upon return, not all futures may have
         // been awaited. We should only await the dispose futures for those actually awaited so far
         // in the QueueFuture. We check this at runtime to avoid returning different variants of
@@ -117,7 +145,7 @@ impl CommandsTransformer for State {
                     ::rhyolite::queue::QueueFuturePoll::Barrier => (__initial_queue, __ctx, __recycled_states) = yield None,
                 };
             };
-            #dispose_token_name.replace(Some(::rhyolite::QueueFuture::dispose(fut)));
+            #dispose_replace_stmt
             output
         }})
     }
@@ -128,14 +156,14 @@ impl CommandsTransformer for State {
     // for blocks, who yields initially?
     // inner block yields. outer block needs to give inner block the current queue, and the inner block choose to yield or not.
 
-    fn macro_transform(&mut self, mac: &syn::ExprMacro) -> syn::Expr {
+    fn macro_transform(&mut self, mac: &syn::ExprMacro, is_inloop: bool) -> syn::Expr {
         let path = &mac.mac.path;
         if path.segments.len() != 1 {
             return syn::Expr::Macro(mac.clone());
         }
         match path.segments[0].ident.to_string().as_str() {
             "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
-            "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens)),
+            "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens, is_inloop)),
             "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
             "using" => syn::Expr::Verbatim(self.using(&mac.mac.tokens)),
             _ => syn::Expr::Macro(mac.clone()),
@@ -169,7 +197,7 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
     let mut inner_closure_stmts: Vec<_> = input
         .stmts
         .iter()
-        .map(|stmt| state.transform_stmt(stmt))
+        .map(|stmt| state.transform_stmt(stmt, false))
         .collect();
 
     let dispose_forward_decl = state.dispose_forward_decl;

@@ -8,7 +8,7 @@ use rhyolite::ash::vk;
 use rhyolite::descriptor::DescriptorPool;
 use rhyolite::future::{
     use_per_frame_state, Dispose, GPUCommandFutureExt, PerFrameContainer, PerFrameState,
-    RenderImage,
+    RenderImage, DisposeContainer,
 };
 use rhyolite::macros::glsl_reflected;
 use rhyolite::utils::retainer::{Retainer, RetainerHandle};
@@ -155,7 +155,7 @@ impl<
 {
     type Output = ();
 
-    type RetainedState = Dispose<(
+    type RetainedState = DisposeContainer<(
         Arc<ComputePipeline>,
         RetainerHandle<DescriptorPool>,
         PerFrameContainer<Vec<vk::DescriptorSet>>,
@@ -252,7 +252,7 @@ impl<
         });
         std::task::Poll::Ready((
             (),
-            Dispose::new((
+            DisposeContainer::new((
                 this.pipeline.pipeline.clone(),
                 this.pipeline.desc_pool.handle(),
                 desc_set,

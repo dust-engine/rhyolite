@@ -48,7 +48,7 @@ impl Default for ResTrackingInfo {
 pub struct RenderRes<T> {
     pub tracking_info: RefCell<ResTrackingInfo>,
     pub inner: T,
-    dispose_marker: Dispose<()>,
+    dispose_marker: Dispose<T>,
 }
 impl<T> Disposable for RenderRes<T> {
     fn dispose(self) {
@@ -61,7 +61,7 @@ impl<T> RenderRes<T> {
         Self {
             tracking_info: Default::default(),
             inner,
-            dispose_marker: Dispose::new(()),
+            dispose_marker: Dispose::new(),
         }
     }
     pub fn inner(&self) -> &T {
@@ -75,11 +75,12 @@ impl<T> RenderRes<T> {
         self.inner
     }
 
-    pub fn map<RET>(mut self, mapper: impl FnOnce(T) -> RET) -> RenderRes<RET> {
+    pub fn map<RET>(self, mapper: impl FnOnce(T) -> RET) -> RenderRes<RET> {
+        self.dispose_marker.dispose();
         RenderRes {
             inner: (mapper)(self.inner),
             tracking_info: self.tracking_info,
-            dispose_marker: self.dispose_marker,
+            dispose_marker: Dispose::new(),
         }
     }
 }
