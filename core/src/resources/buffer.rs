@@ -328,6 +328,7 @@ impl Allocator {
     /// The data will be host visible on ResizableBar, Bar, and UMA memory models.
     /// TRANSFER_DST usage flag will be automatically added to the created buffer.
     /// Suitable for small amount of dynamic data, with staging buffer created separately.
+    /// TODO: rename to create_dynamic_upload_buffer_uninit
     pub fn create_upload_buffer_uninit(
         &self,
         size: vk::DeviceSize,
@@ -359,6 +360,62 @@ impl Allocator {
                 buf
             }
             PhysicalDeviceMemoryModel::Discrete => {
+                create_info.usage |= vk::BufferUsageFlags::TRANSFER_DST;
+                let dst_buffer = self.create_resident_buffer(
+                    &create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        flags: vk_mem::AllocationCreateFlags::empty(),
+                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                        ..Default::default()
+                    },
+                )?;
+                dst_buffer
+            }
+        };
+        Ok(dst_buffer)
+    }
+
+    /// Crate a large device-local buffer with uninitialized data, guaranteed local to the GPU.
+    /// Suitable for large assets with occasionally updated regions.
+    ///
+    /// The data will be host visible on ResizableBar and UMA memory models. On these memory
+    /// architectures, the application may update the buffer directly when it's not already in use
+    /// by the GPU.
+    /// 
+    /// The data will not be host visible on Bar and Discrete memory models. The application must
+    /// use a staging buffer for the updates. TRANSFER_DST usage flag will be automatically added
+    /// to the created buffer.
+    pub fn create_dynamic_asset_buffer_uninit(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> VkResult<ResidentBuffer> {
+        let mut create_info = vk::BufferCreateInfo {
+            size,
+            usage,
+            ..Default::default()
+        };
+
+        let dst_buffer = match self.device().physical_device().memory_model() {
+            PhysicalDeviceMemoryModel::UMA
+            | PhysicalDeviceMemoryModel::ResizableBar => {
+                let buf = self.create_resident_buffer(
+                    &create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        flags: vk_mem::AllocationCreateFlags::MAPPED
+                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                        required_flags: vk::MemoryPropertyFlags::empty(),
+                        preferred_flags: vk::MemoryPropertyFlags::empty(),
+                        memory_type_bits: 0,
+                        user_data: 0,
+                        priority: 0.0,
+                    },
+                )?;
+                buf
+            }
+            PhysicalDeviceMemoryModel::Discrete 
+            | PhysicalDeviceMemoryModel::Bar => {
                 create_info.usage |= vk::BufferUsageFlags::TRANSFER_DST;
                 let dst_buffer = self.create_resident_buffer(
                     &create_info,
@@ -410,6 +467,7 @@ impl Allocator {
     /// We will create a temporary staging buffer on Discrete GPUs with no host-accessible device-local memory.
     /// TRANSFER_DST usage flag will be automatically added to the created buffer.
     /// Suitable for small amount of dynamic data.
+    /// TODO: rename to create_dynamic_buffer_with_writer
     pub fn create_device_buffer_with_writer(
         &self,
         size: vk::DeviceSize,
@@ -442,7 +500,72 @@ impl Allocator {
     /// We will create a temporary staging buffer on Discrete GPUs with no host-accessible device-local memory.
     /// TRANSFER_DST usage flag will be automatically added to the created buffer.
     /// Suitable for small amount of dynamic data.
+    /// TODO: rename to create_dynamic_buffer_with_data
     pub fn create_device_buffer_with_data(
+        &self,
+        data: &[u8],
+        usage: vk::BufferUsageFlags,
+    ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
+        let dst_buffer = self.create_upload_buffer_uninit(data.len() as u64, usage)?;
+        let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {
+            contents[..data.len()].copy_from_slice(data);
+            None
+        } else {
+            let staging_buffer = self.create_staging_buffer(data.len() as u64)?;
+            staging_buffer.contents_mut().unwrap()[..data.len()].copy_from_slice(data);
+            Some(staging_buffer)
+        };
+
+        Ok(commands! {
+            let mut dst_buffer = RenderRes::new(dst_buffer);
+            if let Some(staging_buffer) = staging_buffer {
+                let staging_buffer = RenderRes::new(staging_buffer);
+                copy_buffer(&staging_buffer, &mut dst_buffer).await;
+                retain!(staging_buffer);
+            }
+            dst_buffer
+        })
+    }
+
+    /// Crate a large device-local buffer with a writer callback, only visible to the GPU.
+    /// The data will be directly written to the buffer on ResizableBar, and UMA memory models.
+    /// We will create a temporary staging buffer on Bar and Discrete GPUs with no host-accessible device-local memory.
+    /// TRANSFER_DST usage flag will be automatically added to the created buffer.
+    /// Suitable for large assets with some regions updated occasionally.
+    pub fn create_dynamic_asset_buffer_with_writer(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        writer: impl for<'a> FnOnce(&'a mut [u8]),
+    ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
+        let dst_buffer = self.create_upload_buffer_uninit(size, usage)?;
+        let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {
+            writer(contents);
+            None
+        } else {
+            let staging_buffer = self.create_staging_buffer(size)?;
+            writer(staging_buffer.contents_mut().unwrap());
+            Some(staging_buffer)
+        };
+
+        Ok(commands! {
+            let mut dst_buffer = RenderRes::new(dst_buffer);
+            if let Some(staging_buffer) = staging_buffer {
+                let staging_buffer = RenderRes::new(staging_buffer);
+                copy_buffer(&staging_buffer, &mut dst_buffer).await;
+                retain!(staging_buffer);
+            }
+            dst_buffer
+        })
+    }
+
+
+    /// Crate a large device-local buffer with a writer callback, only visible to the GPU.
+    /// The data will be directly written to the buffer on ResizableBar, and UMA memory models.
+    /// We will create a temporary staging buffer on Bar and Discrete GPUs with no host-accessible device-local memory.
+    /// TRANSFER_DST usage flag will be automatically added to the created buffer.
+    /// Suitable for large assets with some regions updated occasionally.
+    pub fn create_dynamic_asset_buffer_with_data(
         &self,
         data: &[u8],
         usage: vk::BufferUsageFlags,
