@@ -58,6 +58,13 @@ pub trait QueueCompileExt: QueueFuture {
                     continue;
                 }
                 QueueFuturePoll::Semaphore(additional_semaphores_to_wait) => {
+                    if submission_context.submission.iter().all(|s| matches!(s, QueueSubmissionType::Unknown)) {
+                        // Empty submission.
+                        assert!(
+                            submission_context.queues.iter().all(|s| s.stage_index == 0)
+                        );
+                        continue;
+                    }
                     let mut last_stage = std::mem::replace(
                         &mut current_stage,
                         CachedStageSubmissions::new(device.queue_info().queues.len()),
@@ -118,7 +125,12 @@ pub trait QueueCompileExt: QueueFuture {
                         &last_stage,
                         semaphore_pool,
                     );
-                    submission_stages.push(last_stage);
+                    if last_stage.queues.iter().all(|q| matches!(q.ty, QueueSubmissionType::Unknown)) {
+                        assert!(last_stage.queues.iter().all(|q| q.waits.is_empty()));
+                        assert!(last_stage.queues.iter().all(|q| q.signals.is_empty()));
+                    } else {
+                        submission_stages.push(last_stage);
+                    }
 
                     for (i, (src, dst)) in submission_context
                         .submission
@@ -145,7 +157,13 @@ pub trait QueueCompileExt: QueueFuture {
                     } else {
                         None
                     };
-                    submission_stages.push(current_stage);
+
+                    if current_stage.queues.iter().all(|q| matches!(q.ty, QueueSubmissionType::Unknown)) {
+                        assert!(current_stage.queues.iter().all(|q| q.waits.is_empty()));
+                        assert!(current_stage.queues.iter().all(|q| q.signals.is_empty()));
+                    } else {
+                        submission_stages.push(current_stage);
+                    }
                     break (output, final_signals);
                 }
             }
@@ -175,6 +193,19 @@ pub struct CompiledQueueFuture<'a, F: QueueFuture> {
     pub final_signals: Option<Vec<(vk::Semaphore, u64)>>,
     pub output: F::Output,
     _marker: PhantomData<&'a ()>
+}
+impl<'a, F: QueueFuture> CompiledQueueFuture<'a, F> {
+    pub fn is_empty(&self) -> bool {
+        if self.submission_batch.is_empty() {
+            if let Some(final_signals) = self.final_signals.as_ref() 
+            {
+                assert!(final_signals.is_empty());
+            }
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl<T: QueueFuture> QueueCompileExt for T {

@@ -54,6 +54,15 @@ pub struct GPUCommandBlock<R, Retain, Recycle: Default, G> {
     state: GPUCommandBlockState,
     _marker: std::marker::PhantomData<fn(*mut Recycle) -> (R, Retain)>,
 }
+
+/// TODO: This is a bad workaround. We use raw pointers inside the generator and rust had some problems
+/// figuring out their lifetimes, wrongly assuming that they will live across yield points. This causes
+/// Rust to mark the inner generator as Send.
+unsafe impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
+    Send for GPUCommandBlock<R, State, Recycle, G>
+{
+}
+
 impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
     GPUCommandBlock<R, State, Recycle, G>
 {

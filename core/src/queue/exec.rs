@@ -244,7 +244,7 @@ impl Queues {
         );
 
         let mut submission_batch = SubmissionBatch::new(self.queues.len());
-        for mut stage in compiled.submission_batch.into_iter() {
+        for stage in compiled.submission_batch.into_iter() {
             submission_batch.add_stage(stage);
         }
 
@@ -662,12 +662,12 @@ impl FencePoolLike for FencePool {
 }
 
 /// Represents one queue of one stage of submissions
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(super) struct CachedQueueStageSubmissions {
     // Indexed
     pub ty: QueueSubmissionType,
-    waits: Vec<(vk::Semaphore, u64, vk::PipelineStageFlags2)>,
-    signals: BTreeMap<vk::PipelineStageFlags2, (vk::Semaphore, u64)>,
+    pub(super) waits: Vec<(vk::Semaphore, u64, vk::PipelineStageFlags2)>,
+    pub(super) signals: BTreeMap<vk::PipelineStageFlags2, (vk::Semaphore, u64)>,
 }
 impl CachedQueueStageSubmissions {
     pub fn apply_exports(&mut self, ctx: &QueueSubmissionContext, device: &Device) {
@@ -738,6 +738,7 @@ impl CachedQueueStageSubmissions {
     }
 }
 /// Represents one stage of submissions
+#[derive(Debug)]
 pub struct CachedStageSubmissions {
     // Indexed by QueueId
     pub(super) queues: Vec<CachedQueueStageSubmissions>,

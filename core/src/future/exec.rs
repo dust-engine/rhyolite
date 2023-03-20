@@ -70,6 +70,10 @@ impl<T> RenderRes<T> {
     pub fn inner_mut(&mut self) -> &mut T {
         &mut self.inner
     }
+    pub fn into_inner(self) -> T {
+        self.dispose_marker.dispose();
+        self.inner
+    }
 
     pub fn map<RET>(mut self, mapper: impl FnOnce(T) -> RET) -> RenderRes<RET> {
         RenderRes {

@@ -17,7 +17,7 @@ use rhyolite::{
     cstr, Instance, Version,
 };
 
-pub use queue::{Frame, Queues, QueuesRouter};
+pub use queue::{Frame, Queues, QueuesRouter, AsyncQueues};
 pub use swapchain::{Swapchain, SwapchainConfigExt};
 pub use types::*;
 
@@ -48,7 +48,7 @@ impl Default for RenderPlugin {
                 ash::extensions::khr::Surface::name(),
                 ash::extensions::khr::Win32Surface::name(),
             ],
-            physical_device_index: 1,
+            physical_device_index: 0,
             max_frame_in_flight: 3,
         }
     }
@@ -63,9 +63,9 @@ pub enum RenderSystems {
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut bevy_app::App) {
-        app.configure_set(RenderSystems::SetUp)
-            .configure_set(RenderSystems::Render.after(RenderSystems::SetUp))
-            .configure_set(RenderSystems::CleanUp.after(RenderSystems::Render));
+        app.configure_set(Update, RenderSystems::SetUp)
+            .configure_set(Update, RenderSystems::Render.after(RenderSystems::SetUp))
+            .configure_set(Update, RenderSystems::CleanUp.after(RenderSystems::Render));
 
         let entry = unsafe { ash::Entry::load().unwrap() };
         let instance = {
@@ -136,6 +136,9 @@ impl Plugin for RenderPlugin {
             .insert_resource(QueuesRouter::new(queues_router))
             .insert_resource(Allocator::new(allocator))
             .insert_non_send_resource(swapchain::NonSendResource::default())
-            .add_system(swapchain::extract_windows.in_set(RenderSystems::SetUp));
+            .add_systems(Update, (
+                swapchain::extract_windows.in_set(RenderSystems::SetUp),
+                queue::flush_async_queue_system.in_set(RenderSystems::CleanUp)
+            ));
     }
 }

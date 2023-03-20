@@ -1,17 +1,15 @@
 use std::{ops::{Deref, DerefMut}, sync::{Arc, atomic::AtomicU64}, process::Output, future::Future, cell::RefCell};
 
-use bevy_ecs::system::Resource;
+use bevy_ecs::system::{Resource, ResMut};
 use crossbeam_channel::{Sender, Receiver};
 use rhyolite::{
     commands::{SharedCommandPool},
     future::{use_per_frame_state_blocking, PerFrameContainer, PerFrameState},
     utils::retainer::Retainer,
-    FencePool, HasDevice, QueueFuture, TimelineSemaphorePool, CompiledQueueFuture, CachedStageSubmissions, ash::vk, FencePoolLike,
+    FencePool, HasDevice, QueueFuture, TimelineSemaphorePool, CachedStageSubmissions, ash::vk, FencePoolLike,
 };
-use rhyolite::queue::QueueCompileExt;
+use rhyolite::QueueCompileExt;
 use thread_local::ThreadLocal;
-
-use crate::Device;
 
 pub struct Frame {
     shared_command_pools: Vec<Option<SharedCommandPool>>,
@@ -56,11 +54,13 @@ impl AsyncQueues {
 
 
         let batch = self.inner.current_batch.get_or(|| {
-            let mut a = self.inner.batch_queue.use_state(create_batch);
-            for pool in a.shared_command_pool.iter_mut().filter_map(|a| a.as_mut()) {
-                pool.reset(true);
-            }
-            a.shared_semaphore_pool.reset();
+            let a = self.inner.batch_queue.use_state(create_batch)
+            .reuse(|a| {
+                for pool in a.shared_command_pool.iter_mut().filter_map(|a| a.as_mut()) {
+                    pool.reset(true);
+                }
+                a.shared_semaphore_pool.reset();
+            });
             RefCell::new(Retainer::new(a))
         });
         let mut b = batch.borrow_mut();
@@ -70,7 +70,7 @@ impl AsyncQueues {
         }
         callback(retainer)
     }
-    pub fn submit<OUT,F: QueueFuture>(
+    pub fn submit<F: QueueFuture>(
         &self,
         future: F,
         recycled_state: &mut F::RecycledState,
@@ -88,20 +88,26 @@ impl AsyncQueues {
                 false,
             );
             assert!(compiled.final_signals.is_none());
-            
-            let event = event_listener::Event::new();
-            let listener = event.listen();
-            self.sender.send(CompiledQueueFutureErased {
-                submission_batch: compiled.submission_batch,
-                event,
-            }).unwrap();
+            let listener = if !compiled.is_empty() {
+                let event = event_listener::Event::new();
+                let listener = event.listen();
+                self.sender.send(CompiledQueueFutureErased {
+                    submission_batch: compiled.submission_batch,
+                    event,
+                }).unwrap();
+                Some(listener)
+            } else {
+                None
+            };
             
             // By using a retainer to wrap around PerFrameContainer and drop the handle only after
             // awaiting on the future, we ensure that old frames aren't getting reused by newer frames
             // before the old frame actually finishes rendering.
             let out = compiled.output;
             async {
-                listener.await;
+                if let Some(listener) = listener {
+                    listener.await;
+                }
                 drop(guard);
                 out
             }
@@ -109,13 +115,16 @@ impl AsyncQueues {
     }
 }
 
-pub struct AsyncFenceRecycler {
+struct AsyncFenceRecycler {
     device: Arc<rhyolite::Device>,
     fences: Receiver<vk::Fence>,
 }
 impl FencePoolLike for AsyncFenceRecycler {
     fn get(&mut self) -> vk::Fence {
-        self.fences.try_recv().ok().unwrap_or_else(|| unsafe {
+        self.fences.try_recv().ok().map(|fence| unsafe {
+            self.device.reset_fences(&[fence]).unwrap();
+            fence
+        }).unwrap_or_else(|| unsafe {
             self.device.create_fence(&vk::FenceCreateInfo::default(), None).unwrap()
         })
     }
@@ -194,7 +203,7 @@ impl Queues {
                 let device = self.queues.device().clone();
                 let sender = self.fence_recycler_sender.clone();
                 blocking::unblock(move || {
-                    device.wait_for_fences(&fences, true, !0);
+                    device.wait_for_fences(&fences, true, !0).unwrap();
                     for fence in fences.into_iter() {
                         sender.send(fence).unwrap();
                     }
@@ -275,3 +284,8 @@ impl Deref for QueuesRouter {
             .collect()
     }
 
+pub fn flush_async_queue_system(
+    mut queue: ResMut<Queues>,
+) {
+    queue.flush();
+}
