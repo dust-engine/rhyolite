@@ -10,6 +10,7 @@ mod state;
 pub use block::*;
 pub use exec::*;
 pub use ext::*;
+use pin_project::pin_project;
 pub use state::*;
 
 // TODO: Use the dispose crate.
@@ -58,6 +59,17 @@ impl<T> Disposable for DisposeContainer<T> {
 
 impl Disposable for () {
     fn dispose(self) {}
+}
+impl Disposable for Box<dyn Disposable> {
+    fn dispose(self) {
+        (*self).dispose()
+    }
+}
+
+impl Disposable for Box<dyn Disposable + Send> {
+    fn dispose(self) {
+        (*self).dispose()
+    }
 }
 impl<T: Disposable> Disposable for Vec<T> {
     fn dispose(self) {
@@ -160,5 +172,30 @@ pub trait GPUCommandFuture {
         _recycled_state: &mut Self::RecycledState,
     ) -> Option<(Self::Output, Self::RetainedState)> {
         None
+    }
+}
+
+#[pin_project]
+pub struct UnitCommandFuture<T> {
+    obj: Option<T>,
+}
+impl<T> UnitCommandFuture<T> {
+    pub fn new(obj: T) -> Self {
+        UnitCommandFuture { obj: Some(obj) }
+    }
+}
+impl<T> GPUCommandFuture for UnitCommandFuture<T> {
+    type Output = T;
+    type RecycledState = ();
+    type RetainedState = ();
+    fn record(
+            self: Pin<&mut Self>,
+            ctx: &mut CommandBufferRecordContext,
+            recycled_state: &mut Self::RecycledState,
+        ) -> Poll<(Self::Output, Self::RetainedState)> {
+            let this = self.project();
+        Poll::Ready((this.obj.take().unwrap(), ()))
+    }
+    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
     }
 }

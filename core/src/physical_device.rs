@@ -20,7 +20,7 @@ pub struct PhysicalDevice {
 pub struct DeviceCreateInfo<'a, F: Fn(u32) -> Vec<f32>> {
     pub enabled_layer_names: &'a [*const c_char],
     pub enabled_extension_names: &'a [*const c_char],
-    pub enabled_features: PhysicalDeviceFeatures,
+    pub enabled_features: Box<PhysicalDeviceFeatures>,
     pub queue_create_callback: F,
 }
 impl<'a, F: Fn(u32) -> Vec<f32>> DeviceCreateInfo<'a, F> {
@@ -186,6 +186,7 @@ impl PhysicalDevice {
             .enabled_extension_names(infos.enabled_extension_names)
             .push_next(&mut infos.enabled_features.inner)
             .build();
+        tracing::info!("Creating device with {:?}", create_info);
         let queue_info = QueueInfo::new(num_queue_families, &queue_create_infos);
 
         let device = Arc::new(Device::new(self.instance.clone(), self, create_info, queue_info)?);

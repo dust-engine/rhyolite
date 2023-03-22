@@ -25,6 +25,9 @@ pub struct RenderPlugin {
     pub enabled_instance_extensions: Vec<&'static CStr>,
     pub enabled_instance_layers: Vec<&'static CStr>,
 
+    pub enabled_device_extensions: Vec<&'static CStr>,
+    pub enabled_device_features: Box<rhyolite::PhysicalDeviceFeatures>,
+
     pub application_name: CString,
     pub application_version: Version,
     pub engine_name: CString,
@@ -50,6 +53,21 @@ impl Default for RenderPlugin {
             ],
             physical_device_index: 0,
             max_frame_in_flight: 3,
+            enabled_device_extensions: vec![
+                ash::extensions::khr::Swapchain::name()
+            ],
+            enabled_device_features: Box::new(rhyolite::PhysicalDeviceFeatures {
+                v13: vk::PhysicalDeviceVulkan13Features {
+                    synchronization2: vk::TRUE,
+                    ..Default::default()
+                },
+                v12: vk::PhysicalDeviceVulkan12Features {
+                    timeline_semaphore: vk::TRUE,
+                    buffer_device_address: vk::TRUE,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
         }
     }
 }
@@ -101,26 +119,14 @@ impl Plugin for RenderPlugin {
             .skip(self.physical_device_index)
             .next()
             .unwrap();
+        tracing::info!("Using physical device {:?}", 
+        physical_device.properties().device_name());
         let queues_router = rhyolite::QueuesRouter::new(&physical_device);
 
         let (device, queues) = physical_device
             .create_device(rhyolite::DeviceCreateInfo {
-                enabled_features: rhyolite::PhysicalDeviceFeatures {
-                    v13: vk::PhysicalDeviceVulkan13Features {
-                        synchronization2: vk::TRUE,
-                        ..Default::default()
-                    },
-                    v12: vk::PhysicalDeviceVulkan12Features {
-                        timeline_semaphore: vk::TRUE,
-                        buffer_device_address: vk::TRUE,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                enabled_extension_names: &[
-                    ash::extensions::khr::Swapchain::name().as_ptr(),
-                    //ash::vk::ExtSwapchainMaintenance1Fn::name().as_ptr(),
-                ],
+                enabled_features: self.enabled_device_features.clone(),
+                enabled_extension_names: &self.enabled_device_extensions.iter().map(|a| a.as_ptr()).collect::<Vec<_>>(),
                 ..rhyolite::DeviceCreateInfo::with_queue_create_callback(|queue_family_index| {
                     queues_router.priorities(queue_family_index)
                 })

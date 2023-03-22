@@ -74,6 +74,10 @@ impl<T> RenderRes<T> {
         self.dispose_marker.dispose();
         self.inner
     }
+    pub fn inspect(mut self, mapper: impl FnOnce(&mut T)) -> Self {
+        mapper(&mut self.inner);
+        self
+    }
 
     pub fn map<RET>(self, mapper: impl FnOnce(T) -> RET) -> RenderRes<RET> {
         self.dispose_marker.dispose();

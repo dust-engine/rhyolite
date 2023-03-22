@@ -67,7 +67,7 @@ impl AabbBlasBuilder {
             .push((primitives, stride, flags, num_primitives as u32));
         self.geometry_primitive_counts.push(num_primitives as u32);
     }
-    fn build(self, allocator: Allocator) -> VkResult<AccelerationStructureBuild> {
+    pub fn build(self, allocator: Allocator) -> VkResult<AccelerationStructureBuild> {
         let geometries: Vec<vk::AccelerationStructureGeometryKHR> = self
             .geometries
             .iter()
@@ -88,7 +88,7 @@ impl AabbBlasBuilder {
             )
             .collect();
         unsafe {
-            let mut build_size = allocator
+            let build_size = allocator
                 .device()
                 .accel_struct_loader()
                 .get_acceleration_structure_build_sizes(
@@ -103,7 +103,7 @@ impl AabbBlasBuilder {
                     },
                     &self.geometry_primitive_counts,
                 );
-            let mut accel_struct = AccelerationStructure::new_blas_aabb(
+            let accel_struct = AccelerationStructure::new_blas_aabb(
                 &allocator,
                 build_size.acceleration_structure_size,
             )?;

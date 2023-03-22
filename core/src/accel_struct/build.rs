@@ -2,6 +2,8 @@ use std::{alloc::Layout, ops::Range, sync::Arc};
 
 use super::AccelerationStructure;
 use crate::HasDevice;
+use crate::debug::DebugObject;
+use crate::future::{DisposeContainer, Dispose};
 use crate::{future::GPUCommandFuture, Allocator, BufferLike, ResidentBuffer};
 use ash::vk;
 use pin_project::pin_project;
@@ -14,33 +16,30 @@ pub struct AccelerationStructureBuild {
 }
 
 /// Builds many acceleration structures in batch.
-pub struct AccelerationStructureBatchBuilder {
+pub struct AccelerationStructureBatchBuilder<T> {
     allocator: Allocator,
-    builds: Vec<AccelerationStructureBuild>,
+    builds: Vec<(T, AccelerationStructureBuild)>,
 }
 
-impl AccelerationStructureBatchBuilder {
-    pub fn new(allocator: Allocator) -> Self {
+impl<T> AccelerationStructureBatchBuilder<T> {
+    pub fn new(allocator: Allocator, builds: Vec<(T, AccelerationStructureBuild)>) -> Self {
         Self {
             allocator,
-            builds: Vec::new(),
+            builds,
         }
-    }
-    pub fn add_build(&mut self, item: AccelerationStructureBuild) {
-        self.builds.push(item)
     }
     // build on the device.
     /// Instead of calling VkCmdBuildAccelerationStructure multiple times, it calls VkCmdBuildAccelerationStructure
     /// in batch mode, once for BLAS and once for TLAS, with a pipeline barrier inbetween.  
-    pub fn build(self) -> BLASBuildFuture {
+    pub fn build(self) -> BLASBuildFuture<T> {
         // Calculate the total number of geometries
-        let total_num_geometries = self.builds.iter().map(|build| build.geometries.len()).sum();
+        let total_num_geometries = self.builds.iter().map(|(_, build)| build.geometries.len()).sum();
         let mut geometries: Vec<vk::AccelerationStructureGeometryKHR> =
             Vec::with_capacity(total_num_geometries);
         let mut build_ranges: Vec<vk::AccelerationStructureBuildRangeInfoKHR> =
             Vec::with_capacity(total_num_geometries);
         let mut build_range_ptrs: Box<[*const vk::AccelerationStructureBuildRangeInfoKHR]> =
-            Vec::with_capacity(self.builds.len()).into_boxed_slice();
+            vec![std::ptr::null(); self.builds.len()].into_boxed_slice();
 
         let scratch_buffer_alignment =
             self.allocator
@@ -50,33 +49,24 @@ impl AccelerationStructureBatchBuilder {
                 .acceleration_structure
                 .min_acceleration_structure_scratch_offset_alignment as usize;
 
-        let mut scratch_buffer_total: u64 = 0;
-        for build in self.builds.iter() {
-            scratch_buffer_total += Layout::from_size_align(
-                build.build_size.build_scratch_size as usize,
-                scratch_buffer_alignment,
-            )
-            .unwrap()
-            .pad_to_align()
-            .size() as u64;
-        }
-        let scratch_buffer = self
+        let scratch_buffers = self.builds.iter().map(|(_, build)| {
+            let mut scratch_buffer = self
             .allocator
-            .create_device_buffer_uninit(
-                scratch_buffer_total,
+            .create_device_buffer_uninit_aligned(
+                build.build_size.build_scratch_size,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                scratch_buffer_alignment as u64,
             )
             .unwrap();
-        let scratch_buffer_device_address = scratch_buffer.device_address();
-
-        // Create build infos
-        let mut current_scratch_buffer_device_address = scratch_buffer_device_address;
+            scratch_buffer.set_name(&format!("BLAS Build Scratch Buffer for BLAS {:?}", build.accel_struct.raw())).unwrap();
+            scratch_buffer
+        }).collect::<Vec<_>>();
 
         let build_infos = self
             .builds
             .iter()
             .enumerate()
-            .map(|(i, as_build)| {
+            .map(|(i, (_, as_build))| {
                 build_range_ptrs[i] = unsafe { build_ranges.as_ptr().add(build_ranges.len()) };
 
                 // Add geometries
@@ -100,19 +90,8 @@ impl AccelerationStructureBatchBuilder {
                     dst_acceleration_structure: as_build.accel_struct.raw,
                     geometry_count: as_build.geometries.len() as u32,
                     p_geometries: unsafe { geometries.as_ptr().add(geometry_range.start) },
-                    scratch_data: {
-                        let d = vk::DeviceOrHostAddressKHR {
-                            device_address: current_scratch_buffer_device_address,
-                        };
-                        current_scratch_buffer_device_address += Layout::from_size_align(
-                            as_build.build_size.build_scratch_size as usize,
-                            scratch_buffer_alignment,
-                        )
-                        .unwrap()
-                        .pad_to_align()
-                        .size()
-                            as u64;
-                        d
+                    scratch_data: vk::DeviceOrHostAddressKHR {
+                        device_address: scratch_buffers[i].device_address(),
                     },
                     ..Default::default()
                 }
@@ -122,7 +101,10 @@ impl AccelerationStructureBatchBuilder {
 
         assert_eq!(geometries.len(), total_num_geometries);
         assert_eq!(build_ranges.len(), total_num_geometries);
+        let info = self.builds.into_iter().map(|(info, a)| (info, a.accel_struct));
         BLASBuildFuture {
+            scratch_buffers,
+            accel_structs: info.collect(),
             geometries: geometries.into_boxed_slice(),
             build_infos,
             build_range_infos: build_ranges.into_boxed_slice(),
@@ -132,17 +114,19 @@ impl AccelerationStructureBatchBuilder {
 }
 
 #[pin_project]
-pub struct BLASBuildFuture {
+pub struct BLASBuildFuture<T> {
+    scratch_buffers: Vec<ResidentBuffer>,
+    accel_structs: Vec<(T, AccelerationStructure)>,
     geometries: Box<[vk::AccelerationStructureGeometryKHR]>,
     build_infos: Box<[vk::AccelerationStructureBuildGeometryInfoKHR]>,
     build_range_infos: Box<[vk::AccelerationStructureBuildRangeInfoKHR]>,
     build_range_ptrs: Box<[*const vk::AccelerationStructureBuildRangeInfoKHR]>,
 }
 
-impl GPUCommandFuture for BLASBuildFuture {
-    type Output = ();
+impl<T> GPUCommandFuture for BLASBuildFuture<T> {
+    type Output = Vec<(T, AccelerationStructure)>;
 
-    type RetainedState = ();
+    type RetainedState = DisposeContainer<Vec<ResidentBuffer>>;
 
     type RecycledState = ();
 
@@ -164,7 +148,8 @@ impl GPUCommandFuture for BLASBuildFuture {
                 this.build_range_ptrs.as_ptr(),
             )
         });
-        std::task::Poll::Ready(((), ()))
+        let futs = std::mem::replace(this.accel_structs, Vec::new());
+        std::task::Poll::Ready((futs, DisposeContainer::new(std::mem::replace(this.scratch_buffers, Vec::new()))))
     }
 
     fn context(self: std::pin::Pin<&mut Self>, ctx: &mut crate::future::StageContext) {}

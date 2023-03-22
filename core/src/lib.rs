@@ -10,6 +10,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(let_chains)]
 #![feature(int_roundings)]
+#![feature(unsized_locals)]
 
 pub use cstr::cstr;
 

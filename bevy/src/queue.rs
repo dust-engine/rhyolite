@@ -74,9 +74,9 @@ impl AsyncQueues {
         &self,
         future: F,
         recycled_state: &mut F::RecycledState,
-    ) -> impl Future<Output = F::Output> where
-        F::Output: 'static,
-        F::RetainedState: 'static,
+    ) -> impl Future<Output = F::Output> + Send where
+        F::Output: 'static + Send,
+        F::RetainedState: 'static + Send,
     {
         self.current_batch(|batch| {
             let guard = batch.handle();
@@ -129,6 +129,15 @@ impl FencePoolLike for AsyncFenceRecycler {
         }).unwrap_or_else(|| unsafe {
             self.device.create_fence(&vk::FenceCreateInfo::default(), None).unwrap()
         })
+    }
+}
+impl Drop for AsyncFenceRecycler {
+    fn drop(&mut self) {
+        while let Some(fence) = self.fences.try_recv().ok() {
+            unsafe {
+                self.device.destroy_fence(fence, None);
+            }
+        }
     }
 }
 

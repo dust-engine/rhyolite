@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ash::{prelude::VkResult, vk};
 
-use crate::{Allocator, BufferLike, Device, HasDevice, ResidentBuffer};
+use crate::{Allocator, BufferLike, Device, HasDevice, ResidentBuffer, debug::DebugObject};
 
 pub mod blas;
 pub mod build;
@@ -50,12 +50,13 @@ impl AccelerationStructure {
         ty: AccelerationStructureType,
         create_flags: vk::AccelerationStructureCreateFlagsKHR,
     ) -> VkResult<Self> {
-        let backing_buffer = allocator
+        let mut backing_buffer = allocator
             .create_device_buffer_uninit(
                 size,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
             )
             .unwrap();
+        backing_buffer.set_name("AccelerationStructure Backing Storage").unwrap();
         let accel_struct = unsafe {
             allocator
                 .device()

@@ -4,14 +4,14 @@ use std::{
     task::Poll,
 };
 
-use ash::prelude::VkResult;
+use ash::{prelude::VkResult, vk::Handle};
 use ash::vk;
 use pin_project::pin_project;
 
 use crate::{
     future::{CommandBufferRecordContext, GPUCommandFuture, RenderRes, StageContext},
     macros::commands,
-    Allocator, HasDevice, PhysicalDeviceMemoryModel, SharingMode,
+    Allocator, HasDevice, PhysicalDeviceMemoryModel, SharingMode, debug::DebugObject,
 };
 use vk_mem::Alloc;
 
@@ -187,6 +187,20 @@ impl BufferLike for ResidentBuffer {
                 })
         }
     }
+}
+
+impl HasDevice for ResidentBuffer {
+    fn device(&self) -> &std::sync::Arc<crate::Device> {
+        self.allocator.device()
+    }
+}
+
+impl DebugObject for ResidentBuffer {
+    fn object_handle(&mut self) -> u64 {
+        self.buffer.as_raw()
+    }
+
+    const OBJECT_TYPE: vk::ObjectType = vk::ObjectType::BUFFER;
 }
 
 impl Drop for ResidentBuffer {

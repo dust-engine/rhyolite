@@ -16,6 +16,8 @@ thread_local = "^1"
 event-listener = "2.5.1"
 blocking = "1.2"
 crossbeam-channel = "^0.5"
+tracing = "0.1"
+
 
 [dev-dependencies]
 image = "0.24"
