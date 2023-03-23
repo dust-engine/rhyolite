@@ -235,6 +235,26 @@ impl Allocator {
             size: buffer_info.size,
         })
     }
+    /// Create uninitialized buffer visible to the CPU and local to the GPU.
+    /// Only applicable to Bar, ReBar, Integrated memory architecture.
+    pub fn create_write_buffer_uninit(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> VkResult<ResidentBuffer> {
+        let buffer_create_info = vk::BufferCreateInfo {
+            size,
+            usage,
+            ..Default::default()
+        };
+        let alloc_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE | vk_mem::AllocationCreateFlags::MAPPED,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE,
+            ..Default::default()
+        };
+        self.create_resident_buffer(&buffer_create_info, &alloc_info)
+    }
     /// Create uninitialized buffer only visible to the GPU.
     pub fn create_device_buffer_uninit(
         &self,

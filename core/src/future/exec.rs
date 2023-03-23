@@ -450,8 +450,7 @@ impl StageContext {
         res: &mut RenderRes<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
-    ) where
-        T: BufferLike,
+    )
     {
         let access = Access {
             write_access: accesses,

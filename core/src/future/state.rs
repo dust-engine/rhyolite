@@ -74,19 +74,42 @@ impl<T: ImageViewLike> ImageViewLike for SharedDeviceState<T> {
 /// The old object will be dropped when its reference count drops to zero.
 pub fn use_shared_state<T>(
     this: &mut Option<SharedDeviceStateHostContainer<T>>,
-    create: impl FnOnce() -> T,
+    create: impl FnOnce(Option<&T>) -> T,
     should_update: impl FnOnce(&T) -> bool,
 ) -> SharedDeviceState<T> {
     if let Some(inner) = this {
         let inner = &mut inner.0;
         if should_update(&inner) {
-            *inner = Arc::new(create());
+            *inner = Arc::new(create(Some(&inner)));
         }
         SharedDeviceState(inner.clone())
     } else {
-        let item = Arc::new(create());
+        let item = Arc::new(create(None));
         *this = Some(SharedDeviceStateHostContainer(item));
         SharedDeviceState(this.as_ref().unwrap().0.clone())
+    }
+}
+
+
+/// Returns (new, old)
+pub fn use_shared_state_with_old<T>(
+    this: &mut Option<SharedDeviceStateHostContainer<T>>,
+    create: impl FnOnce(Option<&T>) -> T,
+    should_update: impl FnOnce(&T) -> bool,
+) -> (SharedDeviceState<T>, Option<SharedDeviceState<T>>) {
+    if let Some(inner) = this {
+        let inner = &mut inner.0;
+        let old = if should_update(&inner) {
+            Some(std::mem::replace(inner, Arc::new(create(Some(&inner)))))
+        } else {
+            None
+        };
+        (
+            SharedDeviceState(inner.clone()), old.map(|old| SharedDeviceState(old)))
+    } else {
+        let item = Arc::new(create(None));
+        *this = Some(SharedDeviceStateHostContainer(item));
+        (SharedDeviceState(this.as_ref().unwrap().0.clone()), None)
     }
 }
 

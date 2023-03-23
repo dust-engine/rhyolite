@@ -272,7 +272,7 @@ impl<T: HitgroupSbtEntry> HitgroupSbtVec<T> {
         let device_buffer = if needs_copy {
             let device_buffer = use_shared_state(
                 &mut self.device_buffer,
-                || {
+                |_| {
                     let buffer = self
                         .allocator
                         .create_device_buffer_uninit(
