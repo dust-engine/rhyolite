@@ -1,9 +1,6 @@
-use crate::{
-    descriptor::DescriptorSetLayout, shader::ShaderModuleEntryPoint, Device, HasDevice,
-    ReflectedShaderModule,
-};
+use crate::{descriptor::DescriptorSetLayout, shader::ShaderModuleEntryPoint, Device, HasDevice};
 use ash::{prelude::VkResult, vk};
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 pub struct PipelineLayout {
     device: Arc<Device>,

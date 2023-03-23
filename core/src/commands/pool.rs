@@ -1,7 +1,7 @@
 use crate::{Device, HasDevice};
 use ash::vk;
 
-use std::{sync::Arc, rc::Rc, cell::{RefCell, Cell}};
+use std::sync::Arc;
 
 /// An unsafe command pool. Command buffer lifecycles are unmanaged.
 pub struct UnsafeCommandPool {

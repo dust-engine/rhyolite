@@ -1,11 +1,13 @@
-use std::{alloc::Layout, sync::Arc, ops::Deref};
+use std::{alloc::Layout, ops::Deref, sync::Arc};
 
-use ash::{prelude::VkResult, vk::{self}};
-use macros::set_layout;
+use ash::{
+    prelude::VkResult,
+    vk::{self},
+};
 
 use crate::{
-    shader::{self, SpecializedReflectedShader, SpecializedShader, ShaderModule},
-    HasDevice, PipelineCache, PipelineLayout, ReflectedShaderModule, Device, DeferredOperation,
+    shader::{ShaderModule, SpecializedShader},
+    DeferredOperation, Device, HasDevice, PipelineCache, PipelineLayout,
 };
 
 pub struct RayTracingPipeline {
@@ -67,7 +69,7 @@ impl Default for RayTracingPipelineLibraryCreateInfo {
             pipeline_create_flags: Default::default(),
             max_pipeline_ray_recursion_depth: 1,
             max_pipeline_ray_payload_size: 4,
-            max_pipeline_ray_hit_attribute_size: 32
+            max_pipeline_ray_hit_attribute_size: 32,
         }
     }
 }
@@ -78,20 +80,25 @@ impl RayTracingPipelineLibrary {
     }
     pub fn create_for_hitgroups<'a, S: Deref<Target = ShaderModule>>(
         layout: Arc<PipelineLayout>,
-        hitgroups: impl ExactSizeIterator<Item = (
-            Option<SpecializedShader<'a, S>>, // rchit
-            Option<SpecializedShader<'a, S>>, // rint
-            Option<SpecializedShader<'a, S>>, // rahit
-        )>,
+        hitgroups: impl ExactSizeIterator<
+            Item = (
+                Option<SpecializedShader<'a, S>>, // rchit
+                Option<SpecializedShader<'a, S>>, // rint
+                Option<SpecializedShader<'a, S>>, // rahit
+            ),
+        >,
         info: &RayTracingPipelineLibraryCreateInfo,
         pipeline_cache: Option<&PipelineCache>,
         deferred_operation: Option<&mut DeferredOperation>,
         ty: RayTracingHitGroupType,
     ) -> (Self, vk::Result) {
-        let mut stages: Vec<vk::PipelineShaderStageCreateInfo> = Vec::with_capacity(hitgroups.len() * 3);
-        let mut specialization_info: Vec<vk::SpecializationInfo> = Vec::with_capacity(hitgroups.len() * 3);
-        let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR> = Vec::with_capacity(hitgroups.len());
-    
+        let mut stages: Vec<vk::PipelineShaderStageCreateInfo> =
+            Vec::with_capacity(hitgroups.len() * 3);
+        let mut specialization_info: Vec<vk::SpecializationInfo> =
+            Vec::with_capacity(hitgroups.len() * 3);
+        let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR> =
+            Vec::with_capacity(hitgroups.len());
+
         for (rchit, rint, rahit) in hitgroups {
             let mut rchit_stage: u32 = vk::SHADER_UNUSED_KHR;
             let mut rint_stage: u32 = vk::SHADER_UNUSED_KHR;
@@ -116,7 +123,7 @@ impl RayTracingPipelineLibrary {
                     ..Default::default()
                 });
             }
-            
+
             if let Some(shader) = rint.as_ref() {
                 assert_eq!(shader.stage, vk::ShaderStageFlags::INTERSECTION_KHR);
                 rint_stage = stages.len() as u32;
@@ -205,7 +212,7 @@ impl RayTracingPipelineLibrary {
                     num_callable: 0,
                     num_hitgroup: groups.len() as u32,
                 },
-                result
+                result,
             )
         }
     }
@@ -312,7 +319,7 @@ impl RayTracingPipelineLibrary {
                     num_callable,
                     num_hitgroup: 0,
                 },
-                result
+                result,
             )
         }
     }
@@ -323,7 +330,7 @@ impl RayTracingPipeline {
         libs: impl Iterator<Item = &'a RayTracingPipelineLibrary>,
         info: &RayTracingPipelineLibraryCreateInfo,
         pipeline_cache: Option<&PipelineCache>,
-        deferred_operation: Option<&mut DeferredOperation>
+        deferred_operation: Option<&mut DeferredOperation>,
     ) -> (Self, vk::Result) {
         let mut device: Option<Arc<Device>> = None;
         let mut layout: Option<Arc<PipelineLayout>> = None;
@@ -332,48 +339,49 @@ impl RayTracingPipeline {
         let mut num_raymiss: u32 = 0;
         let mut num_hitgroup: u32 = 0;
         let mut num_callable: u32 = 0;
-        let raw_libs: Vec<_> = libs.inspect(|lib| {
-            if let Some(device) = device.as_mut() {
-                assert!(Arc::ptr_eq(device, lib.device()));
-            } else {
-                device = Some(lib.device().clone());
-            }
-            
-            if let Some(layout) = layout.as_mut() {
-                assert!(Arc::ptr_eq(layout, &lib.layout));
-            } else {
-                layout = Some(lib.layout.clone());
-            }
+        let raw_libs: Vec<_> = libs
+            .inspect(|lib| {
+                if let Some(device) = device.as_mut() {
+                    assert!(Arc::ptr_eq(device, lib.device()));
+                } else {
+                    device = Some(lib.device().clone());
+                }
 
-            if lib.num_raygen != 0 {
-                assert!(
-                    num_callable == 0 && num_raymiss == 0 && num_hitgroup == 0,
-                    "Ray Generation Shader must be specified before everything else"
-                );
-            }
-            if lib.num_raymiss != 0 {
-                assert!(
-                    num_callable == 0 && num_hitgroup == 0,
-                    "Miss Shader must be specified before callable and hitgroup shaders"
-                );
-            }
-            if lib.num_callable != 0 {
-                assert!(
-                    num_hitgroup == 0,
-                    "Callable Shader must be specified before hitgroup shaders"
-                );
-            }
-            num_raygen += lib.num_raygen;
-            num_raymiss += lib.num_raymiss;
-            num_hitgroup += lib.num_hitgroup;
-            num_callable += lib.num_callable;
-        }).map(|lib| lib.raw()).collect();
+                if let Some(layout) = layout.as_mut() {
+                    assert!(Arc::ptr_eq(layout, &lib.layout));
+                } else {
+                    layout = Some(lib.layout.clone());
+                }
+
+                if lib.num_raygen != 0 {
+                    assert!(
+                        num_callable == 0 && num_raymiss == 0 && num_hitgroup == 0,
+                        "Ray Generation Shader must be specified before everything else"
+                    );
+                }
+                if lib.num_raymiss != 0 {
+                    assert!(
+                        num_callable == 0 && num_hitgroup == 0,
+                        "Miss Shader must be specified before callable and hitgroup shaders"
+                    );
+                }
+                if lib.num_callable != 0 {
+                    assert!(
+                        num_hitgroup == 0,
+                        "Callable Shader must be specified before hitgroup shaders"
+                    );
+                }
+                num_raygen += lib.num_raygen;
+                num_raymiss += lib.num_raymiss;
+                num_hitgroup += lib.num_hitgroup;
+                num_callable += lib.num_callable;
+            })
+            .map(|lib| lib.raw())
+            .collect();
         let Some(device) = device else {
             panic!()
         };
         let layout = layout.unwrap();
-
-
 
         let mut pipeline: vk::Pipeline = vk::Pipeline::null();
         let result = unsafe {
@@ -404,14 +412,17 @@ impl RayTracingPipeline {
             )
         };
 
-        (Self {
-            layout,
-            pipeline,
-            num_callable,
-            num_hitgroup,
-            num_raygen,
-            num_raymiss,
-        }, result)
+        (
+            Self {
+                layout,
+                pipeline,
+                num_callable,
+                num_hitgroup,
+                num_raygen,
+                num_raymiss,
+            },
+            result,
+        )
     }
     pub fn get_shader_group_handles(&self) -> VkResult<SbtHandles> {
         SbtHandles::new(self)

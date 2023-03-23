@@ -1,6 +1,6 @@
 use crate::{sampler::Sampler, Device, HasDevice};
 use ash::{prelude::VkResult, vk};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct DescriptorSetLayoutBindingInfo {

@@ -6,11 +6,12 @@ use ash::{
 use crossbeam_channel::Sender;
 use event_listener::Event;
 use std::{
+    future::Future,
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicI32},
+        atomic::{AtomicBool, AtomicU32},
         Arc,
     },
-    thread::JoinHandle, future::Future,
+    thread::JoinHandle,
 };
 
 pub struct DeferredOperation {
@@ -142,11 +143,11 @@ impl DeferredOperationTaskPool {
                                     sender.send(task.clone()).unwrap();
                                 }
                             }
-                            result => {
+                            _result => {
                                 task.concurrency
                                     .store(0, std::sync::atomic::Ordering::Relaxed);
                                 task.event.notify_relaxed(1);
-                            },
+                            }
                         }
                     }
                 })
@@ -156,10 +157,13 @@ impl DeferredOperationTaskPool {
             sender,
             terminate,
             threads,
-            available_parallelism
+            available_parallelism,
         }
     }
-    pub fn schedule_deferred_operation(&self, op: DeferredOperation) -> impl Future<Output = vk::Result> {
+    pub fn schedule_deferred_operation(
+        &self,
+        op: DeferredOperation,
+    ) -> impl Future<Output = vk::Result> {
         let concurrency = op.get_max_concurrency().max(self.available_parallelism);
         let event = Event::new();
         let task = Task {

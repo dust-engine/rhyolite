@@ -1,5 +1,3 @@
-use std::process::Output;
-
 /// Given iterator of the form `Iterator<Item=uxx>`
 /// emitting ordered items,
 /// `MergeRangeIterator` emits list of (start, size)

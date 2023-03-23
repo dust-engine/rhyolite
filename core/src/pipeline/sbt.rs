@@ -4,26 +4,23 @@
 
 use std::{
     alloc::Layout,
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap},
     hash::Hash,
-    ops::{Deref, DerefMut},
     sync::{Arc, Weak},
 };
 
 use ash::{prelude::VkResult, vk};
-use macros::{commands, gpu};
+use macros::commands;
 
 use crate::{
-    commands::SharedCommandPool,
     copy_buffer, copy_buffer_regions,
     future::{
-        use_per_frame_state, use_shared_state, GPUCommandFuture, GPUCommandFutureExt,
-        PerFrameState, RenderRes, SharedDeviceStateHostContainer,
+        use_shared_state, GPUCommandFuture, GPUCommandFutureExt, PerFrameState, RenderRes,
+        SharedDeviceStateHostContainer,
     },
-    utils::{merge_ranges::MergeRangeIteratorExt, retainer::Retainer},
-    Allocator, BufferLike, FencePool, HasDevice, PhysicalDeviceMemoryModel, QueueFuture, QueueRef,
-    QueueSubmitFuture, Queues, QueuesRouter, RayTracingPipeline, ResidentBuffer, SbtHandles,
-    TimelineSemaphorePool,
+    utils::merge_ranges::MergeRangeIteratorExt,
+    Allocator, BufferLike, HasDevice, PhysicalDeviceMemoryModel, RayTracingPipeline,
+    ResidentBuffer, SbtHandles,
 };
 
 pub trait HitgroupSbtEntry: Hash + Eq + Clone {

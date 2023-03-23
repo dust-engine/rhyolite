@@ -24,7 +24,7 @@ impl<T> Dispose<T> {
     }
 }
 impl<T> Disposable for Dispose<T> {
-    fn dispose(mut self) {
+    fn dispose(self) {
         std::mem::forget(self)
     }
 }
@@ -38,13 +38,13 @@ impl<T> Drop for Dispose<T> {
 
 pub struct DisposeContainer<T> {
     inner: ManuallyDrop<T>,
-    marker: Dispose<T>
+    marker: Dispose<T>,
 }
 impl<T> DisposeContainer<T> {
     pub fn new(item: T) -> Self {
         Self {
             inner: ManuallyDrop::new(item),
-            marker: Dispose::new()
+            marker: Dispose::new(),
         }
     }
 }
@@ -189,13 +189,12 @@ impl<T> GPUCommandFuture for UnitCommandFuture<T> {
     type RecycledState = ();
     type RetainedState = ();
     fn record(
-            self: Pin<&mut Self>,
-            ctx: &mut CommandBufferRecordContext,
-            recycled_state: &mut Self::RecycledState,
-        ) -> Poll<(Self::Output, Self::RetainedState)> {
-            let this = self.project();
+        self: Pin<&mut Self>,
+        _ctx: &mut CommandBufferRecordContext,
+        _recycled_state: &mut Self::RecycledState,
+    ) -> Poll<(Self::Output, Self::RetainedState)> {
+        let this = self.project();
         Poll::Ready((this.obj.take().unwrap(), ()))
     }
-    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
-    }
+    fn context(self: Pin<&mut Self>, _ctx: &mut StageContext) {}
 }

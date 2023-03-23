@@ -1,12 +1,7 @@
-use std::ffi::CString;
-
 use ash::{prelude::VkResult, vk};
 
 use super::PipelineCache;
-use crate::{
-    shader::{SpecializationInfo, SpecializedReflectedShader},
-    HasDevice, ReflectedShaderModule,
-};
+use crate::{shader::SpecializedReflectedShader, HasDevice};
 
 use super::PipelineLayout;
 use std::sync::Arc;

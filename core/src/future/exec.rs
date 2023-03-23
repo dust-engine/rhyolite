@@ -7,7 +7,6 @@ use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
     marker::PhantomData,
-    mem::ManuallyDrop,
     pin::Pin,
     task::Poll,
 };
@@ -450,8 +449,7 @@ impl StageContext {
         res: &mut RenderRes<T>,
         stages: vk::PipelineStageFlags2,
         accesses: vk::AccessFlags2,
-    )
-    {
+    ) {
         let access = Access {
             write_access: accesses,
             write_stages: stages,
@@ -672,7 +670,7 @@ impl<'a> CommandBufferRecordContext<'a> {
         fut.as_mut().context(&mut next_stage);
         (context_handler)(&next_stage);
 
-        let queue = self.queue;
+        let _queue = self.queue;
         Self::add_barrier(&next_stage, |dependency_info| {
             self.record(|ctx, command_buffer| unsafe {
                 ctx.device()

@@ -4,14 +4,15 @@ use std::{
     task::Poll,
 };
 
-use ash::{prelude::VkResult, vk::Handle};
 use ash::vk;
+use ash::{prelude::VkResult, vk::Handle};
 use pin_project::pin_project;
 
 use crate::{
+    debug::DebugObject,
     future::{CommandBufferRecordContext, GPUCommandFuture, RenderRes, StageContext},
     macros::commands,
-    Allocator, HasDevice, PhysicalDeviceMemoryModel, SharingMode, debug::DebugObject,
+    Allocator, HasDevice, PhysicalDeviceMemoryModel, SharingMode,
 };
 use vk_mem::Alloc;
 
@@ -249,8 +250,10 @@ impl Allocator {
         };
         let alloc_info = vk_mem::AllocationCreateInfo {
             usage: vk_mem::MemoryUsage::AutoPreferDevice,
-            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE | vk_mem::AllocationCreateFlags::MAPPED,
-            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE,
+            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                | vk_mem::AllocationCreateFlags::MAPPED,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL
+                | vk::MemoryPropertyFlags::HOST_VISIBLE,
             ..Default::default()
         };
         self.create_resident_buffer(&buffer_create_info, &alloc_info)
@@ -415,7 +418,7 @@ impl Allocator {
     /// The data will be host visible on ResizableBar and UMA memory models. On these memory
     /// architectures, the application may update the buffer directly when it's not already in use
     /// by the GPU.
-    /// 
+    ///
     /// The data will not be host visible on Bar and Discrete memory models. The application must
     /// use a staging buffer for the updates. TRANSFER_DST usage flag will be automatically added
     /// to the created buffer.
@@ -431,8 +434,7 @@ impl Allocator {
         };
 
         let dst_buffer = match self.device().physical_device().memory_model() {
-            PhysicalDeviceMemoryModel::UMA
-            | PhysicalDeviceMemoryModel::ResizableBar => {
+            PhysicalDeviceMemoryModel::UMA | PhysicalDeviceMemoryModel::ResizableBar => {
                 let buf = self.create_resident_buffer(
                     &create_info,
                     &vk_mem::AllocationCreateInfo {
@@ -448,8 +450,7 @@ impl Allocator {
                 )?;
                 buf
             }
-            PhysicalDeviceMemoryModel::Discrete 
-            | PhysicalDeviceMemoryModel::Bar => {
+            PhysicalDeviceMemoryModel::Discrete | PhysicalDeviceMemoryModel::Bar => {
                 create_info.usage |= vk::BufferUsageFlags::TRANSFER_DST;
                 let dst_buffer = self.create_resident_buffer(
                     &create_info,
@@ -489,7 +490,8 @@ impl Allocator {
                 ..Default::default()
             },
             &vk_mem::AllocationCreateInfo {
-                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE | vk_mem::AllocationCreateFlags::MAPPED,
+                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                    | vk_mem::AllocationCreateFlags::MAPPED,
                 usage: vk_mem::MemoryUsage::AutoPreferHost,
                 ..Default::default()
             },
@@ -592,7 +594,6 @@ impl Allocator {
             dst_buffer
         })
     }
-
 
     /// Crate a large device-local buffer with a writer callback, only visible to the GPU.
     /// The data will be directly written to the buffer on ResizableBar, and UMA memory models.

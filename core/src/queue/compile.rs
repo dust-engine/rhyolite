@@ -1,9 +1,12 @@
-use std::{any::Any, marker::PhantomData};
+use std::marker::PhantomData;
 
 use ash::vk;
 
-use crate::{QueueFuture, SubmissionContext, QueueSubmissionContext, QueueMask, QueueFuturePoll, QueueSubmissionType, SubmissionBatch, commands::SharedCommandPool, TimelineSemaphorePool, FencePool, utils::retainer::Retainer, HasDevice};
 use super::exec::CachedStageSubmissions;
+use crate::{
+    commands::SharedCommandPool, HasDevice, QueueFuture, QueueFuturePoll, QueueMask,
+    QueueSubmissionContext, QueueSubmissionType, SubmissionContext, TimelineSemaphorePool,
+};
 
 pub trait QueueCompileExt: QueueFuture {
     fn compile<'a>(
@@ -24,7 +27,8 @@ pub trait QueueCompileExt: QueueFuture {
         let mut future_pinned = unsafe { std::pin::Pin::new_unchecked(&mut self) };
         let mut submission_context = SubmissionContext {
             shared_command_pools,
-            queues: device.queue_info()
+            queues: device
+                .queue_info()
                 .queues
                 .iter()
                 .map(|(queue_family_index, _)| QueueSubmissionContext {
@@ -36,7 +40,9 @@ pub trait QueueCompileExt: QueueFuture {
                     exports: Default::default(),
                 })
                 .collect(),
-            submission: device.queue_info().queues
+            submission: device
+                .queue_info()
+                .queues
                 .iter()
                 .map(|_| QueueSubmissionType::Unknown)
                 .collect(),
@@ -58,11 +64,13 @@ pub trait QueueCompileExt: QueueFuture {
                     continue;
                 }
                 QueueFuturePoll::Semaphore(additional_semaphores_to_wait) => {
-                    if submission_context.submission.iter().all(|s| matches!(s, QueueSubmissionType::Unknown)) {
+                    if submission_context
+                        .submission
+                        .iter()
+                        .all(|s| matches!(s, QueueSubmissionType::Unknown))
+                    {
                         // Empty submission.
-                        assert!(
-                            submission_context.queues.iter().all(|s| s.stage_index == 0)
-                        );
+                        assert!(submission_context.queues.iter().all(|s| s.stage_index == 0));
                         continue;
                     }
                     let mut last_stage = std::mem::replace(
@@ -125,7 +133,11 @@ pub trait QueueCompileExt: QueueFuture {
                         &last_stage,
                         semaphore_pool,
                     );
-                    if last_stage.queues.iter().all(|q| matches!(q.ty, QueueSubmissionType::Unknown)) {
+                    if last_stage
+                        .queues
+                        .iter()
+                        .all(|q| matches!(q.ty, QueueSubmissionType::Unknown))
+                    {
                         assert!(last_stage.queues.iter().all(|q| q.waits.is_empty()));
                         assert!(last_stage.queues.iter().all(|q| q.signals.is_empty()));
                     } else {
@@ -158,7 +170,11 @@ pub trait QueueCompileExt: QueueFuture {
                         None
                     };
 
-                    if current_stage.queues.iter().all(|q| matches!(q.ty, QueueSubmissionType::Unknown)) {
+                    if current_stage
+                        .queues
+                        .iter()
+                        .all(|q| matches!(q.ty, QueueSubmissionType::Unknown))
+                    {
                         assert!(current_stage.queues.iter().all(|q| q.waits.is_empty()));
                         assert!(current_stage.queues.iter().all(|q| q.signals.is_empty()));
                     } else {
@@ -169,7 +185,7 @@ pub trait QueueCompileExt: QueueFuture {
             }
         };
 
-        for mut stage in submission_stages.iter_mut() {
+        for stage in submission_stages.iter_mut() {
             for q in stage.queues.iter_mut() {
                 q.ty.end(&device);
             }
@@ -182,7 +198,7 @@ pub trait QueueCompileExt: QueueFuture {
             fut_dispose,
             final_signals,
             output,
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 }
@@ -192,13 +208,12 @@ pub struct CompiledQueueFuture<'a, F: QueueFuture> {
     pub fut_dispose: F::RetainedState,
     pub final_signals: Option<Vec<(vk::Semaphore, u64)>>,
     pub output: F::Output,
-    _marker: PhantomData<&'a ()>
+    _marker: PhantomData<&'a ()>,
 }
 impl<'a, F: QueueFuture> CompiledQueueFuture<'a, F> {
     pub fn is_empty(&self) -> bool {
         if self.submission_batch.is_empty() {
-            if let Some(final_signals) = self.final_signals.as_ref() 
-            {
+            if let Some(final_signals) = self.final_signals.as_ref() {
                 assert!(final_signals.is_empty());
             }
             true
@@ -208,6 +223,4 @@ impl<'a, F: QueueFuture> CompiledQueueFuture<'a, F> {
     }
 }
 
-impl<T: QueueFuture> QueueCompileExt for T {
-
-}
+impl<T: QueueFuture> QueueCompileExt for T {}

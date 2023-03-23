@@ -1,7 +1,7 @@
 use ash::{prelude::VkResult, vk};
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
-use crate::{debug::DebugObject, Allocator, Device, HasDevice, SharingMode};
+use crate::{Allocator, Device, HasDevice, SharingMode};
 
 pub trait ImageLike: HasDevice {
     fn raw_image(&self) -> vk::Image;

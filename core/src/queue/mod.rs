@@ -4,10 +4,9 @@ use ash::vk;
 pub use exec::*;
 
 mod router;
+pub use compile::{CompiledQueueFuture, QueueCompileExt};
 pub use router::{QueueType, QueuesRouter};
-pub use compile::{QueueCompileExt, CompiledQueueFuture};
 mod compile;
-
 
 pub struct QueueInfo {
     /// (Queue family, index in that family) indexed by queue index
@@ -25,14 +24,9 @@ impl QueueInfo {
         for info in queue_create_infos.iter() {
             for i in 0..info.queue_count {
                 families[info.queue_family_index as usize].set_queue(QueueRef(queues.len() as u8));
-                queues.push(
-                    (info.queue_family_index, i),
-                );
+                queues.push((info.queue_family_index, i));
             }
         }
-        Self {
-            queues,
-            families
-        }
+        Self { queues, families }
     }
 }

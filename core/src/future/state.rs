@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -90,7 +89,6 @@ pub fn use_shared_state<T>(
     }
 }
 
-
 /// Returns (new, old)
 pub fn use_shared_state_with_old<T>(
     this: &mut Option<SharedDeviceStateHostContainer<T>>,
@@ -105,7 +103,9 @@ pub fn use_shared_state_with_old<T>(
             None
         };
         (
-            SharedDeviceState(inner.clone()), old.map(|old| SharedDeviceState(old)))
+            SharedDeviceState(inner.clone()),
+            old.map(|old| SharedDeviceState(old)),
+        )
     } else {
         let item = Arc::new(create(None));
         *this = Some(SharedDeviceStateHostContainer(item));
@@ -114,9 +114,7 @@ pub fn use_shared_state_with_old<T>(
 }
 
 use std::sync::atomic::AtomicUsize;
-use std::sync::mpsc;
 
-use crate::utils::retainer::Retainer;
 use crate::BufferLike;
 use crate::HasDevice;
 use crate::ImageLike;
@@ -145,13 +143,11 @@ impl<T> PerFrameState<T> {
         }
     }
     pub fn use_state(&self, create: impl FnOnce() -> T) -> PerFrameContainer<T> {
-        let (item, reused) = self
-            .try_recv()
-            .map(|mut item| (item, true))
-            .unwrap_or_else(|| {
-                self.total_items.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                (create(), false)
-            });
+        let (item, reused) = self.try_recv().map(|item| (item, true)).unwrap_or_else(|| {
+            self.total_items
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            (create(), false)
+        });
         PerFrameContainer {
             sender: self.sender.clone(),
             item: Some(item),
@@ -162,7 +158,7 @@ impl<T> PerFrameState<T> {
     pub fn use_blocking(
         // &mut self ensures we can't run into a race condition where two threads call use_blocking at the same time
         // in which case we might exceed the max_items limitation
-        &mut self, 
+        &mut self,
         max_items: usize,
         create: impl FnOnce() -> T,
     ) -> PerFrameContainer<T> {

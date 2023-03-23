@@ -3,10 +3,9 @@ use std::{alloc::Layout, sync::Arc};
 use ash::prelude::VkResult;
 use ash::vk;
 
-use crate::device;
 use crate::Allocator;
 use crate::BufferLike;
-use crate::Device;
+
 use crate::HasDevice;
 use crate::ResidentBuffer;
 

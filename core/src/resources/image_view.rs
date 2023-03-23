@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use ash::{prelude::VkResult, vk};
 
 use crate::{HasDevice, ImageLike};

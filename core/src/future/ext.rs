@@ -1,11 +1,11 @@
 use crate::{QueueRef, RunCommandsQueueFuture};
 
-use super::{CommandBufferRecordContext, GPUCommandFuture, StageContext, DisposeContainer, Disposable};
+use super::{CommandBufferRecordContext, Disposable, GPUCommandFuture, StageContext};
 use pin_project::pin_project;
 use std::any::Any;
 use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::ops::DerefMut;
+
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -31,10 +31,15 @@ pub trait GPUCommandFutureExt: GPUCommandFuture + Sized {
     fn schedule(self) -> RunCommandsQueueFuture<Self> {
         RunCommandsQueueFuture::new(self, QueueRef::null())
     }
-    fn dynamic(self) -> DynamicCommandFuture<Self::Output> where Self::RetainedState: 'static, Self::RecycledState: 'static, Self: 'static + Send + Sync {
+    fn dynamic(self) -> DynamicCommandFuture<Self::Output>
+    where
+        Self::RetainedState: 'static,
+        Self::RecycledState: 'static,
+        Self: 'static + Send + Sync,
+    {
         DynamicCommandFuture {
             inner: Box::pin(self),
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 }
@@ -134,7 +139,6 @@ where
     }
 }
 
-
 #[pin_project]
 pub struct GPUCommandJoinVec<F>
 where
@@ -165,16 +169,22 @@ where
             !*this.results_taken,
             "Attempted to record a GPUCommandJoin after it's finished"
         );
-        for ((future, result), recycled_state) in this.inner.iter_mut().zip(this.results.iter_mut()).zip(recycled_state.iter_mut()) {
+        for ((future, result), recycled_state) in this
+            .inner
+            .iter_mut()
+            .zip(this.results.iter_mut())
+            .zip(recycled_state.iter_mut())
+        {
             if result.is_none() {
-                let future = unsafe { Pin::new_unchecked(future)};
+                let future = unsafe { Pin::new_unchecked(future) };
                 if let Poll::Ready(r) = future.record(command_buffer, recycled_state) {
                     *result = Some(r);
                 }
             }
         }
         if this.results.iter().all(|a| a.is_some()) {
-            let (results, retained_states): (Vec<_>, Vec<_>) = this.results.drain(..).map(|a| a.unwrap()).unzip();
+            let (results, retained_states): (Vec<_>, Vec<_>) =
+                this.results.drain(..).map(|a| a.unwrap()).unzip();
             *this.results_taken = true;
             Poll::Ready((results, retained_states))
         } else {
@@ -190,7 +200,7 @@ where
         );
         for (result, future) in this.results.iter().zip(this.inner.iter_mut()) {
             if result.is_none() {
-                let mut future = unsafe { Pin::new_unchecked(future)};
+                let future = unsafe { Pin::new_unchecked(future) };
                 future.context(ctx);
             }
         }
@@ -208,15 +218,21 @@ where
         }
         assert_eq!(recycled_state.len(), this.inner.len());
 
-        for ( (result, future), recycled_state) in this.results.iter_mut().zip(this.inner.iter_mut()).zip(recycled_state) {
-            let future = unsafe { Pin::new_unchecked(future)};
+        for ((result, future), recycled_state) in this
+            .results
+            .iter_mut()
+            .zip(this.inner.iter_mut())
+            .zip(recycled_state)
+        {
+            let future = unsafe { Pin::new_unchecked(future) };
             if let Some(r) = future.init(ctx, recycled_state) {
                 *result = Some(r);
             }
         }
 
         if this.results.iter().all(|a| a.is_some()) {
-            let (results, retained_states): (Vec<_>, Vec<_>) = this.results.drain(..).map(|a| a.unwrap()).unzip();
+            let (results, retained_states): (Vec<_>, Vec<_>) =
+                this.results.drain(..).map(|a| a.unwrap()).unzip();
             *this.results_taken = true;
             Some((results, retained_states))
         } else {
@@ -376,11 +392,10 @@ where
     }
 }
 
-
 #[pin_project]
 pub struct DynamicCommandFuture<Out> {
     inner: Pin<Box<dyn DynamicCommandFutureTrait<Output = Out>>>,
-    _marker: PhantomData<Out>
+    _marker: PhantomData<Out>,
 }
 
 trait DynamicCommandFutureTrait: Send + Sync {
@@ -397,18 +412,24 @@ trait DynamicCommandFutureTrait: Send + Sync {
         _recycled_state: &mut Option<Box<dyn Any + Send + Sync>>,
     ) -> Option<(Self::Output, Box<dyn Disposable + Send>)>;
 }
-impl<F: GPUCommandFuture> DynamicCommandFutureTrait for F where F::RecycledState: 'static, F::RetainedState: 'static, F: Send + Sync {
+impl<F: GPUCommandFuture> DynamicCommandFutureTrait for F
+where
+    F::RecycledState: 'static,
+    F::RetainedState: 'static,
+    F: Send + Sync,
+{
     type Output = F::Output;
     fn record(
-            self: Pin<&mut Self>,
-            ctx: &mut CommandBufferRecordContext,
-            recycled_state: &mut Option<Box<dyn Any + Send + Sync>>,
-        ) -> Poll<(Self::Output, Box<dyn Disposable + Send>)> {
+        self: Pin<&mut Self>,
+        ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Option<Box<dyn Any + Send + Sync>>,
+    ) -> Poll<(Self::Output, Box<dyn Disposable + Send>)> {
         if recycled_state.is_none() {
             let def = F::RecycledState::default();
             *recycled_state = Some(Box::new(def));
         }
-        let recycled_state: &mut F::RecycledState = recycled_state.as_mut().unwrap().downcast_mut().unwrap();
+        let recycled_state: &mut F::RecycledState =
+            recycled_state.as_mut().unwrap().downcast_mut().unwrap();
 
         let poll = <Self as GPUCommandFuture>::record(self, ctx, recycled_state);
         match poll {
@@ -422,22 +443,20 @@ impl<F: GPUCommandFuture> DynamicCommandFutureTrait for F where F::RecycledState
         <Self as GPUCommandFuture>::context(self, ctx)
     }
     fn init(
-            self: Pin<&mut Self>,
-            ctx: &mut CommandBufferRecordContext,
-            recycled_state: &mut Option<Box<dyn Any + Send + Sync>>,
-        ) -> Option<(Self::Output, Box<dyn Disposable + Send>)> {
-            
+        self: Pin<&mut Self>,
+        ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Option<Box<dyn Any + Send + Sync>>,
+    ) -> Option<(Self::Output, Box<dyn Disposable + Send>)> {
         if recycled_state.is_none() {
             let def = F::RecycledState::default();
             *recycled_state = Some(Box::new(def));
         }
-        let recycled_state: &mut F::RecycledState = recycled_state.as_mut().unwrap().downcast_mut().unwrap();
+        let recycled_state: &mut F::RecycledState =
+            recycled_state.as_mut().unwrap().downcast_mut().unwrap();
         let poll = <Self as GPUCommandFuture>::init(self, ctx, recycled_state);
         match poll {
             None => None,
-            Some((output, retained_state)) => {
-                Some((output, Box::new(retained_state)))
-            }
+            Some((output, retained_state)) => Some((output, Box::new(retained_state))),
         }
     }
 }
@@ -463,16 +482,20 @@ impl<OUT> GPUCommandFuture for DynamicCommandFuture<OUT> {
         this.inner.as_mut().context(ctx);
     }
     fn init(
-            self: Pin<&mut Self>,
-            ctx: &mut CommandBufferRecordContext,
-            recycled_state: &mut Self::RecycledState,
-        ) -> Option<(Self::Output, Self::RetainedState)> {
-            let this = self.project();
-            this.inner.as_mut().init(ctx, recycled_state)
+        self: Pin<&mut Self>,
+        ctx: &mut CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
+    ) -> Option<(Self::Output, Self::RetainedState)> {
+        let this = self.project();
+        this.inner.as_mut().init(ctx, recycled_state)
     }
 }
 
 pub fn join_vec<T: GPUCommandFuture>(vec: Vec<T>) -> GPUCommandJoinVec<T> {
     let results = vec.iter().map(|_| None).collect();
-    GPUCommandJoinVec { inner: vec.into_boxed_slice(), results, results_taken: false }
+    GPUCommandJoinVec {
+        inner: vec.into_boxed_slice(),
+        results,
+        results_taken: false,
+    }
 }

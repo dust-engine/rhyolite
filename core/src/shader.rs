@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::descriptor::DescriptorSetLayout;
 use crate::sampler::Sampler;
-use crate::{device, Device, HasDevice};
+use crate::{Device, HasDevice};
 
 pub struct SpirvShader<T: Deref<Target = [u32]>> {
     pub data: T,

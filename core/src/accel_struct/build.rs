@@ -1,9 +1,11 @@
-use std::{alloc::Layout, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use super::AccelerationStructure;
-use crate::{HasDevice, device, Device};
 use crate::debug::DebugObject;
-use crate::future::{DisposeContainer, Dispose, RenderRes, use_shared_state, SharedDeviceStateHostContainer};
+use crate::future::{
+    use_shared_state, DisposeContainer, RenderRes, SharedDeviceStateHostContainer,
+};
+use crate::HasDevice;
 use crate::{future::GPUCommandFuture, Allocator, BufferLike, ResidentBuffer};
 use ash::vk;
 use pin_project::pin_project;
@@ -24,17 +26,18 @@ pub struct AccelerationStructureBatchBuilder<T> {
 
 impl<T> AccelerationStructureBatchBuilder<T> {
     pub fn new(allocator: Allocator, builds: Vec<(T, AccelerationStructureBuild)>) -> Self {
-        Self {
-            allocator,
-            builds,
-        }
+        Self { allocator, builds }
     }
     // build on the device.
     /// Instead of calling VkCmdBuildAccelerationStructure multiple times, it calls VkCmdBuildAccelerationStructure
     /// in batch mode, once for BLAS and once for TLAS, with a pipeline barrier inbetween.  
     pub fn build(self) -> BLASBuildFuture<T> {
         // Calculate the total number of geometries
-        let total_num_geometries = self.builds.iter().map(|(_, build)| build.geometries.len()).sum();
+        let total_num_geometries = self
+            .builds
+            .iter()
+            .map(|(_, build)| build.geometries.len())
+            .sum();
         let mut geometries: Vec<vk::AccelerationStructureGeometryKHR> =
             Vec::with_capacity(total_num_geometries);
         let mut build_ranges: Vec<vk::AccelerationStructureBuildRangeInfoKHR> =
@@ -50,18 +53,28 @@ impl<T> AccelerationStructureBatchBuilder<T> {
                 .acceleration_structure
                 .min_acceleration_structure_scratch_offset_alignment as usize;
 
-        let scratch_buffers = self.builds.iter().map(|(_, build)| {
-            let mut scratch_buffer = self
-            .allocator
-            .create_device_buffer_uninit_aligned(
-                build.build_size.build_scratch_size,
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                scratch_buffer_alignment as u64,
-            )
-            .unwrap();
-            scratch_buffer.set_name(&format!("BLAS Build Scratch Buffer for BLAS {:?}", build.accel_struct.raw())).unwrap();
-            scratch_buffer
-        }).collect::<Vec<_>>();
+        let scratch_buffers = self
+            .builds
+            .iter()
+            .map(|(_, build)| {
+                let mut scratch_buffer = self
+                    .allocator
+                    .create_device_buffer_uninit_aligned(
+                        build.build_size.build_scratch_size,
+                        vk::BufferUsageFlags::STORAGE_BUFFER
+                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                        scratch_buffer_alignment as u64,
+                    )
+                    .unwrap();
+                scratch_buffer
+                    .set_name(&format!(
+                        "BLAS Build Scratch Buffer for BLAS {:?}",
+                        build.accel_struct.raw()
+                    ))
+                    .unwrap();
+                scratch_buffer
+            })
+            .collect::<Vec<_>>();
 
         let build_infos = self
             .builds
@@ -102,7 +115,10 @@ impl<T> AccelerationStructureBatchBuilder<T> {
 
         assert_eq!(geometries.len(), total_num_geometries);
         assert_eq!(build_ranges.len(), total_num_geometries);
-        let info = self.builds.into_iter().map(|(info, a)| (info, a.accel_struct));
+        let info = self
+            .builds
+            .into_iter()
+            .map(|(info, a)| (info, a.accel_struct));
         BLASBuildFuture {
             scratch_buffers,
             accel_structs: info.collect(),
@@ -134,7 +150,7 @@ impl<T> GPUCommandFuture for BLASBuildFuture<T> {
     fn record(
         self: std::pin::Pin<&mut Self>,
         ctx: &mut crate::future::CommandBufferRecordContext,
-        recycled_state: &mut Self::RecycledState,
+        _recycled_state: &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
         assert_eq!(this.build_range_ptrs.len(), this.build_infos.len());
@@ -150,10 +166,13 @@ impl<T> GPUCommandFuture for BLASBuildFuture<T> {
             )
         });
         let futs = std::mem::replace(this.accel_structs, Vec::new());
-        std::task::Poll::Ready((futs, DisposeContainer::new(std::mem::replace(this.scratch_buffers, Vec::new()))))
+        std::task::Poll::Ready((
+            futs,
+            DisposeContainer::new(std::mem::replace(this.scratch_buffers, Vec::new())),
+        ))
     }
 
-    fn context(self: std::pin::Pin<&mut Self>, ctx: &mut crate::future::StageContext) {}
+    fn context(self: std::pin::Pin<&mut Self>, _ctx: &mut crate::future::StageContext) {}
 }
 
 fn aabbs_to_geometry_infos(
@@ -184,7 +203,7 @@ pub struct TLASBuildFuture {
     geometry_info: vk::AccelerationStructureGeometryKHR,
     build_info: vk::AccelerationStructureBuildGeometryInfoKHR,
     num_instances: u32,
-    build_size: vk::AccelerationStructureBuildSizesInfoKHR
+    build_size: vk::AccelerationStructureBuildSizesInfoKHR,
 }
 
 pub fn build_tlas(
@@ -200,10 +219,10 @@ pub fn build_tlas(
             instances: vk::AccelerationStructureGeometryInstancesDataKHR {
                 array_of_pointers: vk::FALSE,
                 data: vk::DeviceOrHostAddressConstKHR {
-                    device_address: buffer.inner().device_address()
+                    device_address: buffer.inner().device_address(),
                 },
                 ..Default::default()
-            }
+            },
         },
         flags: geometry_flags,
         ..Default::default()
@@ -217,15 +236,17 @@ pub fn build_tlas(
         ..Default::default()
     };
     let build_size = unsafe {
-        allocator.device()
-        .accel_struct_loader()
-        .get_acceleration_structure_build_sizes(
-            vk::AccelerationStructureBuildTypeKHR::DEVICE,
-            &build_info,
-            &[num_instances],
-        )
+        allocator
+            .device()
+            .accel_struct_loader()
+            .get_acceleration_structure_build_sizes(
+                vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                &build_info,
+                &[num_instances],
+            )
     };
-    let acceleration_structure = AccelerationStructure::new_tlas(allocator, build_size.acceleration_structure_size).unwrap();
+    let acceleration_structure =
+        AccelerationStructure::new_tlas(allocator, build_size.acceleration_structure_size).unwrap();
     build_info.dst_acceleration_structure = acceleration_structure.raw();
     TLASBuildFuture {
         allocator: allocator.clone(),
@@ -234,46 +255,54 @@ pub fn build_tlas(
         geometry_info,
         build_info,
         num_instances,
-        build_size
+        build_size,
     }
 }
 
 impl GPUCommandFuture for TLASBuildFuture {
     type Output = RenderRes<AccelerationStructure>;
     fn record(
-            mut self: std::pin::Pin<&mut Self>,
-            ctx: &mut crate::future::CommandBufferRecordContext,
-            recycled_state: &mut Self::RecycledState,
-        ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
-            let scratch_buffer = use_shared_state(
-                recycled_state,
-                |old| {
-                    let old_size = old.map(|a: &ResidentBuffer| a.size()).unwrap_or(0);
-                    self.allocator.create_device_buffer_uninit(self.build_size.build_scratch_size.max(old_size), vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER).unwrap()
-                }, |old| {
-                    old.size() < self.build_size.build_scratch_size
-                });
-            self.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
-                device_address: scratch_buffer.device_address()
-            };
-            self.build_info.p_geometries = &self.geometry_info; // Fix link
-            let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR {
-                primitive_count: self.num_instances,
-                primitive_offset: 0,
-                ..Default::default()
-            };
-            let ptr = &build_range_info as *const vk::AccelerationStructureBuildRangeInfoKHR;
-            
+        mut self: std::pin::Pin<&mut Self>,
+        ctx: &mut crate::future::CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
+    ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
+        let scratch_buffer = use_shared_state(
+            recycled_state,
+            |old| {
+                let old_size = old.map(|a: &ResidentBuffer| a.size()).unwrap_or(0);
+                self.allocator
+                    .create_device_buffer_uninit(
+                        self.build_size.build_scratch_size.max(old_size),
+                        vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                            | vk::BufferUsageFlags::STORAGE_BUFFER,
+                    )
+                    .unwrap()
+            },
+            |old| old.size() < self.build_size.build_scratch_size,
+        );
+        self.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
+            device_address: scratch_buffer.device_address(),
+        };
+        self.build_info.p_geometries = &self.geometry_info; // Fix link
+        let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR {
+            primitive_count: self.num_instances,
+            primitive_offset: 0,
+            ..Default::default()
+        };
+        let ptr = &build_range_info as *const vk::AccelerationStructureBuildRangeInfoKHR;
 
-            ctx.record(|ctx, command_buffer| unsafe {
-                (ctx.device().accel_struct_loader().fp().cmd_build_acceleration_structures_khr) (
-                    command_buffer,
-                    1,
-                    &self.build_info,
-                    &ptr
-                );
-            });
-        std::task::Poll::Ready((self.acceleration_structure.take().unwrap(), self.input_buffer.take().unwrap()))
+        ctx.record(|ctx, command_buffer| unsafe {
+            (ctx.device()
+                .accel_struct_loader()
+                .fp()
+                .cmd_build_acceleration_structures_khr)(
+                command_buffer, 1, &self.build_info, &ptr
+            );
+        });
+        std::task::Poll::Ready((
+            self.acceleration_structure.take().unwrap(),
+            self.input_buffer.take().unwrap(),
+        ))
     }
 
     type RetainedState = RenderRes<ResidentBuffer>;
@@ -282,7 +311,15 @@ impl GPUCommandFuture for TLASBuildFuture {
 
     fn context(mut self: std::pin::Pin<&mut Self>, ctx: &mut crate::future::StageContext) {
         // TODO: what's the optimal access flags to use here?
-        ctx.write(self.acceleration_structure.as_mut().unwrap(), vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR, vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR);
-        ctx.read(self.input_buffer.as_ref().unwrap(), vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR, vk::AccessFlags2::MEMORY_READ_KHR);
+        ctx.write(
+            self.acceleration_structure.as_mut().unwrap(),
+            vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
+            vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR,
+        );
+        ctx.read(
+            self.input_buffer.as_ref().unwrap(),
+            vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
+            vk::AccessFlags2::MEMORY_READ_KHR,
+        );
     }
 }

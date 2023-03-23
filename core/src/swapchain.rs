@@ -535,7 +535,7 @@ unsafe fn get_swapchain_images(
             Ok(view) => image_views.push((image, view)),
             Err(err) => {
                 // Destroy existing
-                for (image, view) in image_views.into_iter() {
+                for (_image, view) in image_views.into_iter() {
                     device.destroy_image_view(view, None);
                 }
                 return Err(err);

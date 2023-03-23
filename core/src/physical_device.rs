@@ -1,4 +1,4 @@
-use crate::{Queues, Version, QueueInfo};
+use crate::{QueueInfo, Queues, Version};
 
 use super::{Device, Instance};
 use ash::{prelude::VkResult, vk};
@@ -189,11 +189,15 @@ impl PhysicalDevice {
         tracing::info!("Creating device with {:?}", create_info);
         let queue_info = QueueInfo::new(num_queue_families, &queue_create_infos);
 
-        let device = Arc::new(Device::new(self.instance.clone(), self, create_info, queue_info)?);
+        let device = Arc::new(Device::new(
+            self.instance.clone(),
+            self,
+            create_info,
+            queue_info,
+        )?);
         drop(list_priorities);
 
-        let queues =
-            unsafe { Queues::new(device.clone()) };
+        let queues = unsafe { Queues::new(device.clone()) };
         Ok((device, queues))
     }
 }

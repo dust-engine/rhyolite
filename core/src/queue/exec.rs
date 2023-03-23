@@ -8,8 +8,8 @@ use std::{
     task::Poll,
 };
 
+use super::compile::QueueCompileExt;
 use ash::vk;
-use super::compile::{QueueCompileExt, CompiledQueueFuture};
 
 use pin_project::pin_project;
 
@@ -19,7 +19,7 @@ use crate::{
         CommandBufferRecordContext, Disposable, GPUCommandFuture, StageContextBuffer,
         StageContextImage, StageContextSemaphoreTransition,
     },
-    Device, HasDevice, QueueInfo,
+    Device, HasDevice,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -205,15 +205,16 @@ impl HasDevice for Queues {
 
 impl Queues {
     /// This function can only be called once per device.
-    pub(crate) unsafe fn new(
-        device: Arc<Device>,
-    ) -> Self {
-        let mut queues: Vec<(vk::Queue, u32)> = device.queue_info().queues.iter().map(|(family, index)| {
-            let queue = unsafe {
-                device.get_device_queue(*family, *index)
-            };
-            (queue, *family)
-        }).collect();
+    pub(crate) unsafe fn new(device: Arc<Device>) -> Self {
+        let queues: Vec<(vk::Queue, u32)> = device
+            .queue_info()
+            .queues
+            .iter()
+            .map(|(family, index)| {
+                let queue = unsafe { device.get_device_queue(*family, *index) };
+                (queue, *family)
+            })
+            .collect();
 
         Self {
             device: device.clone(),
@@ -240,7 +241,7 @@ impl Queues {
             shared_command_pools,
             semaphore_pool,
             recycled_state,
-            apply_final_signal
+            apply_final_signal,
         );
 
         let mut submission_batch = SubmissionBatch::new(self.queues.len());
@@ -251,15 +252,20 @@ impl Queues {
         let fences_to_wait = self.submit_batch(submission_batch, fence_pool);
 
         let device = self.device.clone();
-        QueueSubmitFuture::new(device, fences_to_wait, compiled.final_signals, compiled.fut_dispose, compiled.output)
+        QueueSubmitFuture::new(
+            device,
+            fences_to_wait,
+            compiled.final_signals,
+            compiled.fut_dispose,
+            compiled.output,
+        )
     }
     /// Safety: Users must manage lifetimes of command buffers and fences manually
     pub unsafe fn submit_compiled(
         &mut self,
         submissions: impl Iterator<Item = CachedStageSubmissions>,
-        fence_pool: &mut impl FencePoolLike
+        fence_pool: &mut impl FencePoolLike,
     ) -> Vec<vk::Fence> {
-
         let mut submission_batch = SubmissionBatch::new(self.queues.len());
         for stage in submissions {
             submission_batch.add_stage(stage);
@@ -388,9 +394,9 @@ impl<Ret: Disposable + Send, Out> QueueFuture for QueueSubmitFuture<Ret, Out> {
 
     fn setup(
         self: Pin<&mut Self>,
-        ctx: &mut SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
-        prev_queue: QueueMask,
+        _ctx: &mut SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
+        _prev_queue: QueueMask,
     ) {
         let this = self.project();
         assert!(this.semaphores.is_some(), "To use a QueueSubmitFuture in another future, it must have been created with `apply_final_signal=true`");
@@ -398,8 +404,8 @@ impl<Ret: Disposable + Send, Out> QueueFuture for QueueSubmitFuture<Ret, Out> {
 
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
+        _ctx: &mut SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
         if this.task.is_finished() {
@@ -454,16 +460,16 @@ impl<Ret: Disposable + Send, Out> QueueFuture for SharedQueueSubmitFutureMain<Re
 
     fn setup(
         self: Pin<&mut Self>,
-        ctx: &mut SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
-        prev_queue: QueueMask,
+        _ctx: &mut SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
+        _prev_queue: QueueMask,
     ) {
     }
 
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
+        _ctx: &mut SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
         if this.task.is_finished() {
@@ -498,16 +504,16 @@ impl<Out> QueueFuture for SharedQueueSubmitFuture<Out> {
 
     fn setup(
         self: Pin<&mut Self>,
-        ctx: &mut SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
-        prev_queue: QueueMask,
+        _ctx: &mut SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
+        _prev_queue: QueueMask,
     ) {
     }
 
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut SubmissionContext,
-        recycled_state: &mut Self::RecycledState,
+        _ctx: &mut SubmissionContext,
+        _recycled_state: &mut Self::RecycledState,
     ) -> QueueFuturePoll<Self::Output> {
         let this = self.project();
         assert!(this.task.is_finished());
@@ -517,7 +523,7 @@ impl<Out> QueueFuture for SharedQueueSubmitFuture<Out> {
         };
     }
 
-    fn dispose(mut self) -> Self::RetainedState {
+    fn dispose(self) -> Self::RetainedState {
         ()
     }
 }
