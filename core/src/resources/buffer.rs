@@ -24,7 +24,22 @@ pub trait BufferLike {
     fn size(&self) -> vk::DeviceSize;
     fn device_address(&self) -> vk::DeviceAddress;
 }
+impl<T: BufferLike + ?Sized> BufferLike for Box<T> {
+    fn raw_buffer(&self) -> vk::Buffer {
+        (**self).raw_buffer()
+    }
 
+    fn size(&self) -> vk::DeviceSize {
+        (**self).size()
+    }
+    fn offset(&self) -> vk::DeviceSize {
+        (**self).offset()
+    }
+
+    fn device_address(&self) -> vk::DeviceAddress {
+        (**self).device_address()
+    }
+}
 // Everyone wants a mutable refence to outer.
 // Some people wants a mutable reference to inner.
 // In the case of Fork. Each fork gets a & of the container. Container must be generic over &mut, and BorrowMut.

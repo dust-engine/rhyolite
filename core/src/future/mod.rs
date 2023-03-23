@@ -94,6 +94,7 @@ macro_rules! impl_tuple {
     };
 }
 
+impl_tuple!(0 A);
 impl_tuple!(0 A, 1 B);
 impl_tuple!(0 A, 1 B, 2 C);
 impl_tuple!(0 A, 1 B, 2 C, 3 D);

@@ -59,7 +59,7 @@ impl<T> ManagedBuffer<T> {
             strategy,
         }
     }
-    pub fn len(&mut self) -> usize {
+    pub fn len(&self) -> usize {
         match &self.strategy {
             ManagedBufferStrategy::DirectWrite { objects, .. } => objects.len(),
             ManagedBufferStrategy::StagingBuffer { num_items, .. } => *num_items,
@@ -104,7 +104,9 @@ impl<T> ManagedBuffer<T> {
         }
     }
 
-    fn buffer(&mut self) -> impl GPUCommandFuture<Output = RenderRes<Box<dyn BufferLike>>> {
+    pub fn buffer(
+        &mut self,
+    ) -> impl GPUCommandFuture<Output = RenderRes<Box<dyn BufferLike + Send + Sync>>> {
         let item_size = std::alloc::Layout::new::<T>().pad_to_align().size();
         let (device_buffer_direct, device_buffer_staged, old_device_buffer) = match &mut self
             .strategy
@@ -253,9 +255,9 @@ impl<T> ManagedBuffer<T> {
                 retain!(staging_buffer);
 
 
-                device_buffer.map(|a| Box::new(a) as Box<dyn BufferLike>)
+                device_buffer.map(|a| Box::new(a) as Box<dyn BufferLike + Send + Sync>)
             } else {
-                let buffer = Box::new(device_buffer_direct.unwrap()) as Box<dyn BufferLike>;
+                let buffer = Box::new(device_buffer_direct.unwrap()) as Box<dyn BufferLike + Send + Sync>;
                 RenderRes::new(buffer)
             }
         }

@@ -196,9 +196,10 @@ fn aabbs_to_geometry_infos(
     )
 }
 
-pub struct TLASBuildFuture {
+#[pin_project]
+pub struct TLASBuildFuture<T: BufferLike> {
     allocator: Allocator,
-    input_buffer: Option<RenderRes<ResidentBuffer>>,
+    input_buffer: Option<RenderRes<T>>,
     acceleration_structure: Option<RenderRes<AccelerationStructure>>,
     geometry_info: vk::AccelerationStructureGeometryKHR,
     build_info: vk::AccelerationStructureBuildGeometryInfoKHR,
@@ -206,13 +207,13 @@ pub struct TLASBuildFuture {
     build_size: vk::AccelerationStructureBuildSizesInfoKHR,
 }
 
-pub fn build_tlas(
-    allocator: &Allocator,
-    buffer: RenderRes<ResidentBuffer>,
+pub fn build_tlas<T: BufferLike>(
+    allocator: Allocator,
+    buffer: RenderRes<T>,
     num_instances: u32,
     geometry_flags: vk::GeometryFlagsKHR,
     build_flags: vk::BuildAccelerationStructureFlagsKHR,
-) -> TLASBuildFuture {
+) -> TLASBuildFuture<T> {
     let geometry_info = vk::AccelerationStructureGeometryKHR {
         geometry_type: vk::GeometryTypeKHR::INSTANCES,
         geometry: vk::AccelerationStructureGeometryDataKHR {
@@ -246,10 +247,11 @@ pub fn build_tlas(
             )
     };
     let acceleration_structure =
-        AccelerationStructure::new_tlas(allocator, build_size.acceleration_structure_size).unwrap();
+        AccelerationStructure::new_tlas(&allocator, build_size.acceleration_structure_size)
+            .unwrap();
     build_info.dst_acceleration_structure = acceleration_structure.raw();
     TLASBuildFuture {
-        allocator: allocator.clone(),
+        allocator: allocator,
         input_buffer: Some(buffer),
         acceleration_structure: Some(RenderRes::new(acceleration_structure)),
         geometry_info,
@@ -259,33 +261,34 @@ pub fn build_tlas(
     }
 }
 
-impl GPUCommandFuture for TLASBuildFuture {
+impl<T: BufferLike + Send> GPUCommandFuture for TLASBuildFuture<T> {
     type Output = RenderRes<AccelerationStructure>;
     fn record(
         mut self: std::pin::Pin<&mut Self>,
         ctx: &mut crate::future::CommandBufferRecordContext,
         recycled_state: &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
+        let this = self.project();
         let scratch_buffer = use_shared_state(
             recycled_state,
             |old| {
                 let old_size = old.map(|a: &ResidentBuffer| a.size()).unwrap_or(0);
-                self.allocator
+                this.allocator
                     .create_device_buffer_uninit(
-                        self.build_size.build_scratch_size.max(old_size),
+                        this.build_size.build_scratch_size.max(old_size),
                         vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                             | vk::BufferUsageFlags::STORAGE_BUFFER,
                     )
                     .unwrap()
             },
-            |old| old.size() < self.build_size.build_scratch_size,
+            |old| old.size() < this.build_size.build_scratch_size,
         );
-        self.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
+        this.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
             device_address: scratch_buffer.device_address(),
         };
-        self.build_info.p_geometries = &self.geometry_info; // Fix link
+        this.build_info.p_geometries = this.geometry_info; // Fix link
         let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR {
-            primitive_count: self.num_instances,
+            primitive_count: *this.num_instances,
             primitive_offset: 0,
             ..Default::default()
         };
@@ -296,16 +299,16 @@ impl GPUCommandFuture for TLASBuildFuture {
                 .accel_struct_loader()
                 .fp()
                 .cmd_build_acceleration_structures_khr)(
-                command_buffer, 1, &self.build_info, &ptr
+                command_buffer, 1, this.build_info, &ptr
             );
         });
         std::task::Poll::Ready((
-            self.acceleration_structure.take().unwrap(),
-            self.input_buffer.take().unwrap(),
+            this.acceleration_structure.take().unwrap(),
+            this.input_buffer.take().unwrap(),
         ))
     }
 
-    type RetainedState = RenderRes<ResidentBuffer>;
+    type RetainedState = RenderRes<T>;
 
     type RecycledState = Option<SharedDeviceStateHostContainer<ResidentBuffer>>;
 

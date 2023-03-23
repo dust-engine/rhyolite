@@ -55,31 +55,6 @@ impl Default for State {
 }
 
 impl CommandsTransformer for State {
-    fn import(
-        &mut self,
-        input_tokens: &proc_macro2::TokenStream,
-        is_image: bool,
-    ) -> proc_macro2::TokenStream {
-        let res_token_name = quote::format_ident!("__future_res_{}", self.current_dispose_index);
-        self.current_dispose_index += 1;
-        self.dispose_forward_decl.extend(quote::quote! {
-            let mut #res_token_name = None;
-        });
-        self.dispose_ret_expr
-            .push(syn::Expr::Verbatim(res_token_name.to_token_stream()));
-        if is_image {
-            quote::quote! {unsafe {
-                #res_token_name = Some(#input_tokens);
-                ::rhyolite::future::ResImage::new(#res_token_name.as_mut().unwrap())
-            }}
-        } else {
-            quote::quote! {unsafe {
-                #res_token_name = Some(#input_tokens);
-                ::rhyolite::future::Res::new(#res_token_name.as_mut().unwrap())
-            }}
-        }
-    }
-
     fn async_transform(&mut self, input: &syn::ExprAwait, is_inloop: bool) -> syn::Expr {
         let base = input.base.clone();
 
@@ -162,9 +137,7 @@ impl CommandsTransformer for State {
             return syn::Expr::Macro(mac.clone());
         }
         match path.segments[0].ident.to_string().as_str() {
-            "import" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, false)),
             "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens, is_inloop)),
-            "import_image" => syn::Expr::Verbatim(self.import(&mac.mac.tokens, true)),
             "using" => syn::Expr::Verbatim(self.using(&mac.mac.tokens)),
             _ => syn::Expr::Macro(mac.clone()),
         }

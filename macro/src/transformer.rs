@@ -286,11 +286,6 @@ pub trait CommandsTransformer {
             _ => stmt.clone(),
         }
     }
-    fn import(
-        &mut self,
-        input_tokens: &proc_macro2::TokenStream,
-        is_image: bool,
-    ) -> proc_macro2::TokenStream;
     fn async_transform(&mut self, input: &syn::ExprAwait, is_inloop: bool) -> syn::Expr;
     fn macro_transform(&mut self, mac: &syn::ExprMacro, is_inloop: bool) -> syn::Expr;
     fn return_transform(&mut self, ret: &syn::ExprReturn) -> Option<syn::Expr>;

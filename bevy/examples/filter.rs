@@ -306,7 +306,7 @@ impl Plugin for RenderSystem {
                     let image_size = image_size;
                     let mut swapchain_image = swapchain_image.await;
 
-                    let intermediate_image = rhyolite::future::use_shared_state(using!(), || {
+                    let intermediate_image = rhyolite::future::use_shared_state(using!(), |_| {
                         println!("Created imagehhhh");
                         allocator
                         .create_device_image_uninit(
