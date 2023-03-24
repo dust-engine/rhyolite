@@ -7,8 +7,6 @@ use ash::vk;
 
 #[cfg(feature = "glsl")]
 pub fn glsl_reflected(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    use std::fmt::Debug;
-
     let input = match syn::parse2::<syn::LitStr>(input) {
         Ok(input) => input,
         Err(err) => return err.to_compile_error(),
@@ -47,7 +45,7 @@ pub fn glsl_reflected(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(err) => {
-            let err = err.to_string();
+            let _err = err.to_string();
             return quote::quote_spanned! { input.span()=>
                 compile_error!("GLSL Shader file not found")
             };
@@ -56,7 +54,7 @@ pub fn glsl_reflected(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
     let source = match std::io::read_to_string(file) {
         Ok(source) => source,
         Err(err) => {
-            let err = err.to_string();
+            let _err = err.to_string();
             return quote::quote_spanned! { input.span()=>
                 compile_error!("Cannot open GLSL shader file")
             };
@@ -161,7 +159,7 @@ pub fn glsl_reflected(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
 
     let entry_points_stream =
         proc_macro2::TokenStream::from_iter(entry_points.flat_map(|(name, entry_point)| {
-            use proc_macro2::{Delimiter, Group, Literal, Punct, Spacing, TokenStream, TokenTree};
+            use proc_macro2::{Delimiter, Punct, Spacing};
             let item =
                 proc_macro2::TokenTree::Group(proc_macro2::Group::new(Delimiter::Parenthesis, {
                     let serialized = format!("{:?}", entry_point)

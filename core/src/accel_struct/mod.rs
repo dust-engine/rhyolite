@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use ash::{prelude::VkResult, vk};
+use ash::{
+    prelude::VkResult,
+    vk::{self, Handle},
+};
 
 use crate::{debug::DebugObject, Allocator, BufferLike, Device, HasDevice, ResidentBuffer};
 
@@ -10,10 +13,22 @@ pub mod build;
 pub struct AccelerationStructure {
     pub flags: vk::BuildAccelerationStructureFlagsKHR,
     raw: vk::AccelerationStructureKHR,
-    device: Arc<Device>,
     device_address: vk::DeviceAddress,
     ty: AccelerationStructureType,
     buffer: ResidentBuffer,
+}
+
+impl HasDevice for AccelerationStructure {
+    fn device(&self) -> &Arc<Device> {
+        self.buffer.device()
+    }
+}
+impl DebugObject for AccelerationStructure {
+    fn object_handle(&mut self) -> u64 {
+        self.raw.as_raw()
+    }
+
+    const OBJECT_TYPE: vk::ObjectType = vk::ObjectType::ACCELERATION_STRUCTURE_KHR;
 }
 
 impl AccelerationStructure {
@@ -92,7 +107,6 @@ impl AccelerationStructure {
         Ok(Self {
             flags: vk::BuildAccelerationStructureFlagsKHR::empty(),
             raw: accel_struct,
-            device: allocator.device().clone(),
             device_address,
             ty,
             buffer: backing_buffer,
@@ -103,7 +117,7 @@ impl AccelerationStructure {
 impl Drop for AccelerationStructure {
     fn drop(&mut self) {
         unsafe {
-            self.device
+            self.device()
                 .accel_struct_loader()
                 .destroy_acceleration_structure(self.raw, None)
         }

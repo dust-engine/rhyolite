@@ -11,7 +11,11 @@ struct State {
     recycled_state_count: usize,
 }
 impl State {
-    fn retain(&mut self, input_tokens: &proc_macro2::TokenStream, is_inloop: bool) -> proc_macro2::TokenStream {
+    fn retain(
+        &mut self,
+        input_tokens: &proc_macro2::TokenStream,
+        is_inloop: bool,
+    ) -> proc_macro2::TokenStream {
         let res_token_name = quote::format_ident!("__future_res_{}", self.current_dispose_index);
         self.current_dispose_index += 1;
 
@@ -87,7 +91,6 @@ impl CommandsTransformer for State {
             }
         };
 
-
         // The program may return at different locations, and upon return, not all futures may have
         // been awaited. We should only await the dispose futures for those actually awaited so far
         // in the QueueFuture. We check this at runtime to avoid returning different variants of
@@ -131,7 +134,7 @@ impl CommandsTransformer for State {
     // for blocks, who yields initially?
     // inner block yields. outer block needs to give inner block the current queue, and the inner block choose to yield or not.
 
-    fn macro_transform(&mut self, mac: &syn::ExprMacro, is_inloop: bool) -> syn::Expr {
+    fn macro_transform_expr(&mut self, mac: &syn::ExprMacro, is_inloop: bool) -> syn::Expr {
         let path = &mac.mac.path;
         if path.segments.len() != 1 {
             return syn::Expr::Macro(mac.clone());
@@ -142,7 +145,18 @@ impl CommandsTransformer for State {
             _ => syn::Expr::Macro(mac.clone()),
         }
     }
-
+    fn macro_transform_stmt(&mut self, mac: &syn::StmtMacro, is_inloop: bool) -> syn::Stmt {
+        let path = &mac.mac.path;
+        if path.segments.len() != 1 {
+            return syn::Stmt::Macro(mac.clone());
+        }
+        let expr = match path.segments[0].ident.to_string().as_str() {
+            "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens, is_inloop)),
+            "using" => syn::Expr::Verbatim(self.using(&mac.mac.tokens)),
+            _ => return syn::Stmt::Macro(mac.clone()),
+        };
+        syn::Stmt::Expr(expr, mac.semi_token.clone())
+    }
     fn return_transform(&mut self, ret: &syn::ExprReturn) -> Option<syn::Expr> {
         let returned_item = ret
             .expr
@@ -176,18 +190,35 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
     let dispose_forward_decl = state.dispose_forward_decl;
     let dispose_ret_expr = state.dispose_ret_expr;
 
-    if let Some(last) = inner_closure_stmts.last_mut() {
-        if let syn::Stmt::Expr(expr) = last {
-            let token_stream = quote::quote!({
-                return (__current_queue, (#dispose_ret_expr), #expr);
-            });
-            *expr = syn::Expr::Verbatim(token_stream);
-        } else {
-            let token_stream = quote::quote!({
-                return (__current_queue,  (#dispose_ret_expr), ());
-            });
-            inner_closure_stmts.push(syn::Stmt::Expr(syn::Expr::Verbatim(token_stream)))
+    // Transform the final stmt
+    let append_unit_return = if let Some(last) = inner_closure_stmts.last_mut() {
+        match last {
+            syn::Stmt::Local(_) => true,
+            syn::Stmt::Macro(_) => true,
+            syn::Stmt::Item(_) => todo!(),
+            syn::Stmt::Expr(expr, semi) => {
+                if let Some(_semi) = semi {
+                    true
+                } else {
+                    let token_stream = quote::quote!({
+                        return (__current_queue, (#dispose_ret_expr), #expr);
+                    });
+                    *expr = syn::Expr::Verbatim(token_stream);
+                    false
+                }
+            }
         }
+    } else {
+        true
+    };
+    if append_unit_return {
+        let token_stream = quote::quote!({
+            return (__current_queue,  (#dispose_ret_expr), ())
+        });
+        inner_closure_stmts.push(syn::Stmt::Expr(
+            syn::Expr::Verbatim(token_stream),
+            Some(Default::default()),
+        ))
     }
     let recycled_states_type = syn::Type::Tuple(syn::TypeTuple {
         paren_token: Default::default(),

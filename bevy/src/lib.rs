@@ -17,7 +17,7 @@ use rhyolite::{
     cstr, Instance, Version,
 };
 
-pub use queue::{Frame, Queues, QueuesRouter, AsyncQueues};
+pub use queue::{AsyncQueues, Frame, Queues, QueuesRouter};
 pub use swapchain::{Swapchain, SwapchainConfigExt};
 pub use types::*;
 
@@ -53,9 +53,7 @@ impl Default for RenderPlugin {
             ],
             physical_device_index: 0,
             max_frame_in_flight: 3,
-            enabled_device_extensions: vec![
-                ash::extensions::khr::Swapchain::name()
-            ],
+            enabled_device_extensions: vec![ash::extensions::khr::Swapchain::name()],
             enabled_device_features: Box::new(rhyolite::PhysicalDeviceFeatures {
                 v13: vk::PhysicalDeviceVulkan13Features {
                     synchronization2: vk::TRUE,
@@ -67,7 +65,7 @@ impl Default for RenderPlugin {
                     ..Default::default()
                 },
                 ..Default::default()
-            })
+            }),
         }
     }
 }
@@ -119,14 +117,20 @@ impl Plugin for RenderPlugin {
             .skip(self.physical_device_index)
             .next()
             .unwrap();
-        tracing::info!("Using physical device {:?}", 
-        physical_device.properties().device_name());
+        tracing::info!(
+            "Using physical device {:?}",
+            physical_device.properties().device_name()
+        );
         let queues_router = rhyolite::QueuesRouter::new(&physical_device);
 
         let (device, queues) = physical_device
             .create_device(rhyolite::DeviceCreateInfo {
                 enabled_features: self.enabled_device_features.clone(),
-                enabled_extension_names: &self.enabled_device_extensions.iter().map(|a| a.as_ptr()).collect::<Vec<_>>(),
+                enabled_extension_names: &self
+                    .enabled_device_extensions
+                    .iter()
+                    .map(|a| a.as_ptr())
+                    .collect::<Vec<_>>(),
                 ..rhyolite::DeviceCreateInfo::with_queue_create_callback(|queue_family_index| {
                     queues_router.priorities(queue_family_index)
                 })
@@ -142,9 +146,12 @@ impl Plugin for RenderPlugin {
             .insert_resource(QueuesRouter::new(queues_router))
             .insert_resource(Allocator::new(allocator))
             .insert_non_send_resource(swapchain::NonSendResource::default())
-            .add_systems(Update, (
-                swapchain::extract_windows.in_set(RenderSystems::SetUp),
-                queue::flush_async_queue_system.in_set(RenderSystems::CleanUp)
-            ));
+            .add_systems(
+                Update,
+                (
+                    swapchain::extract_windows.in_set(RenderSystems::SetUp),
+                    queue::flush_async_queue_system.in_set(RenderSystems::CleanUp),
+                ),
+            );
     }
 }

@@ -59,7 +59,7 @@ impl Parse for SetLayout {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(SetLayout {
             attrs: input.call(syn::Attribute::parse_inner)?,
-            bindings: input.parse_terminated(SetLayoutBinding::parse)?,
+            bindings: input.parse_terminated(SetLayoutBinding::parse, syn::Token![,])?,
         })
     }
 }
@@ -74,8 +74,8 @@ pub fn set_layout(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let flags: Vec<_> = input
         .attrs
         .iter()
-        .filter(|attr| attr.path.is_ident("flag"))
-        .map(|attr| attr.tokens.clone())
+        .filter(|attr| attr.meta.path().is_ident("flag"))
+        .map(|attr| attr.meta.require_list().as_ref().unwrap().tokens.clone())
         .collect();
     let binding_infos = input
         .bindings
@@ -100,9 +100,10 @@ pub fn set_layout(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
             let binding = input_binding
                 .attrs
                 .iter()
-                .find(|attr| attr.path.is_ident("binding"))
+                .find(|attr| attr.meta.path().is_ident("binding"))
                 .map(|attr| {
-                    let token_stream: proc_macro2::TokenStream = attr.tokens.clone().into();
+                    let token_stream: proc_macro2::TokenStream =
+                        attr.meta.require_list().unwrap().tokens.clone().into();
                     token_stream
                 });
             let binding = if let Some(binding) = binding {
@@ -121,9 +122,10 @@ pub fn set_layout(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
             let shader_flags = input_binding
                 .attrs
                 .iter()
-                .find(|attr| attr.path.is_ident("shader"))
+                .find(|attr| attr.meta.path().is_ident("shader"))
                 .map(|attr| {
-                    let token_stream: proc_macro2::TokenStream = attr.tokens.clone().into();
+                    let token_stream: proc_macro2::TokenStream =
+                        attr.meta.require_list().unwrap().tokens.clone().into();
                     token_stream
                 })
                 .unwrap_or_else(|| {

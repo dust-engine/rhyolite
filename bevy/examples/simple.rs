@@ -85,7 +85,7 @@ impl Plugin for RenderSystem {
             return;
         };
 
-                let transfer_queue = queue_router.of_type(QueueType::Transfer);
+                let _transfer_queue = queue_router.of_type(QueueType::Transfer);
                 let graphics_queue = queue_router.of_type(QueueType::Graphics);
                 let image_buffer = allocator
                     .create_device_buffer_with_data(

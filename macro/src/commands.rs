@@ -1,4 +1,5 @@
 use crate::transformer::CommandsTransformer;
+
 use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
@@ -12,7 +13,6 @@ struct CommandsTransformState {
 }
 impl Default for CommandsTransformState {
     fn default() -> Self {
-        use proc_macro2::TokenStream;
         Self {
             retain_bindings: Punctuated::new(),
 
@@ -23,16 +23,17 @@ impl Default for CommandsTransformState {
 impl CommandsTransformer for CommandsTransformState {
     fn async_transform(&mut self, input: &syn::ExprAwait, is_inloop: bool) -> syn::Expr {
         let index = syn::Index::from(self.recycled_state_count);
-        let global_future_variable_name =
-            quote::format_ident!("__future_retain");
+        let global_future_variable_name = quote::format_ident!("__future_retain");
         self.recycled_state_count += 1;
 
         let id = self.retain_bindings.len();
         let id = syn::Index::from(id);
         if is_inloop {
-            self.retain_bindings.push(syn::Expr::Verbatim(quote::quote!(Vec::new())));
+            self.retain_bindings
+                .push(syn::Expr::Verbatim(quote::quote!(Vec::new())));
         } else {
-            self.retain_bindings.push(syn::Expr::Verbatim(quote::quote!(None)));
+            self.retain_bindings
+                .push(syn::Expr::Verbatim(quote::quote!(None)));
         }
         let dispose_replace_stmt = if is_inloop {
             quote::quote! {
@@ -77,7 +78,20 @@ impl CommandsTransformer for CommandsTransformState {
         };
         syn::Expr::Verbatim(tokens)
     }
-    fn macro_transform(&mut self, mac: &syn::ExprMacro, in_loop: bool) -> syn::Expr {
+    fn macro_transform_stmt(&mut self, mac: &syn::StmtMacro, in_loop: bool) -> syn::Stmt {
+        let path = &mac.mac.path;
+        if path.segments.len() != 1 {
+            return syn::Stmt::Macro(mac.clone());
+        }
+        let expr = match path.segments[0].ident.to_string().as_str() {
+            "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens, in_loop)),
+            "fork" => syn::Expr::Verbatim(self.fork_transform(&mac.mac.tokens)),
+            "using" => syn::Expr::Verbatim(self.using_transform(&mac.mac)),
+            _ => return syn::Stmt::Macro(mac.clone()),
+        };
+        syn::Stmt::Expr(expr, mac.semi_token.clone())
+    }
+    fn macro_transform_expr(&mut self, mac: &syn::ExprMacro, in_loop: bool) -> syn::Expr {
         let path = &mac.mac.path;
         if path.segments.len() != 1 {
             return syn::Expr::Macro(mac.clone());
@@ -86,13 +100,11 @@ impl CommandsTransformer for CommandsTransformState {
             "retain" => syn::Expr::Verbatim(self.retain(&mac.mac.tokens, in_loop)),
             "fork" => syn::Expr::Verbatim(self.fork_transform(&mac.mac.tokens)),
             "using" => syn::Expr::Verbatim(self.using_transform(&mac.mac)),
-            _ => syn::Expr::Macro(mac.clone()),
+            _ => return syn::Expr::Macro(mac.clone()),
         }
     }
     fn return_transform(&mut self, ret: &syn::ExprReturn) -> Option<syn::Expr> {
-        
-        let global_res_variable_name =
-            quote::format_ident!("__future_retain");
+        let global_res_variable_name = quote::format_ident!("__future_retain");
         // Transform each return statement into a yield, drops, and return.
         // We use RefCell on awaited_future_drops and import_drops so that they can be read while being modified.
         // This ensures that we won't drop uninitialized values.'
@@ -115,20 +127,25 @@ impl CommandsTransformer for CommandsTransformState {
     }
 }
 impl CommandsTransformState {
-    fn retain(&mut self, input_tokens: &proc_macro2::TokenStream, in_loop: bool) -> proc_macro2::TokenStream {
+    fn retain(
+        &mut self,
+        input_tokens: &proc_macro2::TokenStream,
+        in_loop: bool,
+    ) -> proc_macro2::TokenStream {
         let id = self.retain_bindings.len();
         let id = syn::Index::from(id);
-        let global_res_variable_name =
-            quote::format_ident!("__future_retain");
+        let global_res_variable_name = quote::format_ident!("__future_retain");
         if in_loop {
-            self.retain_bindings.push(syn::Expr::Verbatim(quote::quote!(Vec::new())));
-            
+            self.retain_bindings
+                .push(syn::Expr::Verbatim(quote::quote!(Vec::new())));
+
             quote::quote! {unsafe {
                 #global_res_variable_name.#id.push(#input_tokens)
             }}
         } else {
-            self.retain_bindings.push(syn::Expr::Verbatim(quote::quote!(None)));
-            
+            self.retain_bindings
+                .push(syn::Expr::Verbatim(quote::quote!(None)));
+
             quote::quote! {unsafe {
                 #global_res_variable_name.#id = Some(#input_tokens)
             }}
@@ -219,8 +236,7 @@ impl Parse for ForkInput {
 }
 
 pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    let global_res_variable_name =
-        quote::format_ident!("__future_retain");
+    let global_res_variable_name = quote::format_ident!("__future_retain");
     let input = match syn::parse2::<crate::ExprGpuAsync>(input) {
         Ok(input) => input,
         Err(err) => return err.to_compile_error(),
@@ -234,25 +250,34 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
         .collect();
 
     // Transform the final return
-    if let Some(last) = inner_closure_stmts.last_mut() {
-
-        if let syn::Stmt::Expr(expr) = last {
-            let token_stream = quote::quote!(
-                {
-                    return (#expr, #global_res_variable_name, __fut_global_ctx._marker);
+    let append_unit_return = if let Some(last) = inner_closure_stmts.last_mut() {
+        match last {
+            syn::Stmt::Local(_) => true,
+            syn::Stmt::Macro(_) => true,
+            syn::Stmt::Item(_) => todo!(),
+            syn::Stmt::Expr(expr, semi) => {
+                if let Some(_semi) = semi {
+                    true
+                } else {
+                    let token_stream = quote::quote! {
+                            return (#expr, #global_res_variable_name, __fut_global_ctx._marker);
+                    };
+                    *expr = syn::Expr::Verbatim(token_stream);
+                    false
                 }
-            );
-            let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
-            *expr = syn::Expr::Block(block);
-        } else {
-            let token_stream = quote::quote!(
-                {
-                    return ((), #global_res_variable_name, __fut_global_ctx._marker);
-                }
-            );
-            let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
-            inner_closure_stmts.push(syn::Stmt::Expr(syn::Expr::Block(block)))
+            }
         }
+    } else {
+        true
+    };
+    if append_unit_return {
+        let token_stream = quote::quote!(
+                return ((), #global_res_variable_name, __fut_global_ctx._marker)
+        );
+        inner_closure_stmts.push(syn::Stmt::Expr(
+            syn::Expr::Verbatim(token_stream),
+            Some(Default::default()),
+        ))
     }
 
     let retain_bindings = state.retain_bindings;

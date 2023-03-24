@@ -196,6 +196,89 @@ fn aabbs_to_geometry_infos(
     )
 }
 
+pub struct TLASBuildInfo {
+    allocator: Allocator,
+    acceleration_structure: AccelerationStructure,
+    geometry_info: vk::AccelerationStructureGeometryKHR,
+    build_info: vk::AccelerationStructureBuildGeometryInfoKHR,
+    num_instances: u32,
+    build_size: vk::AccelerationStructureBuildSizesInfoKHR,
+}
+
+impl TLASBuildInfo {
+    pub fn new(
+        allocator: Allocator,
+        num_instances: u32,
+        geometry_flags: vk::GeometryFlagsKHR,
+        build_flags: vk::BuildAccelerationStructureFlagsKHR,
+    ) -> Self {
+        let geometry_info = vk::AccelerationStructureGeometryKHR {
+            geometry_type: vk::GeometryTypeKHR::INSTANCES,
+            geometry: vk::AccelerationStructureGeometryDataKHR {
+                instances: vk::AccelerationStructureGeometryInstancesDataKHR {
+                    array_of_pointers: vk::FALSE,
+                    data: Default::default(),
+                    ..Default::default()
+                },
+            },
+            flags: geometry_flags,
+            ..Default::default()
+        };
+        let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
+            ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            flags: build_flags,
+            mode: vk::BuildAccelerationStructureModeKHR::BUILD,
+            geometry_count: 1,
+            p_geometries: &geometry_info,
+            ..Default::default()
+        };
+        let build_size = unsafe {
+            allocator
+                .device()
+                .accel_struct_loader()
+                .get_acceleration_structure_build_sizes(
+                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                    &build_info,
+                    &[num_instances],
+                )
+        };
+        let acceleration_structure =
+            AccelerationStructure::new_tlas(&allocator, build_size.acceleration_structure_size)
+                .unwrap();
+        build_info.dst_acceleration_structure = acceleration_structure.raw();
+        Self {
+            allocator: allocator,
+            acceleration_structure,
+            geometry_info,
+            build_info,
+            num_instances,
+            build_size,
+        }
+    }
+}
+impl TLASBuildInfo {
+    pub fn build_for<T: BufferLike>(mut self, buffer: RenderRes<T>) -> TLASBuildFuture<T> {
+        self.geometry_info.geometry = vk::AccelerationStructureGeometryDataKHR {
+            instances: vk::AccelerationStructureGeometryInstancesDataKHR {
+                array_of_pointers: vk::FALSE,
+                data: vk::DeviceOrHostAddressConstKHR {
+                    device_address: buffer.inner().device_address(),
+                },
+                ..Default::default()
+            },
+        };
+        TLASBuildFuture {
+            allocator: self.allocator,
+            input_buffer: Some(buffer),
+            acceleration_structure: Some(RenderRes::new(self.acceleration_structure)),
+            geometry_info: self.geometry_info,
+            build_info: self.build_info,
+            num_instances: self.num_instances,
+            build_size: self.build_size,
+        }
+    }
+}
+
 #[pin_project]
 pub struct TLASBuildFuture<T: BufferLike> {
     allocator: Allocator,
@@ -207,64 +290,10 @@ pub struct TLASBuildFuture<T: BufferLike> {
     build_size: vk::AccelerationStructureBuildSizesInfoKHR,
 }
 
-pub fn build_tlas<T: BufferLike>(
-    allocator: Allocator,
-    buffer: RenderRes<T>,
-    num_instances: u32,
-    geometry_flags: vk::GeometryFlagsKHR,
-    build_flags: vk::BuildAccelerationStructureFlagsKHR,
-) -> TLASBuildFuture<T> {
-    let geometry_info = vk::AccelerationStructureGeometryKHR {
-        geometry_type: vk::GeometryTypeKHR::INSTANCES,
-        geometry: vk::AccelerationStructureGeometryDataKHR {
-            instances: vk::AccelerationStructureGeometryInstancesDataKHR {
-                array_of_pointers: vk::FALSE,
-                data: vk::DeviceOrHostAddressConstKHR {
-                    device_address: buffer.inner().device_address(),
-                },
-                ..Default::default()
-            },
-        },
-        flags: geometry_flags,
-        ..Default::default()
-    };
-    let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
-        ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
-        flags: build_flags,
-        mode: vk::BuildAccelerationStructureModeKHR::BUILD,
-        geometry_count: 1,
-        p_geometries: &geometry_info,
-        ..Default::default()
-    };
-    let build_size = unsafe {
-        allocator
-            .device()
-            .accel_struct_loader()
-            .get_acceleration_structure_build_sizes(
-                vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                &build_info,
-                &[num_instances],
-            )
-    };
-    let acceleration_structure =
-        AccelerationStructure::new_tlas(&allocator, build_size.acceleration_structure_size)
-            .unwrap();
-    build_info.dst_acceleration_structure = acceleration_structure.raw();
-    TLASBuildFuture {
-        allocator: allocator,
-        input_buffer: Some(buffer),
-        acceleration_structure: Some(RenderRes::new(acceleration_structure)),
-        geometry_info,
-        build_info,
-        num_instances,
-        build_size,
-    }
-}
-
 impl<T: BufferLike + Send> GPUCommandFuture for TLASBuildFuture<T> {
     type Output = RenderRes<AccelerationStructure>;
     fn record(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         ctx: &mut crate::future::CommandBufferRecordContext,
         recycled_state: &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {

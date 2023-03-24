@@ -106,7 +106,7 @@ impl<T> ManagedBuffer<T> {
 
     pub fn buffer(
         &mut self,
-    ) -> impl GPUCommandFuture<Output = RenderRes<Box<dyn BufferLike + Send + Sync>>> {
+    ) -> Option<impl GPUCommandFuture<Output = RenderRes<Box<dyn BufferLike + Send + Sync>>>> {
         let item_size = std::alloc::Layout::new::<T>().pad_to_align().size();
         let (device_buffer_direct, device_buffer_staged, old_device_buffer) = match &mut self
             .strategy
@@ -116,6 +116,9 @@ impl<T> ManagedBuffer<T> {
                 objects,
                 changeset,
             } => {
+                if objects.is_empty() {
+                    return None;
+                }
                 let create_buffer = || {
                     let create_buffer = self
                         .allocator
@@ -176,6 +179,9 @@ impl<T> ManagedBuffer<T> {
                 staging_buffer,
                 changes,
             } => {
+                if *num_items == 0 {
+                    return None;
+                }
                 let expected_staging_size = (item_size * changes.len()) as u64;
                 let staging_buffer = staging_buffer
                     .use_state(|| {
@@ -240,7 +246,7 @@ impl<T> ManagedBuffer<T> {
             }
         };
 
-        commands! {
+        let fut = commands! {
             if let Some((device_buffer, staging_buffer, buffer_copy)) = device_buffer_staged {
                 let mut device_buffer = RenderRes::new(device_buffer);
 
@@ -260,6 +266,7 @@ impl<T> ManagedBuffer<T> {
                 let buffer = Box::new(device_buffer_direct.unwrap()) as Box<dyn BufferLike + Send + Sync>;
                 RenderRes::new(buffer)
             }
-        }
+        };
+        Some(fut)
     }
 }

@@ -14,20 +14,18 @@ pub trait CommandsTransformer {
 
     fn transform_pattern(&mut self, pat: &Pat, is_inloop: bool) -> Pat {
         match pat {
-            Pat::Box(pat) => Pat::Box(syn::PatBox {
-                pat: Box::new(self.transform_pattern(&pat.pat, is_inloop)),
-                ..pat.clone()
-            }),
             Pat::Ident(ident) => Pat::Ident(syn::PatIdent {
-                subpat: ident
-                    .subpat
-                    .as_ref()
-                    .map(|(at, subpat)| (at.clone(), Box::new(self.transform_pattern(subpat, is_inloop)))),
+                subpat: ident.subpat.as_ref().map(|(at, subpat)| {
+                    (
+                        at.clone(),
+                        Box::new(self.transform_pattern(subpat, is_inloop)),
+                    )
+                }),
                 ..ident.clone()
             }),
             Pat::Lit(lit) => Pat::Lit(syn::PatLit {
-                expr: Box::new(self.transform_expr(&lit.expr, is_inloop)),
-                ..lit.clone()
+                attrs: lit.attrs.clone(),
+                lit: lit.lit.clone(),
             }),
             Pat::Or(clause) => Pat::Or(syn::PatOr {
                 cases: clause
@@ -38,8 +36,14 @@ pub trait CommandsTransformer {
                 ..clause.clone()
             }),
             Pat::Range(range) => Pat::Range(syn::PatRange {
-                lo: Box::new(self.transform_expr(&range.lo, is_inloop)),
-                hi: Box::new(self.transform_expr(&range.hi, is_inloop)),
+                start: range
+                    .start
+                    .as_ref()
+                    .map(|start| Box::new(self.transform_expr(&start, is_inloop))),
+                end: range
+                    .end
+                    .as_ref()
+                    .map(|end| Box::new(self.transform_expr(&end, is_inloop))),
                 ..range.clone()
             }),
             Pat::Reference(r) => Pat::Reference(syn::PatReference {
@@ -74,15 +78,11 @@ pub trait CommandsTransformer {
                 ..tuple.clone()
             }),
             Pat::TupleStruct(tuple) => Pat::TupleStruct(syn::PatTupleStruct {
-                pat: syn::PatTuple {
-                    elems: tuple
-                        .pat
-                        .elems
-                        .iter()
-                        .map(|pat| self.transform_pattern(pat, is_inloop))
-                        .collect(),
-                    ..tuple.pat.clone()
-                },
+                elems: tuple
+                    .elems
+                    .iter()
+                    .map(|pat| self.transform_pattern(pat, is_inloop))
+                    .collect(),
                 ..tuple.clone()
             }),
             Pat::Type(ty) => Pat::Type(syn::PatType {
@@ -103,11 +103,6 @@ pub trait CommandsTransformer {
                 ..arr.clone()
             }),
             Expr::Assign(assign) => Expr::Assign(syn::ExprAssign {
-                left: Box::new(self.transform_expr(&*assign.left, is_inloop)),
-                right: Box::new(self.transform_expr(&*assign.right, is_inloop)),
-                ..assign.clone()
-            }),
-            Expr::AssignOp(assign) => Expr::AssignOp(syn::ExprAssignOp {
                 left: Box::new(self.transform_expr(&*assign.left, is_inloop)),
                 right: Box::new(self.transform_expr(&*assign.right, is_inloop)),
                 ..assign.clone()
@@ -139,7 +134,7 @@ pub trait CommandsTransformer {
                 ..field.clone()
             }),
             Expr::ForLoop(l) => Expr::ForLoop(syn::ExprForLoop {
-                pat: self.transform_pattern(&l.pat, is_inloop),
+                pat: Box::new(self.transform_pattern(&l.pat, is_inloop)),
                 expr: Box::new(self.transform_expr(&*l.expr, is_inloop)),
                 body: self.transform_block(&l.body, true),
                 ..l.clone()
@@ -152,7 +147,10 @@ pub trait CommandsTransformer {
                 cond: Box::new(self.transform_expr(&if_stmt.cond, is_inloop)),
                 then_branch: self.transform_block(&if_stmt.then_branch, is_inloop),
                 else_branch: if_stmt.else_branch.as_ref().map(|(else_token, expr)| {
-                    (else_token.clone(), Box::new(self.transform_expr(&expr, is_inloop)))
+                    (
+                        else_token.clone(),
+                        Box::new(self.transform_expr(&expr, is_inloop)),
+                    )
                 }),
                 ..if_stmt.clone()
             }),
@@ -162,7 +160,7 @@ pub trait CommandsTransformer {
                 ..index_expr.clone()
             }),
             Expr::Let(l) => Expr::Let(syn::ExprLet {
-                pat: self.transform_pattern(&l.pat, is_inloop),
+                pat: Box::new(self.transform_pattern(&l.pat, is_inloop)),
                 expr: Box::new(self.transform_expr(&*l.expr, is_inloop)),
                 ..l.clone()
             }),
@@ -170,7 +168,7 @@ pub trait CommandsTransformer {
                 body: self.transform_block(&loop_stmt.body, is_inloop),
                 ..loop_stmt.clone()
             }),
-            Expr::Macro(m) => self.macro_transform(m, is_inloop),
+            Expr::Macro(m) => self.macro_transform_expr(m, is_inloop),
             Expr::Match(match_expr) => Expr::Match(syn::ExprMatch {
                 expr: Box::new(self.transform_expr(&*match_expr.expr, is_inloop)),
                 arms: match_expr
@@ -179,7 +177,10 @@ pub trait CommandsTransformer {
                     .map(|arm| syn::Arm {
                         pat: self.transform_pattern(&arm.pat, is_inloop),
                         guard: arm.guard.as_ref().map(|(guard_token, expr)| {
-                            (guard_token.clone(), Box::new(self.transform_expr(&expr, is_inloop)))
+                            (
+                                guard_token.clone(),
+                                Box::new(self.transform_expr(&expr, is_inloop)),
+                            )
                         }),
                         body: Box::new(self.transform_expr(&arm.body, is_inloop)),
                         ..arm.clone()
@@ -201,11 +202,14 @@ pub trait CommandsTransformer {
                 ..paren.clone()
             }),
             Expr::Range(range) => Expr::Range(syn::ExprRange {
-                from: range
-                    .from
+                start: range
+                    .start
                     .as_ref()
                     .map(|f| Box::new(self.transform_expr(&f, is_inloop))),
-                to: range.to.as_ref().map(|t| Box::new(self.transform_expr(&t, is_inloop))),
+                end: range
+                    .end
+                    .as_ref()
+                    .map(|t| Box::new(self.transform_expr(&t, is_inloop))),
                 ..range.clone()
             }),
             Expr::Reference(reference) => Expr::Reference(syn::ExprReference {
@@ -222,7 +226,10 @@ pub trait CommandsTransformer {
                     expr
                 } else {
                     Expr::Return(syn::ExprReturn {
-                        expr: ret.expr.as_ref().map(|e| Box::new(self.transform_expr(&e, is_inloop))),
+                        expr: ret
+                            .expr
+                            .as_ref()
+                            .map(|e| Box::new(self.transform_expr(&e, is_inloop))),
                         ..ret.clone()
                     })
                 }
@@ -251,10 +258,6 @@ pub trait CommandsTransformer {
                     .collect(),
                 ..tuple.clone()
             }),
-            Expr::Type(type_expr) => Expr::Type(syn::ExprType {
-                expr: Box::new(self.transform_expr(&type_expr.expr, is_inloop)),
-                ..type_expr.clone()
-            }),
             Expr::Unary(unary) => Expr::Unary(syn::ExprUnary {
                 expr: Box::new(self.transform_expr(&unary.expr, is_inloop)),
                 ..unary.clone()
@@ -276,17 +279,27 @@ pub trait CommandsTransformer {
         match stmt {
             Stmt::Local(local) => Stmt::Local(syn::Local {
                 pat: self.transform_pattern(&local.pat, is_inloop),
-                init: local.init.as_ref().map(|(eq_token, expr)| {
-                    (eq_token.clone(), Box::new(self.transform_expr(&expr, is_inloop)))
+                init: local.init.as_ref().map(|local_init| syn::LocalInit {
+                    eq_token: local_init.eq_token.clone(),
+                    expr: Box::new(self.transform_expr(&local_init.expr, is_inloop)),
+                    diverge: local_init.diverge.as_ref().map(|(else_token, expr)| {
+                        (
+                            else_token.clone(),
+                            Box::new(self.transform_expr(&expr, is_inloop)),
+                        )
+                    }),
                 }),
                 ..local.clone()
             }),
-            Stmt::Expr(expr) => Stmt::Expr(self.transform_expr(&expr, is_inloop)),
-            Stmt::Semi(expr, semi) => Stmt::Semi(self.transform_expr(expr, is_inloop), semi.clone()),
+            Stmt::Expr(expr, semi) => {
+                Stmt::Expr(self.transform_expr(&expr, is_inloop), semi.clone())
+            }
+            Stmt::Macro(mac) => self.macro_transform_stmt(mac, is_inloop),
             _ => stmt.clone(),
         }
     }
     fn async_transform(&mut self, input: &syn::ExprAwait, is_inloop: bool) -> syn::Expr;
-    fn macro_transform(&mut self, mac: &syn::ExprMacro, is_inloop: bool) -> syn::Expr;
+    fn macro_transform_stmt(&mut self, mac: &syn::StmtMacro, is_inloop: bool) -> syn::Stmt;
+    fn macro_transform_expr(&mut self, mac: &syn::ExprMacro, is_inloop: bool) -> syn::Expr;
     fn return_transform(&mut self, ret: &syn::ExprReturn) -> Option<syn::Expr>;
 }

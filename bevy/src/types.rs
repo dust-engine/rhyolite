@@ -1,7 +1,4 @@
-use std::{
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
+use std::{ops::Deref, sync::Arc};
 
 use bevy_ecs::system::Resource;
 
