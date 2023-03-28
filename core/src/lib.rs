@@ -11,6 +11,7 @@
 #![feature(let_chains)]
 #![feature(int_roundings)]
 #![feature(unsized_locals)]
+#![feature(unsized_fn_params)]
 
 pub use cstr::cstr;
 

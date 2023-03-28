@@ -12,6 +12,7 @@ use crate::{
     debug::DebugObject,
     future::{CommandBufferRecordContext, GPUCommandFuture, RenderRes, StageContext},
     macros::commands,
+    utils::either::Either,
     Allocator, HasDevice, PhysicalDeviceMemoryModel, SharingMode,
 };
 use vk_mem::Alloc;
@@ -24,6 +25,36 @@ pub trait BufferLike {
     fn size(&self) -> vk::DeviceSize;
     fn device_address(&self) -> vk::DeviceAddress;
 }
+
+impl<A: BufferLike, B: BufferLike> BufferLike for Either<A, B> {
+    fn raw_buffer(&self) -> vk::Buffer {
+        match self {
+            Either::Left(a) => a.raw_buffer(),
+            Either::Right(a) => a.raw_buffer(),
+        }
+    }
+
+    fn size(&self) -> vk::DeviceSize {
+        match self {
+            Either::Left(a) => a.size(),
+            Either::Right(a) => a.size(),
+        }
+    }
+    fn offset(&self) -> vk::DeviceSize {
+        match self {
+            Either::Left(a) => a.offset(),
+            Either::Right(a) => a.offset(),
+        }
+    }
+
+    fn device_address(&self) -> vk::DeviceAddress {
+        match self {
+            Either::Left(a) => a.device_address(),
+            Either::Right(a) => a.device_address(),
+        }
+    }
+}
+
 impl<T: BufferLike + ?Sized> BufferLike for Box<T> {
     fn raw_buffer(&self) -> vk::Buffer {
         (**self).raw_buffer()
