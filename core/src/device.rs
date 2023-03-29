@@ -4,6 +4,7 @@ use ash::vk;
 use crate::Instance;
 use crate::PhysicalDevice;
 use crate::QueueInfo;
+use crate::utils::either::Either;
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
@@ -17,6 +18,15 @@ pub trait HasDevice {
     }
     fn instance(&self) -> &Arc<Instance> {
         self.device().physical_device.instance()
+    }
+}
+
+impl<A: HasDevice, B: HasDevice> HasDevice for Either<A, B> {
+    fn device(&self) -> &Arc<Device> {
+        match self {
+            Either::Left(a) => a.device(),
+            Either::Right(a) => a.device()
+        }
     }
 }
 

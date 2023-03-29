@@ -13,10 +13,12 @@ use crate::{
 pub struct RayTracingPipeline {
     layout: Arc<PipelineLayout>,
     pipeline: vk::Pipeline,
-    num_raygen: u32,
-    num_raymiss: u32,
-    num_callable: u32,
-    num_hitgroup: u32,
+    sbt_handles: SbtHandles
+}
+impl RayTracingPipeline {
+    pub fn raw(&self) -> vk::Pipeline {
+        self.pipeline
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -411,21 +413,25 @@ impl RayTracingPipeline {
                 &mut pipeline,
             )
         };
-
+        let sbt_handles = SbtHandles::new(
+            &device,
+            pipeline,
+            num_raygen,
+            num_raymiss,
+            num_callable,
+            num_hitgroup
+        ).unwrap();
         (
             Self {
                 layout,
                 pipeline,
-                num_callable,
-                num_hitgroup,
-                num_raygen,
-                num_raymiss,
+                sbt_handles
             },
             result,
         )
     }
-    pub fn get_shader_group_handles(&self) -> VkResult<SbtHandles> {
-        SbtHandles::new(self)
+    pub fn get_shader_group_handles(&self) -> &SbtHandles {
+        &self.sbt_handles
     }
 }
 
@@ -442,18 +448,17 @@ impl SbtHandles {
     pub fn handle_layout(&self) -> &Layout {
         &self.handle_layout
     }
-    fn new(pipeline: &RayTracingPipeline) -> VkResult<SbtHandles> {
-        let total_num_groups = pipeline.num_hitgroup
-            + pipeline.num_raymiss
-            + pipeline.num_callable
-            + pipeline.num_raygen;
-        let rtx_properties = &pipeline.device().physical_device().properties().ray_tracing;
+    fn new(device: &Device, pipeline: vk::Pipeline, num_raygen: u32, num_miss: u32, num_callable: u32, num_hitgroup: u32) -> VkResult<SbtHandles> {
+        let total_num_groups = num_hitgroup
+            + num_miss
+            + num_callable
+            + num_raygen;
+        let rtx_properties = &device.physical_device().properties().ray_tracing;
         let sbt_handles_host_vec = unsafe {
-            pipeline
-                .device()
+            device
                 .rtx_loader()
                 .get_ray_tracing_shader_group_handles(
-                    pipeline.pipeline,
+                    pipeline,
                     0,
                     total_num_groups,
                     // VUID-vkGetRayTracingShaderGroupHandlesKHR-dataSize-02420
@@ -470,10 +475,10 @@ impl SbtHandles {
             )
             .unwrap(),
             group_base_alignment: rtx_properties.shader_group_base_alignment,
-            num_raygen: pipeline.num_raygen,
-            num_miss: pipeline.num_raymiss,
-            num_callable: pipeline.num_callable,
-            num_hitgroup: pipeline.num_hitgroup,
+            num_raygen: num_raygen,
+            num_miss: num_miss,
+            num_callable: num_callable,
+            num_hitgroup: num_hitgroup,
         })
     }
 

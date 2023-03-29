@@ -10,17 +10,25 @@ use crate::{
         SharedDeviceState, SharedDeviceStateHostContainer,
     },
     utils::{either::Either, merge_ranges::MergeRangeIteratorExt},
-    Allocator, BufferLike, HasDevice, ResidentBuffer,
+    Allocator, BufferLike, HasDevice, ResidentBuffer, device,
 };
 use ash::vk;
 use rhyolite::macros::commands;
 
-type ManagedBufferInner =
+pub type ManagedBufferInner =
     Either<PerFrameContainer<ResidentBuffer>, SharedDeviceState<ResidentBuffer>>;
 
 pub enum ManagedBuffer<T> {
     DirectWrite(ManagedBufferStrategyDirectWrite<T>),
     StagingBuffer(ManagedBufferStrategyStaging<T>),
+}
+impl<T> HasDevice for ManagedBuffer<T> {
+    fn device(&self) -> &std::sync::Arc<crate::Device> {
+        match self {
+            Self::DirectWrite(a) => a.allocator.device(),
+            Self::StagingBuffer(a) => a.allocator.device()
+        }
+    }
 }
 
 impl<T> ManagedBuffer<T> {
@@ -56,6 +64,85 @@ impl<T> ManagedBuffer<T> {
         }
     }
     pub fn set(&mut self, index: usize, item: T) {
+        match self {
+            Self::DirectWrite(strategy) => strategy.set(index, item),
+            Self::StagingBuffer(strategy) => strategy.set(index, item),
+        }
+    }
+
+    pub fn buffer(
+        &mut self,
+    ) -> Option<impl GPUCommandFuture<Output = RenderRes<ManagedBufferInner>>> {
+        let buffer = match self {
+            Self::DirectWrite(strategy) => strategy.buffer().map(|b| Either::Left(b)),
+            Self::StagingBuffer(strategy) => strategy.buffer().map(|b| Either::Right(b)),
+        }?;
+
+        let fut = commands! {
+            match buffer {
+                Either::Left(buffer) => {
+                    RenderRes::new(Either::Left(buffer))
+                }
+                Either::Right(future) => {
+                    let result = future.await;
+                    result.map(|a| Either::Right(a))
+                }
+            }
+        };
+        Some(fut)
+    }
+}
+
+
+
+pub enum ManagedBufferUnsized {
+    DirectWrite(ManagedBufferStrategyDirectWriteUnsized),
+    StagingBuffer(ManagedBufferStrategyStagingUnsized),
+}
+impl HasDevice for ManagedBufferUnsized {
+    fn device(&self) -> &std::sync::Arc<crate::Device> {
+        match self {
+            Self::DirectWrite(a) => a.allocator.device(),
+            Self::StagingBuffer(a) => a.allocator.device()
+        }
+    }
+}
+
+impl ManagedBufferUnsized {
+    pub fn new(allocator: Allocator, buffer_usage_flags: vk::BufferUsageFlags, layout: Layout) -> Self {
+        use crate::PhysicalDeviceMemoryModel::*;
+        match allocator.physical_device().memory_model() {
+            Discrete | Bar => Self::DirectWrite(ManagedBufferStrategyDirectWriteUnsized::new(
+                allocator,
+                buffer_usage_flags,
+                layout
+            )),
+            ResizableBar | UMA => Self::StagingBuffer(ManagedBufferStrategyStagingUnsized::new(
+                allocator,
+                buffer_usage_flags,
+                layout
+            )),
+        }
+    }
+    pub fn len(&self) -> usize {
+        match self {
+            Self::DirectWrite(strategy) => strategy.len(),
+            Self::StagingBuffer(strategy) => strategy.len(),
+        }
+    }
+    pub fn allocator(&self) -> &Allocator {
+        match self {
+            Self::DirectWrite(strategy) => strategy.allocator(),
+            Self::StagingBuffer(strategy) => strategy.allocator(),
+        }
+    }
+    pub fn push(&mut self, item: &[u8]) {
+        match self {
+            Self::DirectWrite(strategy) => strategy.push(item),
+            Self::StagingBuffer(strategy) => strategy.push(item),
+        }
+    }
+    pub fn set(&mut self, index: usize, item: &[u8]) {
         match self {
             Self::DirectWrite(strategy) => strategy.set(index, item),
             Self::StagingBuffer(strategy) => strategy.set(index, item),
@@ -212,8 +299,8 @@ impl ManagedBufferStrategyDirectWriteUnsized {
     pub fn allocator(&self) -> &Allocator {
         &self.allocator
     }
-    pub fn push<T: ?Sized + Copy>(&mut self, item: T) {
-        assert_eq!(Layout::new::<T>(), self.layout);
+    pub fn push(&mut self, item: &[u8]) {
+        assert_eq!(item.len(), self.layout.size());
 
         let index = self.num_items;
         self.num_items += 1;
@@ -224,7 +311,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
                 .objects_buffer
                 .as_mut_ptr()
                 .add(self.objects_buffer.len());
-            std::ptr::copy_nonoverlapping(&item as *const _ as *const u8, dst, self.layout.size());
+            std::ptr::copy_nonoverlapping(item.as_ptr(), dst, self.layout.size());
             self.objects_buffer
                 .set_len(self.objects_buffer.len() + self.layout.pad_to_align().size());
         }
@@ -232,15 +319,15 @@ impl ManagedBufferStrategyDirectWriteUnsized {
             changes.insert(index);
         }
     }
-    pub fn set<T: ?Sized + Copy>(&mut self, index: usize, item: T) {
+    pub fn set(&mut self, index: usize, item: &[u8]) {
         assert!(index < self.num_items);
-        assert_eq!(Layout::new::<T>(), self.layout);
+        assert_eq!(item.len(), self.layout.size());
         unsafe {
             let dst = self
                 .objects_buffer
                 .as_mut_ptr()
                 .add(index * self.layout.pad_to_align().size());
-            std::ptr::copy_nonoverlapping(&item as *const _ as *const u8, dst, self.layout.size());
+            std::ptr::copy_nonoverlapping(item.as_ptr(), dst, self.layout.size());
         }
         for changes in self.changeset.values_mut() {
             changes.insert(index);
@@ -342,8 +429,10 @@ impl<T> ManagedBufferStrategyStaging<T> {
         if self.num_items == 0 {
             return None;
         }
-        let expected_staging_size = (item_size * self.changes.len()) as u64;
-        let staging_buffer = self
+        let staging_buffer_copy = if !self.changes.is_empty() {
+            let expected_staging_size = (item_size * self.changes.len()) as u64;
+
+            let staging_buffer = self
             .staging_buffer
             .use_state(|| {
                 self.allocator
@@ -359,29 +448,31 @@ impl<T> ManagedBufferStrategyStaging<T> {
                         .unwrap();
                 }
             });
-
-        let changes = std::mem::take(&mut self.changes);
-        let (changed_indices, changed_items): (Vec<usize>, Vec<T>) = changes.into_iter().unzip();
-        staging_buffer
-            .contents_mut()
-            .unwrap()
-            .copy_from_slice(unsafe {
-                std::slice::from_raw_parts(
-                    changed_items.as_ptr() as *const u8,
-                    std::mem::size_of_val(changed_items.as_slice()),
-                )
-            });
-
-        let staging_current_index = 0; // ???
-        let buffer_copy = changed_indices
-            .into_iter()
-            .merge_ranges()
-            .map(|(start, len)| vk::BufferCopy {
-                src_offset: staging_current_index * item_size as u64,
-                dst_offset: start as u64 * item_size as u64,
-                size: len as u64 * item_size as u64,
-            })
-            .collect::<Vec<_>>();
+            let changes = std::mem::take(&mut self.changes);
+            let (changed_indices, changed_items): (Vec<usize>, Vec<T>) = changes.into_iter().unzip();
+            staging_buffer
+                .contents_mut()
+                .unwrap()
+                .copy_from_slice(unsafe {
+                    std::slice::from_raw_parts(
+                        changed_items.as_ptr() as *const u8,
+                        std::mem::size_of_val(changed_items.as_slice()),
+                    )
+                });
+            let staging_current_index = 0; // ???
+            let buffer_copy = changed_indices
+                .into_iter()
+                .merge_ranges()
+                .map(|(start, len)| vk::BufferCopy {
+                    src_offset: staging_current_index * item_size as u64,
+                    dst_offset: start as u64 * item_size as u64,
+                    size: len as u64 * item_size as u64,
+                })
+                .collect::<Vec<_>>();
+            Some((staging_buffer, buffer_copy))
+        } else {
+            None
+        };
 
         let expected_whole_buffer_size = self.num_items as u64 * item_size as u64;
         let (device_buffer, old_device_buffer) = use_shared_state_with_old(
@@ -390,7 +481,7 @@ impl<T> ManagedBufferStrategyStaging<T> {
                 self.allocator
                     .create_device_buffer_uninit(
                         expected_whole_buffer_size,
-                        self.buffer_usage_flags,
+                        self.buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST,
                     )
                     .unwrap()
             },
@@ -405,11 +496,11 @@ impl<T> ManagedBufferStrategyStaging<T> {
                 copy_buffer(&old_buffer, &mut device_buffer).await;
                 retain!(old_buffer);
             }
-
-            let staging_buffer = RenderRes::new(staging_buffer);
-            copy_buffer_regions(&staging_buffer, &mut device_buffer, buffer_copy).await;
-            retain!(staging_buffer);
-
+            if let Some((staging_buffer, buffer_copy)) = staging_buffer_copy {
+                let staging_buffer = RenderRes::new(staging_buffer);
+                copy_buffer_regions(&staging_buffer, &mut device_buffer, buffer_copy).await;
+                retain!(staging_buffer);
+            }
 
             device_buffer
         };
@@ -453,7 +544,7 @@ impl ManagedBufferStrategyStagingUnsized {
     pub fn allocator(&self) -> &Allocator {
         &self.allocator
     }
-    pub fn push<T: ?Sized + Copy>(&mut self, item: T) {
+    pub fn push(&mut self, item: &[u8]) {
         let change_buffer_index = self.change_buffer.len() / self.layout.pad_to_align().size();
         self.change_buffer
             .reserve(self.layout.pad_to_align().size());
@@ -462,7 +553,7 @@ impl ManagedBufferStrategyStagingUnsized {
                 .change_buffer
                 .as_mut_ptr()
                 .add(self.change_buffer.len());
-            std::ptr::copy_nonoverlapping(&item as *const _ as *const u8, dst, self.layout.size());
+            std::ptr::copy_nonoverlapping(item.as_ptr(), dst, self.layout.size());
             self.change_buffer
                 .set_len(self.change_buffer.len() + self.layout.pad_to_align().size());
         }
@@ -470,7 +561,7 @@ impl ManagedBufferStrategyStagingUnsized {
         self.changes.insert(self.num_items, change_buffer_index);
         self.num_items += 1;
     }
-    pub fn set<T: ?Sized + Copy>(&mut self, index: usize, item: T) {
+    pub fn set(&mut self, index: usize, item: &[u8]) {
         if let Some(existing_change_buffer_index) = self.changes.get(&index) {
             unsafe {
                 let dst = self
@@ -478,7 +569,7 @@ impl ManagedBufferStrategyStagingUnsized {
                     .as_mut_ptr()
                     .add(existing_change_buffer_index * self.layout.pad_to_align().size());
                 std::ptr::copy_nonoverlapping(
-                    &item as *const _ as *const u8,
+                    item.as_ptr(),
                     dst,
                     self.layout.size(),
                 );
@@ -511,55 +602,61 @@ impl ManagedBufferStrategyStagingUnsized {
         if self.num_items == 0 {
             return None;
         }
-        let expected_staging_size = self.change_buffer.len() as u64;
-        let staging_buffer = self
-            .staging_buffer
-            .use_state(|| {
-                self.allocator
-                    .create_staging_buffer(self.change_buffer.len() as u64)
-                    .unwrap()
-            })
-            .reuse(|old| {
-                if old.size() < expected_staging_size {
-                    // Too small. Enlarge.
-                    *old = self
-                        .allocator
-                        .create_staging_buffer((old.size() as u64 * 2).max(expected_staging_size))
-                        .unwrap();
+        let staging_buffer_copy = if !self.change_buffer.is_empty() {
+            let expected_staging_size = self.change_buffer.len() as u64;
+            let staging_buffer = self
+                .staging_buffer
+                .use_state(|| {
+                    self.allocator
+                        .create_staging_buffer(self.change_buffer.len() as u64)
+                        .unwrap()
+                })
+                .reuse(|old| {
+                    if old.size() < expected_staging_size {
+                        // Too small. Enlarge.
+                        *old = self
+                            .allocator
+                            .create_staging_buffer((old.size() as u64 * 2).max(expected_staging_size))
+                            .unwrap();
+                    }
+                });
+    
+            let changes = std::mem::take(&mut self.changes);
+            let ordered_change_buffer = staging_buffer.contents_mut().unwrap();
+            {
+                let mut ordered_change_buffer_len = 0;
+                for (_, change_buffer_index) in changes.iter() {
+                    let src = &self.change_buffer
+                        [change_buffer_index * item_size..(change_buffer_index + 1) * item_size];
+                    let dst = &mut ordered_change_buffer
+                        [ordered_change_buffer_len..ordered_change_buffer_len + item_size];
+                    dst.copy_from_slice(src);
+                    ordered_change_buffer_len += item_size;
                 }
-            });
-
-        let changes = std::mem::take(&mut self.changes);
-        let ordered_change_buffer = staging_buffer.contents_mut().unwrap();
-        {
-            let mut ordered_change_buffer_len = 0;
-            for (_, change_buffer_index) in changes.iter() {
-                let src = &self.change_buffer
-                    [change_buffer_index * item_size..(change_buffer_index + 1) * item_size];
-                let dst = &mut ordered_change_buffer
-                    [ordered_change_buffer_len..ordered_change_buffer_len + item_size];
-                dst.copy_from_slice(src);
-                ordered_change_buffer_len += item_size;
+                self.change_buffer.clear();
+                assert_eq!(ordered_change_buffer.len(), ordered_change_buffer_len);
             }
-            self.change_buffer.clear();
-            assert_eq!(ordered_change_buffer.len(), ordered_change_buffer_len);
-        }
-
-        let mut staging_current_index = 0;
-        let buffer_copy = changes
-            .keys()
-            .cloned()
-            .merge_ranges()
-            .map(|(start, len)| {
-                let copy = vk::BufferCopy {
-                    src_offset: staging_current_index * item_size as u64,
-                    dst_offset: start as u64 * item_size as u64,
-                    size: len as u64 * item_size as u64,
-                };
-                staging_current_index += len as u64;
-                copy
-            })
-            .collect::<Vec<_>>();
+    
+            let mut staging_current_index = 0;
+            let buffer_copy = changes
+                .keys()
+                .cloned()
+                .merge_ranges()
+                .map(|(start, len)| {
+                    let copy = vk::BufferCopy {
+                        src_offset: staging_current_index * item_size as u64,
+                        dst_offset: start as u64 * item_size as u64,
+                        size: len as u64 * item_size as u64,
+                    };
+                    staging_current_index += len as u64;
+                    copy
+                })
+                .collect::<Vec<_>>();
+            Some((staging_buffer, buffer_copy))
+        } else {
+            None
+        };
+       
 
         let expected_whole_buffer_size = self.num_items as u64 * item_size as u64;
         let (device_buffer, old_device_buffer) = use_shared_state_with_old(
@@ -568,7 +665,7 @@ impl ManagedBufferStrategyStagingUnsized {
                 self.allocator
                     .create_device_buffer_uninit(
                         expected_whole_buffer_size,
-                        self.buffer_usage_flags,
+                        self.buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST,
                     )
                     .unwrap()
             },
@@ -583,11 +680,11 @@ impl ManagedBufferStrategyStagingUnsized {
                 copy_buffer(&old_buffer, &mut device_buffer).await;
                 retain!(old_buffer);
             }
-
-            let staging_buffer = RenderRes::new(staging_buffer);
-            copy_buffer_regions(&staging_buffer, &mut device_buffer, buffer_copy).await;
-            retain!(staging_buffer);
-
+            if let Some((staging_buffer, buffer_copy)) = staging_buffer_copy {
+                let staging_buffer = RenderRes::new(staging_buffer);
+                copy_buffer_regions(&staging_buffer, &mut device_buffer, buffer_copy).await;
+                retain!(staging_buffer);
+            }
 
             device_buffer
         };

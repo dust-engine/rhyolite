@@ -17,6 +17,28 @@ impl PipelineLayout {
     pub fn push_constant_range(&self) -> &[vk::PushConstantRange] {
         &self.push_constant_range
     }
+    pub fn new(device: Arc<Device>, set_layouts: Vec<Arc<DescriptorSetLayout>>, flags: vk::PipelineLayoutCreateFlags) -> VkResult<Self> {
+        
+        let raw_set_layouts: Vec<_> = 
+        set_layouts
+            .iter()
+            .map(|a| unsafe { a.raw() })
+            .collect();
+        let info = vk::PipelineLayoutCreateInfo {
+            flags,
+            set_layout_count: raw_set_layouts.len() as u32,
+            p_set_layouts: raw_set_layouts.as_ptr(),
+            ..Default::default()
+        };
+        
+        let layout = unsafe { device.create_pipeline_layout(&info, None)? };
+        Ok(Self {
+            device,
+            inner: layout,
+            desc_sets: set_layouts,
+            push_constant_range: Vec::new(),
+        })
+    }
     /// Create pipeline layout for pipelines with only one shader entry point. Only applicable to compute shaders.
     pub fn for_layout(
         device: Arc<Device>,
