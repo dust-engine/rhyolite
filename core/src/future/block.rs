@@ -30,10 +30,10 @@ impl GPUCommandGeneratorContextFetchPtr {
 // Yield = GPUCommandGeneratorContextFetchPtr,
 // Return = (R, State, PhantomData<&'retain ()>),
 // >;
-pub trait GPUCommandGenerator<'retain, R, State, Recycle: Default> = Generator<
+pub trait GPUCommandGenerator<R, State, Recycle: Default> = Generator<
     (*mut (), *mut Recycle),
     Yield = GPUCommandGeneratorContextFetchPtr,
-    Return = (R, State, PhantomData<&'retain ()>),
+    Return = (R, State),
 >;
 
 enum GPUCommandBlockState {
@@ -58,12 +58,12 @@ pub struct GPUCommandBlock<R, Retain, Recycle: Default, G> {
 /// TODO: This is a bad workaround. We use raw pointers inside the generator and rust had some problems
 /// figuring out their lifetimes, wrongly assuming that they will live across yield points. This causes
 /// Rust to mark the inner generator as Send.
-unsafe impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
-    Send for GPUCommandBlock<R, State, Recycle, G>
+unsafe impl<R, State, Recycle: Default, G: GPUCommandGenerator<R, State, Recycle>> Send
+    for GPUCommandBlock<R, State, Recycle, G>
 {
 }
 
-impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, State, Recycle>>
+impl<R, State, Recycle: Default, G: GPUCommandGenerator<R, State, Recycle>>
     GPUCommandBlock<R, State, Recycle, G>
 {
     pub fn new(inner: G) -> Self {
@@ -75,11 +75,10 @@ impl<'retain, R, State, Recycle: Default, G: GPUCommandGenerator<'retain, R, Sta
     }
 }
 impl<
-        'retain,
         R,
         State: Disposable + Send,
         Recycle: Default + Send + Sync,
-        G: GPUCommandGenerator<'retain, R, State, Recycle>,
+        G: GPUCommandGenerator<R, State, Recycle>,
     > GPUCommandFuture for GPUCommandBlock<R, State, Recycle, G>
 {
     type Output = R;
@@ -108,7 +107,7 @@ impl<
                 // continue here.
                 Poll::Pending
             }
-            GeneratorState::Complete((ret, state, _)) => {
+            GeneratorState::Complete((ret, state)) => {
                 *this.state = GPUCommandBlockState::Terminated;
                 Poll::Ready((ret, state))
             }
@@ -143,7 +142,7 @@ impl<
             GeneratorState::Yielded(ctx) => {
                 *this.state = GPUCommandBlockState::Continue { next_ctx: ctx };
             }
-            GeneratorState::Complete((output, retain, _)) => {
+            GeneratorState::Complete((output, retain)) => {
                 // We're pretty sure that this should be the first time we pull the generator.
                 // However, it's already completed. This indicates that nothing was awaited ever
                 // in the future.

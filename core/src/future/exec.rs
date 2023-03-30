@@ -54,7 +54,6 @@ impl<T> Disposable for RenderRes<T> {
         self.dispose_marker.dispose();
     }
 }
-// TODO: Make Res error out when not retained / disposed properly.
 impl<T> RenderRes<T> {
     pub fn new(inner: T) -> Self {
         Self {
@@ -176,46 +175,11 @@ impl<'a> CommandBufferRecordContext<'a> {
     }
 }
 
-pub struct CommandBufferRecordContextInner<'host, 'retain> {
-    pub ctx: &'host mut CommandBufferRecordContext<'host>,
-    pub _marker: PhantomData<&'retain ()>,
-}
-
 impl<'host> CommandBufferRecordContext<'host> {
     pub fn current_stage_index(&self) -> u32 {
         self.stage_index
     }
 }
-impl<'host, 'retain> CommandBufferRecordContextInner<'host, 'retain> {
-    pub fn current_stage_index(&self) -> u32 {
-        self.ctx.stage_index
-    }
-    pub unsafe fn new(ptr: *mut ()) -> Self {
-        Self {
-            ctx: &mut *(ptr as *mut _),
-            _marker: PhantomData,
-        }
-    }
-    /// Perserve the lifetimes
-    pub unsafe fn update(old: Self, ptr: *mut ()) -> Self {
-        Self {
-            ctx: &mut *(ptr as *mut _),
-            _marker: old._marker,
-        }
-    }
-    pub unsafe fn add_res<T>(&mut self, res: T) -> RenderRes<T> {
-        // Extend the lifetime of res so that it lives as long as 'retain
-        RenderRes::new(res)
-    }
-    pub unsafe fn add_image<T: ImageLike>(
-        &mut self,
-        res: T,
-        initial_layout: vk::ImageLayout,
-    ) -> RenderImage<T> {
-        RenderImage::new(res, initial_layout)
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct StageImageBarrier {
     pub barrier: vk::MemoryBarrier2,

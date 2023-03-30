@@ -54,21 +54,19 @@ impl CommandsTransformer for CommandsTransformState {
                 let mut fut = #base;
                 unsafe {
                     let mut fut_pinned = std::pin::Pin::new_unchecked(&mut fut);
-                    if let Some((out, retain)) = ::rhyolite::future::GPUCommandFuture::init(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
+                    if let Some((out, retain)) = ::rhyolite::future::GPUCommandFuture::init(fut_pinned.as_mut(), &mut *(__fut_global_ctx_ptr as *mut _), &mut {&mut *__recycled_states}.#index) {
                         #dispose_replace_stmt
                         out
                     } else {
                         (__fut_global_ctx_ptr, __recycled_states) = yield ::rhyolite::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
-                        __fut_global_ctx = ::rhyolite::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
                         loop {
-                            match ::rhyolite::future::GPUCommandFuture::record(fut_pinned.as_mut(), __fut_global_ctx.ctx, &mut {&mut *__recycled_states}.#index) {
+                            match ::rhyolite::future::GPUCommandFuture::record(fut_pinned.as_mut(),  &mut *(__fut_global_ctx_ptr as *mut _), &mut {&mut *__recycled_states}.#index) {
                                 ::std::task::Poll::Ready((output, retain)) => {
                                     #dispose_replace_stmt
                                     break output
                                 },
                                 ::std::task::Poll::Pending => {
                                     (__fut_global_ctx_ptr, __recycled_states) = yield ::rhyolite::future::GPUCommandGeneratorContextFetchPtr::new(fut_pinned.as_mut());
-                                    __fut_global_ctx = ::rhyolite::future::CommandBufferRecordContextInner::update(__fut_global_ctx, __fut_global_ctx_ptr);
                                 },
                             };
                         }
@@ -119,7 +117,7 @@ impl CommandsTransformer for CommandsTransformState {
             .unwrap_or(syn::Expr::Verbatim(quote::quote!(())));
         let token_stream = quote::quote!(
             {
-                return (#returned_item, #global_res_variable_name, __fut_global_ctx._marker);
+                return (#returned_item, #global_res_variable_name);
             }
         );
         let block = syn::parse2::<syn::ExprBlock>(token_stream).unwrap();
@@ -194,7 +192,7 @@ impl CommandsTransformState {
         quote::quote! {{
             let mut forked_future = ::rhyolite::future::GPUCommandForkedStateInner::Some(#forked_future);
             let mut pinned = unsafe{std::pin::Pin::new_unchecked(&mut forked_future)};
-            pinned.as_mut().unwrap_pinned().init(__fut_global_ctx, __recycled_states);
+            pinned.as_mut().unwrap_pinned().init( &mut *(__fut_global_ctx_ptr as *mut _), __recycled_states);
             let forked_future_inner = GPUCommandForkedInner::<_, #number_of_forks>::new(pinned);
             let #forked_future = #ret;
             #scope
@@ -260,7 +258,7 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
                     true
                 } else {
                     let token_stream = quote::quote! {
-                            return (#expr, #global_res_variable_name, __fut_global_ctx._marker);
+                            return (#expr, #global_res_variable_name);
                     };
                     *expr = syn::Expr::Verbatim(token_stream);
                     false
@@ -272,7 +270,7 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
     };
     if append_unit_return {
         let token_stream = quote::quote!(
-                return ((), #global_res_variable_name, __fut_global_ctx._marker)
+                return ((), #global_res_variable_name)
         );
         inner_closure_stmts.push(syn::Stmt::Expr(
             syn::Expr::Verbatim(token_stream),
@@ -300,7 +298,6 @@ pub fn proc_macro_commands(input: proc_macro2::TokenStream) -> proc_macro2::Toke
     let mv = input.mv;
     quote::quote! {
         ::rhyolite::future::GPUCommandBlock::new(static #mv |(mut __fut_global_ctx_ptr, mut __recycled_states): (*mut (), *mut #recycled_states_type)| {
-            let mut __fut_global_ctx = unsafe{::rhyolite::future::CommandBufferRecordContextInner::new(__fut_global_ctx_ptr)};
             let mut #global_res_variable_name = (#retain_bindings, );
             #(#inner_closure_stmts)*
         })
