@@ -4,18 +4,18 @@ use std::{
 };
 
 use crate::{
-    copy_buffer, copy_buffer_regions,
+    copy_buffer, copy_buffer_regions, device,
     future::{
         use_shared_state_with_old, GPUCommandFuture, PerFrameContainer, PerFrameState, RenderRes,
         SharedDeviceState, SharedDeviceStateHostContainer,
     },
     utils::{either::Either, merge_ranges::MergeRangeIteratorExt},
-    Allocator, BufferLike, HasDevice, ResidentBuffer, device,
+    Allocator, BufferLike, HasDevice, ResidentBuffer,
 };
 use ash::vk;
 use rhyolite::macros::commands;
 
-pub type ManagedBufferInner =
+type ManagedBufferInner =
     Either<PerFrameContainer<ResidentBuffer>, SharedDeviceState<ResidentBuffer>>;
 
 pub enum ManagedBuffer<T> {
@@ -26,7 +26,7 @@ impl<T> HasDevice for ManagedBuffer<T> {
     fn device(&self) -> &std::sync::Arc<crate::Device> {
         match self {
             Self::DirectWrite(a) => a.allocator.device(),
-            Self::StagingBuffer(a) => a.allocator.device()
+            Self::StagingBuffer(a) => a.allocator.device(),
         }
     }
 }
@@ -93,8 +93,6 @@ impl<T> ManagedBuffer<T> {
     }
 }
 
-
-
 pub enum ManagedBufferUnsized {
     DirectWrite(ManagedBufferStrategyDirectWriteUnsized),
     StagingBuffer(ManagedBufferStrategyStagingUnsized),
@@ -103,24 +101,28 @@ impl HasDevice for ManagedBufferUnsized {
     fn device(&self) -> &std::sync::Arc<crate::Device> {
         match self {
             Self::DirectWrite(a) => a.allocator.device(),
-            Self::StagingBuffer(a) => a.allocator.device()
+            Self::StagingBuffer(a) => a.allocator.device(),
         }
     }
 }
 
 impl ManagedBufferUnsized {
-    pub fn new(allocator: Allocator, buffer_usage_flags: vk::BufferUsageFlags, layout: Layout) -> Self {
+    pub fn new(
+        allocator: Allocator,
+        buffer_usage_flags: vk::BufferUsageFlags,
+        layout: Layout,
+    ) -> Self {
         use crate::PhysicalDeviceMemoryModel::*;
         match allocator.physical_device().memory_model() {
             Discrete | Bar => Self::DirectWrite(ManagedBufferStrategyDirectWriteUnsized::new(
                 allocator,
                 buffer_usage_flags,
-                layout
+                layout,
             )),
             ResizableBar | UMA => Self::StagingBuffer(ManagedBufferStrategyStagingUnsized::new(
                 allocator,
                 buffer_usage_flags,
-                layout
+                layout,
             )),
         }
     }
@@ -149,9 +151,7 @@ impl ManagedBufferUnsized {
         }
     }
 
-    pub fn buffer(
-        &mut self,
-    ) -> Option<impl GPUCommandFuture<Output = RenderRes<ManagedBufferInner>>> {
+    pub fn buffer(&mut self) -> Option<impl GPUCommandFuture<Output = RenderRes<impl BufferLike>>> {
         let buffer = match self {
             Self::DirectWrite(strategy) => strategy.buffer().map(|b| Either::Left(b)),
             Self::StagingBuffer(strategy) => strategy.buffer().map(|b| Either::Right(b)),
@@ -433,23 +433,26 @@ impl<T> ManagedBufferStrategyStaging<T> {
             let expected_staging_size = (item_size * self.changes.len()) as u64;
 
             let staging_buffer = self
-            .staging_buffer
-            .use_state(|| {
-                self.allocator
-                    .create_staging_buffer(expected_staging_size)
-                    .unwrap()
-            })
-            .reuse(|old| {
-                if old.size() < expected_staging_size {
-                    // Too small. Enlarge.
-                    *old = self
-                        .allocator
-                        .create_staging_buffer((old.size() as u64 * 2).max(expected_staging_size))
-                        .unwrap();
-                }
-            });
+                .staging_buffer
+                .use_state(|| {
+                    self.allocator
+                        .create_staging_buffer(expected_staging_size)
+                        .unwrap()
+                })
+                .reuse(|old| {
+                    if old.size() < expected_staging_size {
+                        // Too small. Enlarge.
+                        *old = self
+                            .allocator
+                            .create_staging_buffer(
+                                (old.size() as u64 * 2).max(expected_staging_size),
+                            )
+                            .unwrap();
+                    }
+                });
             let changes = std::mem::take(&mut self.changes);
-            let (changed_indices, changed_items): (Vec<usize>, Vec<T>) = changes.into_iter().unzip();
+            let (changed_indices, changed_items): (Vec<usize>, Vec<T>) =
+                changes.into_iter().unzip();
             staging_buffer
                 .contents_mut()
                 .unwrap()
@@ -568,11 +571,7 @@ impl ManagedBufferStrategyStagingUnsized {
                     .change_buffer
                     .as_mut_ptr()
                     .add(existing_change_buffer_index * self.layout.pad_to_align().size());
-                std::ptr::copy_nonoverlapping(
-                    item.as_ptr(),
-                    dst,
-                    self.layout.size(),
-                );
+                std::ptr::copy_nonoverlapping(item.as_ptr(), dst, self.layout.size());
             }
         } else {
             let change_buffer_index = self.change_buffer.len() / self.layout.pad_to_align().size();
@@ -616,11 +615,13 @@ impl ManagedBufferStrategyStagingUnsized {
                         // Too small. Enlarge.
                         *old = self
                             .allocator
-                            .create_staging_buffer((old.size() as u64 * 2).max(expected_staging_size))
+                            .create_staging_buffer(
+                                (old.size() as u64 * 2).max(expected_staging_size),
+                            )
                             .unwrap();
                     }
                 });
-    
+
             let changes = std::mem::take(&mut self.changes);
             let ordered_change_buffer = staging_buffer.contents_mut().unwrap();
             {
@@ -636,7 +637,7 @@ impl ManagedBufferStrategyStagingUnsized {
                 self.change_buffer.clear();
                 assert_eq!(ordered_change_buffer.len(), ordered_change_buffer_len);
             }
-    
+
             let mut staging_current_index = 0;
             let buffer_copy = changes
                 .keys()
@@ -656,7 +657,6 @@ impl ManagedBufferStrategyStagingUnsized {
         } else {
             None
         };
-       
 
         let expected_whole_buffer_size = self.num_items as u64 * item_size as u64;
         let (device_buffer, old_device_buffer) = use_shared_state_with_old(

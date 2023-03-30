@@ -531,6 +531,42 @@ impl StageContext {
         tracking.current_stage_access.read_stages |= stages;
         tracking.last_accessed_stage_index = self.stage_index;
     }
+    /// Declare a global memory read
+    #[inline]
+    pub fn read_others<T>(
+        &mut self,
+        res: &RenderRes<T>,
+        stages: vk::PipelineStageFlags2,
+        accesses: vk::AccessFlags2,
+    ) {
+        let access = Access {
+            read_access: accesses,
+            read_stages: stages,
+            ..Default::default()
+        };
+        let mut tracking = res.tracking_info.borrow_mut();
+        if tracking.last_accessed_stage_index < self.stage_index
+            || tracking.last_accessed_timeline < self.timeline_index
+        {
+            tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
+        }
+        self.add_barrier_tracking(&mut tracking, &access);
+        if tracking.prev_queue_family == self.queue_family_index
+            || tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED
+        {
+            get_memory_access(
+                &mut self.global_access,
+                &tracking.prev_stage_access,
+                &access,
+                false,
+            );
+        } else {
+            unimplemented!()
+        }
+        tracking.current_stage_access.read_access |= accesses;
+        tracking.current_stage_access.read_stages |= stages;
+        tracking.last_accessed_stage_index = self.stage_index;
+    }
     #[inline]
     pub fn write_image<T>(
         &mut self,

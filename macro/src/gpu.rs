@@ -5,8 +5,7 @@ use crate::transformer::CommandsTransformer;
 
 struct State {
     current_dispose_index: u32,
-    dispose_forward_decl: proc_macro2::TokenStream,
-    dispose_ret_expr: Punctuated<syn::Expr, syn::Token![,]>,
+    dispose_bindings: Punctuated<syn::Expr, syn::Token![,]>,
 
     recycled_state_count: usize,
 }
@@ -16,25 +15,25 @@ impl State {
         input_tokens: &proc_macro2::TokenStream,
         is_inloop: bool,
     ) -> proc_macro2::TokenStream {
-        let res_token_name = quote::format_ident!("__future_res_{}", self.current_dispose_index);
+        let res_token_name = quote::format_ident!("__future_res");
+        let id = syn::Index::from(self.current_dispose_index as usize);
         self.current_dispose_index += 1;
 
-        self.dispose_ret_expr
-            .push(syn::Expr::Verbatim(res_token_name.to_token_stream()));
-
         if is_inloop {
-            self.dispose_forward_decl.extend(quote::quote! {
-                let mut #res_token_name = Vec::new();
-            });
+            self.dispose_bindings
+                .push(syn::Expr::Verbatim(quote::quote! {
+                    Vec::new()
+                }));
             quote::quote! {{
-                #res_token_name.push(#input_tokens)
+                #res_token_name.#id.push(#input_tokens)
             }}
         } else {
-            self.dispose_forward_decl.extend(quote::quote! {
-                let mut #res_token_name = None;
-            });
+            self.dispose_bindings
+                .push(syn::Expr::Verbatim(quote::quote! {
+                    None
+                }));
             quote::quote! {{
-                #res_token_name = Some(#input_tokens)
+                #res_token_name.#id = Some(#input_tokens)
             }}
         }
     }
@@ -50,8 +49,7 @@ impl State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            dispose_forward_decl: proc_macro2::TokenStream::new(),
-            dispose_ret_expr: Punctuated::new(),
+            dispose_bindings: Default::default(),
             current_dispose_index: 0,
             recycled_state_count: 0,
         }
@@ -62,8 +60,8 @@ impl CommandsTransformer for State {
     fn async_transform(&mut self, input: &syn::ExprAwait, is_inloop: bool) -> syn::Expr {
         let base = input.base.clone();
 
-        let dispose_token_name =
-            quote::format_ident!("__future_dispose_{}", self.current_dispose_index);
+        let dispose_token_name = quote::format_ident!("__future_res");
+        let id = syn::Index::from(self.current_dispose_index as usize);
         self.current_dispose_index += 1;
 
         // Creates a location to store the dispose future. Dispose futures should be invoked
@@ -73,30 +71,25 @@ impl CommandsTransformer for State {
         // This needs to be a cell because __dispose_fn_future "pre-mutably-borrows" the value.
         // This value also needs to be written by the .await statement, creating a double borrow.
         if is_inloop {
-            self.dispose_forward_decl.extend(quote::quote! {
-                let mut #dispose_token_name = Vec::new();
-            });
+            self.dispose_bindings
+                .push(syn::Expr::Verbatim(quote::quote! {
+                    Vec::new()
+                }));
         } else {
-            self.dispose_forward_decl.extend(quote::quote! {
-                let mut #dispose_token_name = None;
-            });
+            self.dispose_bindings
+                .push(syn::Expr::Verbatim(quote::quote! {
+                    None
+                }));
         }
         let dispose_replace_stmt = if is_inloop {
             quote::quote! {
-                #dispose_token_name.push(::rhyolite::QueueFuture::dispose(fut));
+                #dispose_token_name.#id.push(::rhyolite::QueueFuture::dispose(fut));
             }
         } else {
             quote::quote! {
-                #dispose_token_name.replace(Some(::rhyolite::QueueFuture::dispose(fut)));
+                #dispose_token_name.#id.replace(::rhyolite::QueueFuture::dispose(fut));
             }
         };
-
-        // The program may return at different locations, and upon return, not all futures may have
-        // been awaited. We should only await the dispose futures for those actually awaited so far
-        // in the QueueFuture. We check this at runtime to avoid returning different variants of
-        // the dispose future.
-        self.dispose_ret_expr
-            .push(syn::Expr::Verbatim(dispose_token_name.to_token_stream()));
 
         let index = syn::Index::from(self.recycled_state_count);
         self.recycled_state_count += 1;
@@ -163,11 +156,12 @@ impl CommandsTransformer for State {
             .as_ref()
             .map(|a| *a.clone())
             .unwrap_or(syn::Expr::Verbatim(quote::quote!(())));
-        let dispose_ret_expr = &self.dispose_ret_expr;
+
+        let dispose_token_name = quote::format_ident!("__future_res");
 
         let token_stream = quote::quote!(
             {
-                return (__current_queue, (#dispose_ret_expr), #returned_item);
+                return (__current_queue, #dispose_token_name, #returned_item);
             }
         );
         Some(syn::Expr::Verbatim(token_stream))
@@ -187,8 +181,7 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
         .map(|stmt| state.transform_stmt(stmt, false))
         .collect();
 
-    let dispose_forward_decl = state.dispose_forward_decl;
-    let dispose_ret_expr = state.dispose_ret_expr;
+    let dispose_token_name = quote::format_ident!("__future_res");
 
     // Transform the final stmt
     let append_unit_return = if let Some(last) = inner_closure_stmts.last_mut() {
@@ -201,7 +194,7 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
                     true
                 } else {
                     let token_stream = quote::quote!({
-                        return (__current_queue, (#dispose_ret_expr), #expr);
+                        return (__current_queue, #dispose_token_name, #expr);
                     });
                     *expr = syn::Expr::Verbatim(token_stream);
                     false
@@ -213,7 +206,7 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
     };
     if append_unit_return {
         let token_stream = quote::quote!({
-            return (__current_queue,  (#dispose_ret_expr), ())
+            return (__current_queue,  #dispose_token_name, ())
         });
         inner_closure_stmts.push(syn::Stmt::Expr(
             syn::Expr::Verbatim(token_stream),
@@ -237,9 +230,11 @@ pub fn proc_macro_gpu(input: proc_macro2::TokenStream) -> proc_macro2::TokenStre
     });
 
     let mv = input.mv;
+    let dispose_bindings = state.dispose_bindings;
+    let dispose_token_name = quote::format_ident!("__future_res");
     quote::quote! {
         rhyolite::queue::QueueFutureBlock::new(static #mv |(mut __initial_queue, mut __ctx, mut __recycled_states):(_,_,*mut #recycled_states_type)| {
-            #dispose_forward_decl
+            let mut #dispose_token_name = (#dispose_bindings, );
             let mut __current_queue: ::rhyolite::queue::QueueMask = __initial_queue;
             #(#inner_closure_stmts)*
         })

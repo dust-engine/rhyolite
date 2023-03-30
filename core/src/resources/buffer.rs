@@ -407,6 +407,67 @@ impl Allocator {
         Ok(dst_buffer)
     }
 
+    pub fn create_dynamic_buffer_uninit_aligned(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        alignment: u64,
+    ) -> VkResult<ResidentBuffer> {
+        let mut create_info = vk::BufferCreateInfo {
+            size,
+            usage,
+            ..Default::default()
+        };
+
+        let dst_buffer = match self.device().physical_device().memory_model() {
+            PhysicalDeviceMemoryModel::UMA
+            | PhysicalDeviceMemoryModel::Bar
+            | PhysicalDeviceMemoryModel::ResizableBar => unsafe {
+                let (buf, alloc) = self.inner().create_buffer_with_alignment(
+                    &create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        flags: vk_mem::AllocationCreateFlags::MAPPED
+                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                        required_flags: vk::MemoryPropertyFlags::empty(),
+                        preferred_flags: vk::MemoryPropertyFlags::empty(),
+                        memory_type_bits: 0,
+                        user_data: 0,
+                        priority: 0.0,
+                    },
+                    alignment,
+                )?;
+                ResidentBuffer {
+                    allocator: self.clone(),
+                    buffer: buf,
+                    allocation: alloc,
+                    size,
+                }
+            },
+            PhysicalDeviceMemoryModel::Discrete => unsafe {
+                create_info.usage |= vk::BufferUsageFlags::TRANSFER_SRC;
+                let (buffer, allocation) = self.inner().create_buffer_with_alignment(
+                    &create_info,
+                    &vk_mem::AllocationCreateInfo {
+                        flags: vk_mem::AllocationCreateFlags::MAPPED
+                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vk_mem::MemoryUsage::AutoPreferHost,
+                        ..Default::default()
+                    },
+                    alignment,
+                )?;
+
+                ResidentBuffer {
+                    allocator: self.clone(),
+                    buffer,
+                    allocation,
+                    size,
+                }
+            },
+        };
+        Ok(dst_buffer)
+    }
+
     /// Crate a small device-local buffer with uninitialized data, guaranteed local to the GPU.
     /// The data will be host visible on ResizableBar, Bar, and UMA memory models.
     /// TRANSFER_DST usage flag will be automatically added to the created buffer.

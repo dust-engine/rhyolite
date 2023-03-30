@@ -1,10 +1,10 @@
 use ash::prelude::VkResult;
 use ash::vk;
 
+use crate::utils::either::Either;
 use crate::Instance;
 use crate::PhysicalDevice;
 use crate::QueueInfo;
-use crate::utils::either::Either;
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
@@ -25,7 +25,7 @@ impl<A: HasDevice, B: HasDevice> HasDevice for Either<A, B> {
     fn device(&self) -> &Arc<Device> {
         match self {
             Either::Left(a) => a.device(),
-            Either::Right(a) => a.device()
+            Either::Right(a) => a.device(),
         }
     }
 }

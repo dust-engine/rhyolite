@@ -13,9 +13,15 @@ use crate::{
 pub struct RayTracingPipeline {
     layout: Arc<PipelineLayout>,
     pipeline: vk::Pipeline,
-    sbt_handles: SbtHandles
+    sbt_handles: SbtHandles,
 }
 impl RayTracingPipeline {
+    pub fn sbt_handles(&self) -> &SbtHandles {
+        &self.sbt_handles
+    }
+    pub fn layout(&self) -> &Arc<PipelineLayout> {
+        &self.layout
+    }
     pub fn raw(&self) -> vk::Pipeline {
         self.pipeline
     }
@@ -419,19 +425,17 @@ impl RayTracingPipeline {
             num_raygen,
             num_raymiss,
             num_callable,
-            num_hitgroup
-        ).unwrap();
+            num_hitgroup,
+        )
+        .unwrap();
         (
             Self {
                 layout,
                 pipeline,
-                sbt_handles
+                sbt_handles,
             },
             result,
         )
-    }
-    pub fn get_shader_group_handles(&self) -> &SbtHandles {
-        &self.sbt_handles
     }
 }
 
@@ -448,11 +452,15 @@ impl SbtHandles {
     pub fn handle_layout(&self) -> &Layout {
         &self.handle_layout
     }
-    fn new(device: &Device, pipeline: vk::Pipeline, num_raygen: u32, num_miss: u32, num_callable: u32, num_hitgroup: u32) -> VkResult<SbtHandles> {
-        let total_num_groups = num_hitgroup
-            + num_miss
-            + num_callable
-            + num_raygen;
+    fn new(
+        device: &Device,
+        pipeline: vk::Pipeline,
+        num_raygen: u32,
+        num_miss: u32,
+        num_callable: u32,
+        num_hitgroup: u32,
+    ) -> VkResult<SbtHandles> {
+        let total_num_groups = num_hitgroup + num_miss + num_callable + num_raygen;
         let rtx_properties = &device.physical_device().properties().ray_tracing;
         let sbt_handles_host_vec = unsafe {
             device
