@@ -1,7 +1,10 @@
 use ash::{prelude::VkResult, vk};
-use std::sync::Arc;
+use std::{ops::DerefMut, sync::Arc};
 
-use crate::{Allocator, Device, HasDevice, SharingMode};
+use crate::{
+    future::{GPUCommandFuture, RenderImage},
+    Allocator, Device, HasDevice, SharingMode,
+};
 
 pub trait ImageLike: HasDevice {
     fn raw_image(&self) -> vk::Image;
@@ -218,5 +221,54 @@ impl Allocator {
             layer_count: image_request.array_layers,
             level_count: image_request.mip_levels,
         })
+    }
+}
+
+pub fn clear_image<Img: ImageLike, ImgRef: DerefMut<Target = RenderImage<Img>>>(
+    image: ImgRef,
+    value: vk::ClearColorValue,
+) -> ClearImageFuture<Img, ImgRef> {
+    ClearImageFuture { image, value }
+}
+
+pub struct ClearImageFuture<Img: ImageLike, ImgRef: DerefMut<Target = RenderImage<Img>>> {
+    image: ImgRef,
+    value: vk::ClearColorValue,
+}
+impl<Img: ImageLike, ImgRef: DerefMut<Target = RenderImage<Img>>> GPUCommandFuture
+    for ClearImageFuture<Img, ImgRef>
+{
+    type Output = ();
+
+    type RetainedState = ();
+
+    type RecycledState = ();
+
+    fn record(
+        self: std::pin::Pin<&mut Self>,
+        ctx: &mut crate::future::CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
+    ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
+        ctx.record(|ctx, command_buffer| unsafe {
+            let range = self.image.inner().subresource_range();
+            ctx.device().cmd_clear_color_image(
+                command_buffer,
+                self.image.inner().raw_image(),
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &self.value,
+                &[range],
+            );
+        });
+        std::task::Poll::Ready(Default::default())
+    }
+
+    fn context(self: std::pin::Pin<&mut Self>, ctx: &mut crate::future::StageContext) {
+        let image = unsafe { &mut self.get_unchecked_mut().image };
+        ctx.write_image(
+            image,
+            vk::PipelineStageFlags2::CLEAR,
+            vk::AccessFlags2::TRANSFER_WRITE,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
     }
 }
