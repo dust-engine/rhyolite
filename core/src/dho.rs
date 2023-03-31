@@ -181,23 +181,23 @@ impl DeferredOperationTaskPool {
             task.op.status().unwrap()
         }
     }
-    pub fn schedule<T: Send + 'static>(
+    pub fn schedule<'a>(
         self: Arc<Self>,
-        op: impl FnOnce(Option<&mut DeferredOperation>) -> (T, vk::Result),
-    ) -> impl Future<Output = Result<T, vk::Result>> {
+        op: impl FnOnce(Option<&mut DeferredOperation>) -> vk::Result + 'a,
+    ) -> impl Future<Output = VkResult<()>> + 'a {
         let mut deferred_operation = DeferredOperation::new(self.device.clone()).ok();
         let dho = self.clone();
         async move {
-            let (value, code) = op(deferred_operation.as_mut());
+            let code = op(deferred_operation.as_mut());
             match code {
-                vk::Result::SUCCESS => return Ok(value),
+                vk::Result::SUCCESS => return Ok(()),
                 vk::Result::OPERATION_DEFERRED_KHR => {
                     let deferred_operation = deferred_operation.unwrap();
                     let result = dho.schedule_deferred_operation(deferred_operation).await;
-                    return result.result_with_success(value);
+                    return result.result_with_success(());
                 }
                 vk::Result::OPERATION_NOT_DEFERRED_KHR => {
-                    return Ok(value);
+                    return Ok(());
                 }
                 other => return Err(other),
             }

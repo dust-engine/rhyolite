@@ -4,6 +4,7 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
+use std::ops::DerefMut;
 
 use crate::{
     shader::{ShaderModule, SpecializedShader},
@@ -109,53 +110,58 @@ impl RayTracingPipelineLibrary {
         pipeline_cache: Option<&'a PipelineCache>,
         pool: Arc<DeferredOperationTaskPool>,
     ) -> impl Future<Output = Result<Self, vk::Result>> + Send + 'a {
-        let (stages, groups) = unsafe {
+        unsafe {
             let stages = SendMarker::new(stages);
             let groups = SendMarker::new(groups);
-            (stages, groups)
-        };
-        pool.schedule(move |deferred_operation| unsafe {
-            let mut pipeline = vk::Pipeline::null();
-            let result = (layout
-                .device()
-                .rtx_loader()
-                .fp()
-                .create_ray_tracing_pipelines_khr)(
-                layout.device().handle(),
-                deferred_operation.map(|d| d.raw()).unwrap_or_default(),
-                pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
-                1,
-                &vk::RayTracingPipelineCreateInfoKHR {
+            async move {
+                let library_interface =
+                    SendMarker::new(vk::RayTracingPipelineInterfaceCreateInfoKHR {
+                        max_pipeline_ray_payload_size: info.max_pipeline_ray_payload_size,
+                        max_pipeline_ray_hit_attribute_size: info
+                            .max_pipeline_ray_hit_attribute_size,
+                        ..Default::default()
+                    });
+                let info = SendMarker::new(vk::RayTracingPipelineCreateInfoKHR {
                     flags: vk::PipelineCreateFlags::LIBRARY_KHR | info.pipeline_create_flags,
                     stage_count: stages.len() as u32,
                     p_stages: stages.as_ptr(),
                     group_count: groups.len() as u32,
                     p_groups: groups.as_ptr(),
                     max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
-                    p_library_interface: &vk::RayTracingPipelineInterfaceCreateInfoKHR {
-                        max_pipeline_ray_payload_size: info.max_pipeline_ray_payload_size,
-                        max_pipeline_ray_hit_attribute_size: info
-                            .max_pipeline_ray_hit_attribute_size,
-                        ..Default::default()
-                    },
+                    p_library_interface: library_interface.deref(),
                     layout: layout.raw(),
                     ..Default::default()
-                },
-                std::ptr::null(),
-                &mut pipeline,
-            );
-            (
-                Self {
+                });
+                let mut pipeline = vk::Pipeline::null();
+                pool.schedule(|deferred_operation| {
+                    let result = (layout
+                        .device()
+                        .rtx_loader()
+                        .fp()
+                        .create_ray_tracing_pipelines_khr)(
+                        layout.device().handle(),
+                        deferred_operation.map(|d| d.raw()).unwrap_or_default(),
+                        pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
+                        1,
+                        info.deref(),
+                        std::ptr::null(),
+                        &mut pipeline,
+                    );
+                    result
+                })
+                .await?;
+                drop(info);
+                drop(library_interface);
+                Ok(Self {
                     layout,
                     pipeline,
                     num_raygen: 0,
                     num_raymiss: 0,
                     num_callable: 0,
                     num_hitgroup: groups.len() as u32,
-                },
-                result,
-            )
-        })
+                })
+            }
+        }
     }
     pub fn create_for_hitgroups<'a, S: Deref<Target = ShaderModule>>(
         layout: Arc<PipelineLayout>,
@@ -424,57 +430,63 @@ impl RayTracingPipeline {
             panic!()
         };
         let layout = layout.unwrap();
-
-        async move {
-            let result = pool
-                .schedule(|deferred_operation| unsafe {
-                    let mut pipeline: vk::Pipeline = vk::Pipeline::null();
+        unsafe {
+            async move {
+                let library_info = SendMarker::new(vk::PipelineLibraryCreateInfoKHR {
+                    library_count: raw_libs.len() as u32,
+                    p_libraries: raw_libs.as_ptr(),
+                    ..Default::default()
+                });
+                let library_interface =
+                    SendMarker::new(vk::RayTracingPipelineInterfaceCreateInfoKHR {
+                        max_pipeline_ray_payload_size: info.max_pipeline_ray_payload_size,
+                        max_pipeline_ray_hit_attribute_size: info
+                            .max_pipeline_ray_hit_attribute_size,
+                        ..Default::default()
+                    });
+                let info = SendMarker::new(vk::RayTracingPipelineCreateInfoKHR {
+                    flags: info.pipeline_create_flags,
+                    max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
+                    layout: layout.raw(),
+                    p_library_info: library_info.deref(),
+                    p_library_interface: library_interface.deref(),
+                    ..Default::default()
+                });
+                let mut pipeline: vk::Pipeline = vk::Pipeline::null();
+                pool.schedule(|deferred_operation| {
+                    println!("Before create");
                     let result = (device.rtx_loader().fp().create_ray_tracing_pipelines_khr)(
-                        layout.device().handle(),
+                        device.handle(),
                         deferred_operation.map(|a| a.raw()).unwrap_or_default(),
                         pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
                         1,
-                        &vk::RayTracingPipelineCreateInfoKHR {
-                            flags: info.pipeline_create_flags,
-                            max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
-                            layout: layout.raw(),
-                            p_library_info: &vk::PipelineLibraryCreateInfoKHR {
-                                library_count: raw_libs.len() as u32,
-                                p_libraries: raw_libs.as_ptr(),
-                                ..Default::default()
-                            },
-                            p_library_interface: &vk::RayTracingPipelineInterfaceCreateInfoKHR {
-                                max_pipeline_ray_payload_size: info.max_pipeline_ray_payload_size,
-                                max_pipeline_ray_hit_attribute_size: info
-                                    .max_pipeline_ray_hit_attribute_size,
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        },
+                        info.deref(),
                         std::ptr::null(),
                         &mut pipeline,
                     );
-                    let sbt_handles = SbtHandles::new(
-                        &device,
-                        pipeline,
-                        num_raygen,
-                        num_raymiss,
-                        num_callable,
-                        num_hitgroup,
-                    )
-                    .unwrap();
-                    (
-                        Self {
-                            layout,
-                            pipeline,
-                            sbt_handles,
-                        },
-                        result,
-                    )
+                    println!("After create");
+                    result
                 })
-                .await;
-            drop(raw_libs);
-            result
+                .await?;
+                drop(raw_libs);
+                drop(info);
+                drop(library_info);
+                drop(library_interface);
+
+                let sbt_handles = SbtHandles::new(
+                    &device,
+                    pipeline,
+                    num_raygen,
+                    num_raymiss,
+                    num_callable,
+                    num_hitgroup,
+                )?;
+                Ok(Self {
+                    layout,
+                    pipeline,
+                    sbt_handles,
+                })
+            }
         }
     }
 }
