@@ -84,6 +84,13 @@ unsafe extern "system" fn debug_utils_callback<'a>(
         _ => Level::TRACE,
     };
 
+    if level == Level::ERROR {
+        let bt = std::backtrace::Backtrace::capture();
+        if bt.status() == std::backtrace::BacktraceStatus::Captured {
+            println!("{}", bt);
+        }
+    }
+
     match level {
         Level::ERROR => {
             tracing::error!(message=?message_id_name, id=message_id_number, detail=?message)

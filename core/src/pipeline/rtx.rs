@@ -15,6 +15,13 @@ pub struct RayTracingPipeline {
     pipeline: vk::Pipeline,
     sbt_handles: SbtHandles,
 }
+impl Drop for RayTracingPipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.layout.device().destroy_pipeline(self.pipeline, None);
+        }
+    }
+}
 impl RayTracingPipeline {
     pub fn sbt_handles(&self) -> &SbtHandles {
         &self.sbt_handles
@@ -57,6 +64,13 @@ pub struct RayTracingPipelineLibrary {
     num_raymiss: u32,
     num_callable: u32,
     num_hitgroup: u32,
+}
+impl Drop for RayTracingPipelineLibrary {
+    fn drop(&mut self) {
+        unsafe {
+            self.layout.device().destroy_pipeline(self.pipeline, None);
+        }
+    }
 }
 impl HasDevice for RayTracingPipelineLibrary {
     fn device(&self) -> &Arc<crate::Device> {
@@ -177,6 +191,7 @@ impl RayTracingPipelineLibrary {
                 closest_hit_shader: rchit_stage,
                 any_hit_shader: rahit_stage,
                 intersection_shader: rint_stage,
+                general_shader: vk::SHADER_UNUSED_KHR,
                 ..Default::default()
             })
         }
@@ -283,6 +298,9 @@ impl RayTracingPipelineLibrary {
                     let group = vk::RayTracingShaderGroupCreateInfoKHR {
                         ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
                         general_shader: i as u32,
+                        closest_hit_shader: vk::SHADER_UNUSED_KHR,
+                        any_hit_shader: vk::SHADER_UNUSED_KHR,
+                        intersection_shader: vk::SHADER_UNUSED_KHR,
                         ..Default::default()
                     };
                     (stage, group)
@@ -347,7 +365,7 @@ impl RayTracingPipeline {
         let mut num_raymiss: u32 = 0;
         let mut num_hitgroup: u32 = 0;
         let mut num_callable: u32 = 0;
-        let raw_libs: Vec<_> = libs
+        let raw_libs: Vec<vk::Pipeline> = libs
             .inspect(|lib| {
                 if let Some(device) = device.as_mut() {
                     assert!(Arc::ptr_eq(device, lib.device()));
