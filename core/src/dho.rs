@@ -67,6 +67,7 @@ pub struct Task {
 }
 
 pub struct DeferredOperationTaskPool {
+    device: Arc<Device>,
     sender: Sender<Arc<Task>>,
     terminate: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
@@ -154,6 +155,7 @@ impl DeferredOperationTaskPool {
             })
             .collect();
         Self {
+            device,
             sender,
             terminate,
             threads,
@@ -177,6 +179,28 @@ impl DeferredOperationTaskPool {
         async move {
             listener.await;
             task.op.status().unwrap()
+        }
+    }
+    pub fn schedule<T: Send + 'static>(
+        self: Arc<Self>,
+        op: impl FnOnce(Option<&mut DeferredOperation>) -> (T, vk::Result),
+    ) -> impl Future<Output = Result<T, vk::Result>> {
+        let mut deferred_operation = DeferredOperation::new(self.device.clone()).ok();
+        let dho = self.clone();
+        async move {
+            let (value, code) = op(deferred_operation.as_mut());
+            match code {
+                vk::Result::SUCCESS => return Ok(value),
+                vk::Result::OPERATION_DEFERRED_KHR => {
+                    let deferred_operation = deferred_operation.unwrap();
+                    let result = dho.schedule_deferred_operation(deferred_operation).await;
+                    return result.result_with_success(value);
+                }
+                vk::Result::OPERATION_NOT_DEFERRED_KHR => {
+                    return Ok(value);
+                }
+                other => return Err(other),
+            }
         }
     }
 }
