@@ -7,6 +7,7 @@ use ash::{
 
 use crate::{
     shader::{ShaderModule, SpecializedShader},
+    utils::send_marker::SendMarker,
     DeferredOperation, DeferredOperationTaskPool, Device, HasDevice, PipelineCache, PipelineLayout,
 };
 
@@ -100,14 +101,19 @@ impl RayTracingPipelineLibrary {
     pub fn raw(&self) -> vk::Pipeline {
         self.pipeline
     }
-    pub fn create_one_deferred<'a>(
+    fn create_one_deferred<'a>(
         layout: Arc<PipelineLayout>,
-        stages: &'a [vk::PipelineShaderStageCreateInfo],
-        groups: &'a [vk::RayTracingShaderGroupCreateInfoKHR],
+        stages: SendMarker<&'a [vk::PipelineShaderStageCreateInfo]>,
+        groups: SendMarker<&'a [vk::RayTracingShaderGroupCreateInfoKHR]>,
         info: &'a RayTracingPipelineLibraryCreateInfo,
         pipeline_cache: Option<&'a PipelineCache>,
         pool: Arc<DeferredOperationTaskPool>,
-    ) -> impl Future<Output = Result<Self, vk::Result>> + 'a {
+    ) -> impl Future<Output = Result<Self, vk::Result>> + Send + 'a {
+        let (stages, groups) = unsafe {
+            let stages = SendMarker::new(stages);
+            let groups = SendMarker::new(groups);
+            (stages, groups)
+        };
         pool.schedule(move |deferred_operation| unsafe {
             let mut pipeline = vk::Pipeline::null();
             let result = (layout
@@ -164,7 +170,7 @@ impl RayTracingPipelineLibrary {
         ty: RayTracingHitGroupType,
         pipeline_cache: Option<&'a PipelineCache>,
         pool: Arc<DeferredOperationTaskPool>,
-    ) -> impl Future<Output = Result<Self, vk::Result>> + 'a {
+    ) -> impl Future<Output = VkResult<Self>> + Send + 'a {
         let mut stages: Vec<vk::PipelineShaderStageCreateInfo> =
             Vec::with_capacity(hitgroups.len() * 3);
         let mut specialization_info: Vec<vk::SpecializationInfo> =
@@ -246,17 +252,36 @@ impl RayTracingPipelineLibrary {
                 ..Default::default()
             })
         }
-        async move {
-            Self::create_one_deferred(layout, &stages, &groups, info, pipeline_cache, pool).await
+        unsafe {
+            let stages = SendMarker::new(stages);
+            let groups = SendMarker::new(groups);
+            let specialization_info = SendMarker::new(specialization_info);
+            async move {
+                let stages_ref = SendMarker::new(stages.as_slice());
+                let groups_ref = SendMarker::new(groups.as_slice());
+                let result = Self::create_one_deferred(
+                    layout,
+                    stages_ref,
+                    groups_ref,
+                    info,
+                    pipeline_cache,
+                    pool,
+                )
+                .await;
+                drop(specialization_info); // Make sure specialization info lives across await point
+                drop(stages);
+                drop(groups);
+                result
+            }
         }
     }
     pub fn create_for_shaders<'a, S: Deref<Target = ShaderModule>>(
         layout: Arc<PipelineLayout>,
-        shaders: &[SpecializedShader<'a, S>],
+        shaders: &'a [SpecializedShader<'a, S>],
         info: &'a RayTracingPipelineLibraryCreateInfo,
         pipeline_cache: Option<&'a PipelineCache>,
         pool: Arc<DeferredOperationTaskPool>,
-    ) -> impl Future<Output = Result<Self, vk::Result>> + 'a {
+    ) -> impl Future<Output = VkResult<Self>> + Send + 'a {
         let mut num_raygen: u32 = 0;
         let mut num_raymiss: u32 = 0;
         let mut num_callable: u32 = 0;
@@ -318,9 +343,25 @@ impl RayTracingPipelineLibrary {
                 })
                 .unzip();
 
+            let stages = SendMarker::new(stages);
+            let groups = SendMarker::new(groups);
+            let specialization_infos = SendMarker::new(specialization_infos);
             async move {
-                Self::create_one_deferred(layout, &stages, &groups, info, pipeline_cache, pool)
-                    .await
+                let stages_ref = SendMarker::new(stages.as_slice());
+                let groups_ref = SendMarker::new(groups.as_slice());
+                let result = Self::create_one_deferred(
+                    layout,
+                    stages_ref,
+                    groups_ref,
+                    info,
+                    pipeline_cache,
+                    pool,
+                )
+                .await;
+                drop(specialization_infos);
+                drop(stages);
+                drop(groups);
+                result
             }
         }
     }
@@ -332,7 +373,7 @@ impl RayTracingPipeline {
         info: &'a RayTracingPipelineLibraryCreateInfo,
         pipeline_cache: Option<&'a PipelineCache>,
         pool: Arc<DeferredOperationTaskPool>,
-    ) -> impl Future<Output = Result<Self, vk::Result>> + 'a {
+    ) -> impl Future<Output = VkResult<Self>> + Send + 'a {
         let mut device: Option<Arc<Device>> = None;
         let mut layout: Option<Arc<PipelineLayout>> = None;
 
@@ -384,51 +425,57 @@ impl RayTracingPipeline {
         };
         let layout = layout.unwrap();
 
-        pool.schedule(move |deferred_operation| unsafe {
-            let mut pipeline: vk::Pipeline = vk::Pipeline::null();
-            let result = (device.rtx_loader().fp().create_ray_tracing_pipelines_khr)(
-                layout.device().handle(),
-                deferred_operation.map(|a| a.raw()).unwrap_or_default(),
-                pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
-                1,
-                &vk::RayTracingPipelineCreateInfoKHR {
-                    flags: info.pipeline_create_flags,
-                    max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
-                    layout: layout.raw(),
-                    p_library_info: &vk::PipelineLibraryCreateInfoKHR {
-                        library_count: raw_libs.len() as u32,
-                        p_libraries: raw_libs.as_ptr(),
-                        ..Default::default()
-                    },
-                    p_library_interface: &vk::RayTracingPipelineInterfaceCreateInfoKHR {
-                        max_pipeline_ray_payload_size: info.max_pipeline_ray_payload_size,
-                        max_pipeline_ray_hit_attribute_size: info
-                            .max_pipeline_ray_hit_attribute_size,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                std::ptr::null(),
-                &mut pipeline,
-            );
-            let sbt_handles = SbtHandles::new(
-                &device,
-                pipeline,
-                num_raygen,
-                num_raymiss,
-                num_callable,
-                num_hitgroup,
-            )
-            .unwrap();
-            (
-                Self {
-                    layout,
-                    pipeline,
-                    sbt_handles,
-                },
-                result,
-            )
-        })
+        async move {
+            let result = pool
+                .schedule(|deferred_operation| unsafe {
+                    let mut pipeline: vk::Pipeline = vk::Pipeline::null();
+                    let result = (device.rtx_loader().fp().create_ray_tracing_pipelines_khr)(
+                        layout.device().handle(),
+                        deferred_operation.map(|a| a.raw()).unwrap_or_default(),
+                        pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
+                        1,
+                        &vk::RayTracingPipelineCreateInfoKHR {
+                            flags: info.pipeline_create_flags,
+                            max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
+                            layout: layout.raw(),
+                            p_library_info: &vk::PipelineLibraryCreateInfoKHR {
+                                library_count: raw_libs.len() as u32,
+                                p_libraries: raw_libs.as_ptr(),
+                                ..Default::default()
+                            },
+                            p_library_interface: &vk::RayTracingPipelineInterfaceCreateInfoKHR {
+                                max_pipeline_ray_payload_size: info.max_pipeline_ray_payload_size,
+                                max_pipeline_ray_hit_attribute_size: info
+                                    .max_pipeline_ray_hit_attribute_size,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        std::ptr::null(),
+                        &mut pipeline,
+                    );
+                    let sbt_handles = SbtHandles::new(
+                        &device,
+                        pipeline,
+                        num_raygen,
+                        num_raymiss,
+                        num_callable,
+                        num_hitgroup,
+                    )
+                    .unwrap();
+                    (
+                        Self {
+                            layout,
+                            pipeline,
+                            sbt_handles,
+                        },
+                        result,
+                    )
+                })
+                .await;
+            drop(raw_libs);
+            result
+        }
     }
 }
 
