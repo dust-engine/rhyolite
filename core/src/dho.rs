@@ -63,6 +63,7 @@ impl DeferredOperation {
 pub struct Task {
     op: DeferredOperation,
     concurrency: AtomicU32,
+    done: AtomicBool,
     event: Event,
 }
 
@@ -102,6 +103,9 @@ impl DeferredOperationTaskPool {
                             // Disconnected.
                             return;
                         };
+                        if task.done.load(std::sync::atomic::Ordering::Relaxed) {
+                            continue;
+                        }
                         let current_concurrency = task
                             .concurrency
                             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -110,6 +114,9 @@ impl DeferredOperationTaskPool {
                             sender.send(task.clone()).unwrap();
                         }
                         if current_concurrency == 0 {
+                            continue;
+                        }
+                        if task.done.load(std::sync::atomic::Ordering::Relaxed) {
                             continue;
                         }
                         match unsafe {
@@ -126,8 +133,8 @@ impl DeferredOperationTaskPool {
                                 // are not necessary and will simply harm performance. This situation may occur when other threads
                                 // executing vkDeferredOperationJoinKHR are about to complete operation, and the implementation
                                 // is unable to partition the workload any further.
-                                task.concurrency
-                                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                                task.done
+                                    .store(true, std::sync::atomic::Ordering::Relaxed);
                             }
                             vk::Result::THREAD_IDLE_KHR => {
                                 // A return value of VK_THREAD_IDLE_KHR indicates that the deferred operation is not complete,
@@ -145,9 +152,9 @@ impl DeferredOperationTaskPool {
                                 }
                             }
                             _result => {
-                                task.concurrency
-                                    .store(0, std::sync::atomic::Ordering::Relaxed);
-                                task.event.notify_relaxed(1);
+                                task.done
+                                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                                task.event.notify(1);
                             }
                         }
                     }
@@ -169,6 +176,7 @@ impl DeferredOperationTaskPool {
         let concurrency = op.get_max_concurrency().max(self.available_parallelism);
         let event = Event::new();
         let task = Task {
+            done: AtomicBool::new(false),
             event,
             op,
             concurrency: AtomicU32::new(concurrency),
@@ -178,6 +186,7 @@ impl DeferredOperationTaskPool {
         self.sender.send(task.clone()).unwrap();
         async move {
             listener.await;
+            assert_eq!(task.done.load(std::sync::atomic::Ordering::SeqCst), true);
             task.op.status().unwrap()
         }
     }

@@ -454,7 +454,6 @@ impl RayTracingPipeline {
                 });
                 let mut pipeline: vk::Pipeline = vk::Pipeline::null();
                 pool.schedule(|deferred_operation| {
-                    println!("Before create");
                     let result = (device.rtx_loader().fp().create_ray_tracing_pipelines_khr)(
                         device.handle(),
                         deferred_operation.map(|a| a.raw()).unwrap_or_default(),
@@ -464,7 +463,6 @@ impl RayTracingPipeline {
                         std::ptr::null(),
                         &mut pipeline,
                     );
-                    println!("After create");
                     result
                 })
                 .await?;
