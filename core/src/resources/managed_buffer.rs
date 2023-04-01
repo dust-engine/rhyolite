@@ -320,7 +320,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
         }
     }
     pub fn set(&mut self, index: usize, item: &[u8]) {
-        assert!(index < self.num_items);
+        assert!(index < self.num_items); // TODO: Fix me
         assert_eq!(item.len(), self.layout.size());
         unsafe {
             let dst = self
@@ -565,6 +565,7 @@ impl ManagedBufferStrategyStagingUnsized {
         self.num_items += 1;
     }
     pub fn set(&mut self, index: usize, item: &[u8]) {
+        self.num_items = self.num_items.max(index + 1);
         if let Some(existing_change_buffer_index) = self.changes.get(&index) {
             unsafe {
                 let dst = self
