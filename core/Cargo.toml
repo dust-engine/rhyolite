@@ -10,7 +10,7 @@ description = "A refreshingly simple data-driven game engine and app framework"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ash = "0.37.2"
+ash = "0.37"
 ash-window = "0.12"
 raw-window-handle = "0.5"
 tracing = "0.1"

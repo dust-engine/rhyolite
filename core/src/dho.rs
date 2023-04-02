@@ -194,7 +194,8 @@ impl DeferredOperationTaskPool {
         self: Arc<Self>,
         op: impl FnOnce(Option<&mut DeferredOperation>) -> vk::Result + 'a,
     ) -> impl Future<Output = VkResult<()>> + 'a {
-        let mut deferred_operation = DeferredOperation::new(self.device.clone()).ok();
+        //let mut deferred_operation = DeferredOperation::new(self.device.clone()).ok();
+        let mut deferred_operation = None;
         let dho = self.clone();
         async move {
             let code = op(deferred_operation.as_mut());

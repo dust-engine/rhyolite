@@ -15,7 +15,7 @@ proc-macro2 = "1.0"
 
 shaderc = { version = "0.8", optional = true }
 spirq = { version = "0.6", optional = true }
-ash = { version = "0.37.2", optional = true }
+ash = { version = "0.37", optional = true }
 
 [features]
 default = ["glsl"]
