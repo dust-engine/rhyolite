@@ -198,7 +198,6 @@ fn aabbs_to_geometry_infos(
 
 pub struct TLASBuildInfo {
     allocator: Allocator,
-    acceleration_structure: AccelerationStructure,
     geometry_info: vk::AccelerationStructureGeometryKHR,
     build_info: vk::AccelerationStructureBuildGeometryInfoKHR,
     num_instances: u32,
@@ -224,7 +223,7 @@ impl TLASBuildInfo {
             flags: geometry_flags,
             ..Default::default()
         };
-        let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
+        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
             ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
             flags: build_flags,
             mode: vk::BuildAccelerationStructureModeKHR::BUILD,
@@ -242,13 +241,8 @@ impl TLASBuildInfo {
                     &[num_instances],
                 )
         };
-        let acceleration_structure =
-            AccelerationStructure::new_tlas(&allocator, build_size.acceleration_structure_size)
-                .unwrap();
-        build_info.dst_acceleration_structure = acceleration_structure.raw();
         Self {
             allocator: allocator,
-            acceleration_structure,
             geometry_info,
             build_info,
             num_instances,
@@ -267,10 +261,16 @@ impl TLASBuildInfo {
                 ..Default::default()
             },
         };
+        
+        let acceleration_structure =
+            AccelerationStructure::new_tlas(&self.allocator, self.build_size.acceleration_structure_size)
+                .unwrap();
+            
+        self.build_info.dst_acceleration_structure = acceleration_structure.raw();
         TLASBuildFuture {
             allocator: self.allocator,
             input_buffer: Some(buffer),
-            acceleration_structure: Some(RenderRes::new(self.acceleration_structure)),
+            acceleration_structure: Some(RenderRes::new(acceleration_structure)),
             geometry_info: self.geometry_info,
             build_info: self.build_info,
             num_instances: self.num_instances,

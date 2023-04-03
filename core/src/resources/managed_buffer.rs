@@ -311,7 +311,9 @@ impl ManagedBufferStrategyDirectWriteUnsized {
                 .objects_buffer
                 .as_mut_ptr()
                 .add(self.objects_buffer.len());
-            std::ptr::copy_nonoverlapping(item.as_ptr(), dst, self.layout.size());
+            let dst = std::slice::from_raw_parts_mut(dst, self.layout.pad_to_align().size());
+            dst[0..self.layout.size()].copy_from_slice(item);
+            dst[self.layout.size()..].fill(0);
             self.objects_buffer
                 .set_len(self.objects_buffer.len() + self.layout.pad_to_align().size());
         }
@@ -327,7 +329,9 @@ impl ManagedBufferStrategyDirectWriteUnsized {
                 .objects_buffer
                 .as_mut_ptr()
                 .add(index * self.layout.pad_to_align().size());
-            std::ptr::copy_nonoverlapping(item.as_ptr(), dst, self.layout.size());
+            let dst = std::slice::from_raw_parts_mut(dst, self.layout.pad_to_align().size());
+            dst[0..self.layout.size()].copy_from_slice(item);
+            dst[self.layout.size()..].fill(0);
         }
         for changes in self.changeset.values_mut() {
             changes.insert(index);
@@ -548,6 +552,7 @@ impl ManagedBufferStrategyStagingUnsized {
         &self.allocator
     }
     pub fn push(&mut self, item: &[u8]) {
+        assert_eq!(item.len(), self.layout.size());
         let change_buffer_index = self.change_buffer.len() / self.layout.pad_to_align().size();
         self.change_buffer
             .reserve(self.layout.pad_to_align().size());
@@ -556,7 +561,9 @@ impl ManagedBufferStrategyStagingUnsized {
                 .change_buffer
                 .as_mut_ptr()
                 .add(self.change_buffer.len());
-            std::ptr::copy_nonoverlapping(item.as_ptr(), dst, self.layout.size());
+            let dst = std::slice::from_raw_parts_mut(dst, self.layout.pad_to_align().size());
+            dst[0..self.layout.size()].copy_from_slice(item);
+            dst[self.layout.size()..].fill(0);
             self.change_buffer
                 .set_len(self.change_buffer.len() + self.layout.pad_to_align().size());
         }
@@ -565,6 +572,7 @@ impl ManagedBufferStrategyStagingUnsized {
         self.num_items += 1;
     }
     pub fn set(&mut self, index: usize, item: &[u8]) {
+        assert_eq!(item.len(), self.layout.size());
         self.num_items = self.num_items.max(index + 1);
         if let Some(existing_change_buffer_index) = self.changes.get(&index) {
             unsafe {
@@ -572,7 +580,9 @@ impl ManagedBufferStrategyStagingUnsized {
                     .change_buffer
                     .as_mut_ptr()
                     .add(existing_change_buffer_index * self.layout.pad_to_align().size());
-                std::ptr::copy_nonoverlapping(item.as_ptr(), dst, self.layout.size());
+                let dst = std::slice::from_raw_parts_mut(dst, self.layout.pad_to_align().size());
+                dst[0..self.layout.size()].copy_from_slice(item);
+                dst[self.layout.size()..].fill(0);
             }
         } else {
             let change_buffer_index = self.change_buffer.len() / self.layout.pad_to_align().size();
@@ -583,11 +593,9 @@ impl ManagedBufferStrategyStagingUnsized {
                     .change_buffer
                     .as_mut_ptr()
                     .add(self.change_buffer.len());
-                std::ptr::copy_nonoverlapping(
-                    &item as *const _ as *const u8,
-                    dst,
-                    self.layout.size(),
-                );
+                let dst = std::slice::from_raw_parts_mut(dst, self.layout.pad_to_align().size());
+                dst[0..self.layout.size()].copy_from_slice(item);
+                dst[self.layout.size()..].fill(0);
                 self.change_buffer
                     .set_len(self.change_buffer.len() + self.layout.pad_to_align().size());
             }
