@@ -32,16 +32,22 @@ impl<T> HasDevice for ManagedBuffer<T> {
 }
 
 impl<T> ManagedBuffer<T> {
-    pub fn new(allocator: Allocator, buffer_usage_flags: vk::BufferUsageFlags) -> Self {
+    pub fn new(
+        allocator: Allocator,
+        buffer_usage_flags: vk::BufferUsageFlags,
+        alignment: u32,
+    ) -> Self {
         use crate::PhysicalDeviceMemoryModel::*;
         match allocator.physical_device().memory_model() {
             ResizableBar | UMA => Self::DirectWrite(ManagedBufferStrategyDirectWrite::new(
                 allocator,
                 buffer_usage_flags,
+                alignment,
             )),
             Discrete | Bar => Self::StagingBuffer(ManagedBufferStrategyStaging::new(
                 allocator,
                 buffer_usage_flags,
+                alignment,
             )),
         }
     }
@@ -178,15 +184,21 @@ pub struct ManagedBufferStrategyDirectWrite<T> {
     buffers: PerFrameState<ResidentBuffer>,
     objects: Vec<T>,
     changeset: BTreeMap<vk::Buffer, BTreeSet<usize>>,
+    alignment: u32,
 }
 impl<T> ManagedBufferStrategyDirectWrite<T> {
-    pub fn new(allocator: Allocator, buffer_usage_flags: vk::BufferUsageFlags) -> Self {
+    pub fn new(
+        allocator: Allocator,
+        buffer_usage_flags: vk::BufferUsageFlags,
+        alignment: u32,
+    ) -> Self {
         Self {
             allocator,
             buffer_usage_flags,
             buffers: Default::default(),
             objects: Vec::new(),
             changeset: Default::default(),
+            alignment,
         }
     }
     pub fn len(&self) -> usize {
@@ -217,9 +229,10 @@ impl<T> ManagedBufferStrategyDirectWrite<T> {
         let create_buffer = || {
             let create_buffer = self
                 .allocator
-                .create_write_buffer_uninit(
+                .create_write_buffer_uninit_aligned(
                     (self.objects.capacity() * item_size) as u64,
                     self.buffer_usage_flags,
+                    self.alignment as u64,
                 )
                 .unwrap();
             create_buffer.contents_mut().unwrap()[0..self.objects.len() * item_size]
@@ -405,15 +418,21 @@ pub struct ManagedBufferStrategyStaging<T> {
     staging_buffer: PerFrameState<ResidentBuffer>,
     changes: BTreeMap<usize, T>,
     num_items: usize,
+    alignment: u32,
 }
 impl<T> ManagedBufferStrategyStaging<T> {
-    pub fn new(allocator: Allocator, buffer_usage_flags: vk::BufferUsageFlags) -> Self {
+    pub fn new(
+        allocator: Allocator,
+        buffer_usage_flags: vk::BufferUsageFlags,
+        alignment: u32,
+    ) -> Self {
         Self {
             allocator,
             buffer_usage_flags,
             device_buffer: None,
             staging_buffer: Default::default(),
             changes: Default::default(),
+            alignment,
             num_items: 0,
         }
     }
@@ -491,9 +510,10 @@ impl<T> ManagedBufferStrategyStaging<T> {
             &mut self.device_buffer,
             |_| {
                 self.allocator
-                    .create_device_buffer_uninit(
+                    .create_device_buffer_uninit_aligned(
                         expected_whole_buffer_size,
                         self.buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST,
+                        self.alignment as u64,
                     )
                     .unwrap()
             },

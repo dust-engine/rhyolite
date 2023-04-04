@@ -304,6 +304,42 @@ impl Allocator {
         };
         self.create_resident_buffer(&buffer_create_info, &alloc_info)
     }
+    /// Create uninitialized buffer visible to the CPU and local to the GPU.
+    /// Only applicable to Bar, ReBar, Integrated memory architecture.
+    pub fn create_write_buffer_uninit_aligned(
+        &self,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        min_alignment: u64,
+    ) -> VkResult<ResidentBuffer> {
+        let buffer_create_info = vk::BufferCreateInfo {
+            size,
+            usage,
+            ..Default::default()
+        };
+        let alloc_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                | vk_mem::AllocationCreateFlags::MAPPED,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL
+                | vk::MemoryPropertyFlags::HOST_VISIBLE,
+            ..Default::default()
+        };
+
+        let (buffer, allocation) = unsafe {
+            self.inner().create_buffer_with_alignment(
+                &buffer_create_info,
+                &alloc_info,
+                min_alignment,
+            )
+        }?;
+        Ok(ResidentBuffer {
+            allocator: self.clone(),
+            buffer,
+            allocation,
+            size,
+        })
+    }
     /// Create uninitialized buffer only visible to the GPU.
     pub fn create_device_buffer_uninit(
         &self,

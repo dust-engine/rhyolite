@@ -300,15 +300,23 @@ impl<T: BufferLike + Send> GPUCommandFuture for TLASBuildFuture<T> {
         recycled_state: &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
         let this = self.project();
+        let alignment = this
+            .allocator
+            .device()
+            .physical_device()
+            .properties()
+            .acceleration_structure
+            .min_acceleration_structure_scratch_offset_alignment;
         let scratch_buffer = use_shared_state(
             recycled_state,
             |old| {
                 let old_size = old.map(|a: &ResidentBuffer| a.size()).unwrap_or(0);
                 this.allocator
-                    .create_device_buffer_uninit(
+                    .create_device_buffer_uninit_aligned(
                         this.build_size.build_scratch_size.max(old_size),
                         vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                             | vk::BufferUsageFlags::STORAGE_BUFFER,
+                        alignment as u64,
                     )
                     .unwrap()
             },
