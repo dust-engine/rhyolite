@@ -9,7 +9,7 @@ use std::{
 };
 
 use super::compile::QueueCompileExt;
-use ash::vk;
+use ash::{vk, prelude::VkResult};
 
 use pin_project::pin_project;
 
@@ -347,7 +347,7 @@ impl Queues {
 #[pin_project]
 pub struct QueueSubmitFuture<Ret, Out> {
     #[pin]
-    task: blocking::Task<()>,
+    task: blocking::Task<VkResult<()>>,
     retained_state: Option<Ret>,
     output: Option<Out>,
     semaphores: Option<Vec<(vk::Semaphore, u64)>>,
@@ -361,7 +361,7 @@ impl<Ret, Out> QueueSubmitFuture<Ret, Out> {
         output: Out,
     ) -> Self {
         let task = blocking::unblock(move || unsafe {
-            device.wait_for_fences(&fences, true, !0).unwrap();
+            device.wait_for_fences(&fences, true, !0)
         });
         Self {
             task,
@@ -372,21 +372,21 @@ impl<Ret, Out> QueueSubmitFuture<Ret, Out> {
     }
 }
 impl<Ret: Disposable, Out> std::future::Future for QueueSubmitFuture<Ret, Out> {
-    type Output = Out;
+    type Output = VkResult<Out>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         match this.task.poll(cx) {
             Poll::Pending => return Poll::Pending,
-            Poll::Ready(_) => {
+            Poll::Ready(err) => {
                 this.retained_state.take().unwrap().dispose();
-                return Poll::Ready(this.output.take().unwrap());
+                return Poll::Ready(err.map(|_| this.output.take().unwrap()));
             }
         }
     }
 }
 impl<Ret: Disposable + Send, Out> QueueFuture for QueueSubmitFuture<Ret, Out> {
-    type Output = Out;
+    type Output = VkResult<Out>;
 
     type RecycledState = ();
 
@@ -411,7 +411,7 @@ impl<Ret: Disposable + Send, Out> QueueFuture for QueueSubmitFuture<Ret, Out> {
         if this.task.is_finished() {
             return QueueFuturePoll::Ready {
                 next_queue: QueueMask::empty(),
-                output: this.output.take().unwrap(),
+                output: Ok(this.output.take().unwrap()), // TODO: Check err
             };
         }
 
@@ -446,7 +446,7 @@ impl<Ret: Disposable + Send, Out> QueueSubmitFuture<Ret, Out> {
 #[pin_project]
 pub struct SharedQueueSubmitFutureMain<Ret, Out> {
     #[pin]
-    task: Arc<blocking::Task<()>>,
+    task: Arc<blocking::Task<VkResult<()>>>,
     retained_state: Option<Ret>,
     output: Arc<Out>,
     semaphores: Vec<(vk::Semaphore, u64)>,
@@ -492,7 +492,7 @@ impl<Ret: Disposable + Send, Out> QueueFuture for SharedQueueSubmitFutureMain<Re
 #[pin_project]
 pub struct SharedQueueSubmitFuture<Out> {
     #[pin]
-    task: Arc<blocking::Task<()>>,
+    task: Arc<blocking::Task<VkResult<()>>>,
     output: Arc<Out>,
 }
 impl<Out> QueueFuture for SharedQueueSubmitFuture<Out> {

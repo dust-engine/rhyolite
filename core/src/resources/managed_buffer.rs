@@ -369,7 +369,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
                     self.buffer_usage_flags,
                 )
                 .unwrap();
-            create_buffer.contents_mut().unwrap()[0..self.objects_buffer.capacity()]
+            create_buffer.contents_mut().unwrap()[0..self.objects_buffer.len()]
                 .copy_from_slice(&self.objects_buffer);
             create_buffer
         };
