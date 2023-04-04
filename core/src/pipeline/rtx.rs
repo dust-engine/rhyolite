@@ -158,7 +158,7 @@ impl RayTracingPipelineLibrary {
                     num_raygen: 0,
                     num_raymiss: 0,
                     num_callable: 0,
-                    num_hitgroup: groups.len() as u32,
+                    num_hitgroup: 0,
                 })
             }
         }
@@ -265,7 +265,8 @@ impl RayTracingPipelineLibrary {
             async move {
                 let stages_ref = SendMarker::new(stages.as_slice());
                 let groups_ref = SendMarker::new(groups.as_slice());
-                let result = Self::create_one_deferred(
+                let num_hitgroup = groups_ref.len() as u32;
+                let mut result = Self::create_one_deferred(
                     layout,
                     stages_ref,
                     groups_ref,
@@ -273,11 +274,12 @@ impl RayTracingPipelineLibrary {
                     pipeline_cache,
                     pool,
                 )
-                .await;
+                .await?;
+                result.num_hitgroup = num_hitgroup;
                 drop(specialization_info); // Make sure specialization info lives across await point
                 drop(stages);
                 drop(groups);
-                result
+                Ok(result)
             }
         }
     }
@@ -355,7 +357,7 @@ impl RayTracingPipelineLibrary {
             async move {
                 let stages_ref = SendMarker::new(stages.as_slice());
                 let groups_ref = SendMarker::new(groups.as_slice());
-                let result = Self::create_one_deferred(
+                let mut result = Self::create_one_deferred(
                     layout,
                     stages_ref,
                     groups_ref,
@@ -363,11 +365,14 @@ impl RayTracingPipelineLibrary {
                     pipeline_cache,
                     pool,
                 )
-                .await;
+                .await?;
                 drop(specialization_infos);
                 drop(stages);
                 drop(groups);
-                result
+                result.num_raygen = num_raygen;
+                result.num_raymiss = num_raymiss;
+                result.num_callable = num_callable;
+                Ok(result)
             }
         }
     }

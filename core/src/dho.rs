@@ -133,8 +133,7 @@ impl DeferredOperationTaskPool {
                                 // are not necessary and will simply harm performance. This situation may occur when other threads
                                 // executing vkDeferredOperationJoinKHR are about to complete operation, and the implementation
                                 // is unable to partition the workload any further.
-                                task.done
-                                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                                task.done.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
                             vk::Result::THREAD_IDLE_KHR => {
                                 // A return value of VK_THREAD_IDLE_KHR indicates that the deferred operation is not complete,
@@ -152,8 +151,7 @@ impl DeferredOperationTaskPool {
                                 }
                             }
                             _result => {
-                                task.done
-                                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                                task.done.store(true, std::sync::atomic::Ordering::SeqCst);
                                 task.event.notify(1);
                             }
                         }

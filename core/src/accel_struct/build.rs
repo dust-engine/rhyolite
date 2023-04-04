@@ -261,11 +261,13 @@ impl TLASBuildInfo {
                 ..Default::default()
             },
         };
-        
-        let acceleration_structure =
-            AccelerationStructure::new_tlas(&self.allocator, self.build_size.acceleration_structure_size)
-                .unwrap();
-            
+
+        let acceleration_structure = AccelerationStructure::new_tlas(
+            &self.allocator,
+            self.build_size.acceleration_structure_size,
+        )
+        .unwrap();
+
         self.build_info.dst_acceleration_structure = acceleration_structure.raw();
         TLASBuildFuture {
             allocator: self.allocator,
