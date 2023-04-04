@@ -35,11 +35,11 @@ impl<T> ManagedBuffer<T> {
     pub fn new(allocator: Allocator, buffer_usage_flags: vk::BufferUsageFlags) -> Self {
         use crate::PhysicalDeviceMemoryModel::*;
         match allocator.physical_device().memory_model() {
-            Discrete | Bar => Self::DirectWrite(ManagedBufferStrategyDirectWrite::new(
+            ResizableBar | UMA => Self::DirectWrite(ManagedBufferStrategyDirectWrite::new(
                 allocator,
                 buffer_usage_flags,
             )),
-            ResizableBar | UMA => Self::StagingBuffer(ManagedBufferStrategyStaging::new(
+            Discrete | Bar => Self::StagingBuffer(ManagedBufferStrategyStaging::new(
                 allocator,
                 buffer_usage_flags,
             )),
@@ -114,12 +114,12 @@ impl ManagedBufferUnsized {
     ) -> Self {
         use crate::PhysicalDeviceMemoryModel::*;
         match allocator.physical_device().memory_model() {
-            Discrete | Bar => Self::DirectWrite(ManagedBufferStrategyDirectWriteUnsized::new(
+            ResizableBar | UMA => Self::DirectWrite(ManagedBufferStrategyDirectWriteUnsized::new(
                 allocator,
                 buffer_usage_flags,
                 layout,
             )),
-            ResizableBar | UMA => Self::StagingBuffer(ManagedBufferStrategyStagingUnsized::new(
+            Discrete | Bar => Self::StagingBuffer(ManagedBufferStrategyStagingUnsized::new(
                 allocator,
                 buffer_usage_flags,
                 layout,
@@ -322,8 +322,12 @@ impl ManagedBufferStrategyDirectWriteUnsized {
         }
     }
     pub fn set(&mut self, index: usize, item: &[u8]) {
-        assert!(index < self.num_items); // TODO: Fix me
         assert_eq!(item.len(), self.layout.size());
+        self.num_items = self.num_items.max(index + 1);
+
+        let expected_len = self.num_items * self.layout.pad_to_align().size();
+        self.objects_buffer
+            .reserve(expected_len - self.objects_buffer.len());
         unsafe {
             let dst = self
                 .objects_buffer
@@ -332,6 +336,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
             let dst = std::slice::from_raw_parts_mut(dst, self.layout.pad_to_align().size());
             dst[0..self.layout.size()].copy_from_slice(item);
             dst[self.layout.size()..].fill(0);
+            self.objects_buffer.set_len(expected_len);
         }
         for changes in self.changeset.values_mut() {
             changes.insert(index);

@@ -34,7 +34,7 @@ impl<'a, F: Fn(u32) -> Vec<f32>> DeviceCreateInfo<'a, F> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum PhysicalDeviceMemoryModel {
     Discrete,
     Bar,
