@@ -9,7 +9,7 @@ use std::{
 };
 
 use super::compile::QueueCompileExt;
-use ash::{vk, prelude::VkResult};
+use ash::{prelude::VkResult, vk};
 
 use pin_project::pin_project;
 
@@ -360,9 +360,7 @@ impl<Ret, Out> QueueSubmitFuture<Ret, Out> {
         retained_state: Ret,
         output: Out,
     ) -> Self {
-        let task = blocking::unblock(move || unsafe {
-            device.wait_for_fences(&fences, true, !0)
-        });
+        let task = blocking::unblock(move || unsafe { device.wait_for_fences(&fences, true, !0) });
         Self {
             task,
             semaphores,

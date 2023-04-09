@@ -21,4 +21,4 @@ pin-project = "1.0"
 cstr = "0.2"
 crossbeam-channel = "0.5"
 event-listener = "2.5.1"
-
+bytemuck = "1.13"

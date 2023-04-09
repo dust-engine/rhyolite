@@ -13,6 +13,7 @@
 #![feature(unsized_locals)]
 #![feature(unsized_fn_params)]
 
+pub use bytemuck::offset_of;
 pub use cstr::cstr;
 
 pub extern crate ash;
@@ -46,6 +47,7 @@ pub use physical_device::*;
 pub use pipeline::*;
 pub use queue::*;
 pub use resources::*;
+pub use sampler::Sampler;
 pub use semaphore::*;
 pub use surface::*;
 pub use swapchain::*;

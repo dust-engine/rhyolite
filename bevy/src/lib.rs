@@ -1,5 +1,8 @@
 #![feature(get_mut_unchecked)]
+#![feature(generators)]
 
+mod image;
+mod loaders;
 mod queue;
 mod swapchain;
 mod types;
@@ -10,6 +13,7 @@ use std::{
 };
 
 use bevy_app::prelude::*;
+use bevy_asset::AddAsset;
 use bevy_ecs::prelude::*;
 
 use rhyolite::{
@@ -17,6 +21,7 @@ use rhyolite::{
     cstr, Instance, Version,
 };
 
+pub use self::image::*;
 pub use queue::{AsyncQueues, Frame, Queues, QueuesRouter};
 pub use swapchain::{Swapchain, SwapchainConfigExt};
 pub use types::*;
@@ -152,6 +157,9 @@ impl Plugin for RenderPlugin {
                     swapchain::extract_windows.in_set(RenderSystems::SetUp),
                     queue::flush_async_queue_system.in_set(RenderSystems::CleanUp),
                 ),
-            );
+            )
+            .add_asset::<SlicedImageArray>()
+            .add_asset::<Image>()
+            .init_asset_loader::<loaders::PngLoader>();
     }
 }

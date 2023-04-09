@@ -1,6 +1,7 @@
 mod layout;
 mod pool;
 
+use ash::vk;
 pub use layout::*;
 pub use pool::*;
 
@@ -9,3 +10,8 @@ pub use pool::*;
 // It should then generate `all` of the descriptors for us to bind.
 // It does not have to be per-frame, but it needs to have enough capacity,
 // When writing descriptor, a comparison should be made first, If equal, skip writing desceritpro.
+pub use crate::macros::PushConstants;
+pub trait PushConstants {
+    // TODO: Make this a const property, pending rust offset_of! macro
+    fn ranges() -> Vec<vk::PushConstantRange>;
+}

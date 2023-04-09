@@ -4,12 +4,11 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
-use std::ops::DerefMut;
 
 use crate::{
     shader::{ShaderModule, SpecializedShader},
     utils::send_marker::SendMarker,
-    DeferredOperation, DeferredOperationTaskPool, Device, HasDevice, PipelineCache, PipelineLayout,
+    DeferredOperationTaskPool, Device, HasDevice, PipelineCache, PipelineLayout,
 };
 
 pub struct RayTracingPipeline {
@@ -111,8 +110,6 @@ impl RayTracingPipelineLibrary {
         pool: Arc<DeferredOperationTaskPool>,
     ) -> impl Future<Output = Result<Self, vk::Result>> + Send + 'a {
         unsafe {
-            let stages = SendMarker::new(stages);
-            let groups = SendMarker::new(groups);
             async move {
                 let library_interface =
                     SendMarker::new(vk::RayTracingPipelineInterfaceCreateInfoKHR {
@@ -134,7 +131,7 @@ impl RayTracingPipelineLibrary {
                 });
                 let mut pipeline = vk::Pipeline::null();
                 pool.schedule(|deferred_operation| {
-                    let result = (layout
+                    (layout
                         .device()
                         .rtx_loader()
                         .fp()
@@ -146,12 +143,13 @@ impl RayTracingPipelineLibrary {
                         info.deref(),
                         std::ptr::null(),
                         &mut pipeline,
-                    );
-                    result
+                    )
                 })
                 .await?;
                 drop(info);
                 drop(library_interface);
+                drop(stages);
+                drop(groups);
                 Ok(Self {
                     layout,
                     pipeline,

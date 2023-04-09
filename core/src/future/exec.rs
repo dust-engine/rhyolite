@@ -6,7 +6,6 @@ use ash::vk;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
-    marker::PhantomData,
     pin::Pin,
     task::Poll,
 };
@@ -111,7 +110,9 @@ impl<T> RenderImage<T> {
     pub fn inner_mut(&mut self) -> &mut T {
         &mut self.res.inner
     }
-
+    pub fn into_inner(self) -> T {
+        self.res.into_inner()
+    }
     pub fn map<RET>(self, mapper: impl FnOnce(T) -> RET) -> RenderImage<RET> {
         let res = self.res.map(mapper);
         RenderImage {

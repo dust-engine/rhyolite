@@ -247,7 +247,7 @@ impl<Img: ImageLike, ImgRef: DerefMut<Target = RenderImage<Img>>> GPUCommandFutu
     fn record(
         self: std::pin::Pin<&mut Self>,
         ctx: &mut crate::future::CommandBufferRecordContext,
-        recycled_state: &mut Self::RecycledState,
+        _recycled_state: &mut Self::RecycledState,
     ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
         ctx.record(|ctx, command_buffer| unsafe {
             let range = self.image.inner().subresource_range();

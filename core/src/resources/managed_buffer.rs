@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    copy_buffer, copy_buffer_regions, device,
+    copy_buffer, copy_buffer_regions,
     future::{
         use_shared_state_with_old, GPUCommandFuture, PerFrameContainer, PerFrameState, RenderRes,
         SharedDeviceState, SharedDeviceStateHostContainer,

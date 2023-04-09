@@ -271,6 +271,7 @@ pub struct PhysicalDeviceFeatures {
     pub v13: vk::PhysicalDeviceVulkan13Features,
     pub acceleration_structure: vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
     pub ray_tracing: vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+    pub shader_atomics: vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT,
 }
 unsafe impl Send for PhysicalDeviceFeatures {}
 unsafe impl Sync for PhysicalDeviceFeatures {}
@@ -281,6 +282,7 @@ impl PhysicalDeviceFeatures {
         self.v12.p_next = &mut self.v13 as *mut _ as *mut c_void;
         self.v13.p_next = &mut self.acceleration_structure as *mut _ as *mut c_void;
         self.acceleration_structure.p_next = &mut self.ray_tracing as *mut _ as *mut c_void;
+        self.ray_tracing.p_next = &mut self.shader_atomics as *mut _ as *mut c_void;
     }
     fn new(
         instance: &ash::Instance,
@@ -293,6 +295,7 @@ impl PhysicalDeviceFeatures {
             v13: vk::PhysicalDeviceVulkan13Features::default(),
             acceleration_structure: vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default(),
             ray_tracing: vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default(),
+            shader_atomics: vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default(),
         });
         this.fix_links();
         unsafe {

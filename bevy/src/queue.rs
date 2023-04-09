@@ -7,7 +7,7 @@ use std::{
 
 use bevy_ecs::system::{ResMut, Resource};
 use crossbeam_channel::{Receiver, Sender};
-use rhyolite::{QueueCompileExt, ash::prelude::VkResult};
+use rhyolite::QueueCompileExt;
 use rhyolite::{
     ash::vk,
     commands::SharedCommandPool,
