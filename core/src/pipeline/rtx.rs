@@ -92,7 +92,7 @@ impl Default for RayTracingPipelineLibraryCreateInfo {
             pipeline_create_flags: Default::default(),
             max_pipeline_ray_recursion_depth: 1,
             max_pipeline_ray_payload_size: 4,
-            max_pipeline_ray_hit_attribute_size: 32,
+            max_pipeline_ray_hit_attribute_size: 4,
         }
     }
 }

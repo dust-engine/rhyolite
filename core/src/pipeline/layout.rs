@@ -20,6 +20,7 @@ impl PipelineLayout {
     pub fn new(
         device: Arc<Device>,
         set_layouts: Vec<Arc<DescriptorSetLayout>>,
+        push_constant_ranges: &[vk::PushConstantRange],
         flags: vk::PipelineLayoutCreateFlags,
     ) -> VkResult<Self> {
         let raw_set_layouts: Vec<_> = set_layouts.iter().map(|a| unsafe { a.raw() }).collect();
@@ -27,6 +28,8 @@ impl PipelineLayout {
             flags,
             set_layout_count: raw_set_layouts.len() as u32,
             p_set_layouts: raw_set_layouts.as_ptr(),
+            push_constant_range_count: push_constant_ranges.len() as u32,
+            p_push_constant_ranges: push_constant_ranges.as_ptr(),
             ..Default::default()
         };
 
