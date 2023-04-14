@@ -181,7 +181,7 @@ impl<'host> CommandBufferRecordContext<'host> {
         self.stage_index
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct StageImageBarrier {
     pub barrier: vk::MemoryBarrier2,
     pub src_layout: vk::ImageLayout,
@@ -563,7 +563,17 @@ impl StageContext {
         }
         self.add_barrier_tracking(&mut tracking, &access);
 
-        let image_barrier = self
+        if res.layout == res.old_layout
+        && (tracking.queue_family == tracking.prev_queue_family || tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED) {
+            // Global memory barrier would suffice.
+            get_memory_access(
+                &mut self.global_access,
+                &tracking.prev_stage_access,
+                &access,
+                false,
+            );
+        } else {
+            let image_barrier = self
             .image_accesses
             .entry(StageContextImage {
                 image: res.inner().raw_image(),
@@ -579,12 +589,13 @@ impl StageContext {
                 src_queue: QueueRef::null(),
                 dst_queue: QueueRef::null(),
             });
-        get_memory_access(
-            &mut image_barrier.barrier,
-            &tracking.prev_stage_access,
-            &access,
-            image_barrier.dst_layout != image_barrier.src_layout,
-        );
+            get_memory_access(
+                &mut image_barrier.barrier,
+                &tracking.prev_stage_access,
+                &access,
+                image_barrier.dst_layout != image_barrier.src_layout,
+            );
+        }
 
         tracking.current_stage_access.write_access |= accesses;
         tracking.current_stage_access.write_stages |= stages;
@@ -622,7 +633,17 @@ impl StageContext {
         }
         self.add_barrier_tracking(&mut tracking, &access);
 
-        let image_barrier = self
+        if res.layout == res.old_layout
+        && (tracking.queue_family == tracking.prev_queue_family || tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED) {
+            // Global memory barrier would suffice.
+            get_memory_access(
+                &mut self.global_access,
+                &tracking.prev_stage_access,
+                &access,
+                false,
+            );
+        } else {
+            let image_barrier = self
             .image_accesses
             .entry(StageContextImage {
                 image: res.inner().raw_image(),
@@ -642,12 +663,13 @@ impl StageContext {
                 src_queue: QueueRef::null(),
                 dst_queue: QueueRef::null(),
             });
-        get_memory_access(
-            &mut image_barrier.barrier,
-            &tracking.prev_stage_access,
-            &access,
-            image_barrier.dst_layout != image_barrier.src_layout,
-        );
+            get_memory_access(
+                &mut image_barrier.barrier,
+                &tracking.prev_stage_access,
+                &access,
+                image_barrier.dst_layout != image_barrier.src_layout,
+            );
+        }
 
         tracking.current_stage_access.read_access |= accesses;
         tracking.current_stage_access.read_stages |= stages;
