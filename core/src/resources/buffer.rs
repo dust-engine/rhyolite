@@ -178,6 +178,75 @@ pub fn copy_buffer_regions<
     }
 }
 
+
+#[pin_project]
+pub struct UpdateBufferFuture<
+    T: BufferLike,
+    TRef: DerefMut<Target = RenderRes<T>>,
+    const N: usize
+> {
+    pub dst: TRef,
+    data: [u8; N]
+}
+impl<
+    T: BufferLike,
+    TRef: DerefMut<Target = RenderRes<T>>,
+    const N: usize
+    > GPUCommandFuture for UpdateBufferFuture<T, TRef, N>
+{
+    type Output = ();
+    type RetainedState = ();
+    type RecycledState = ();
+    #[inline]
+    fn record(
+        self: Pin<&mut Self>,
+        ctx: &mut CommandBufferRecordContext,
+        _recycled_state: &mut Self::RecycledState,
+    ) -> Poll<(Self::Output, Self::RetainedState)> {
+        let this = self.project();
+        if this.data.is_empty() {
+            return Poll::Ready(((), ()))
+        }
+        let offset = this.dst.inner.offset();
+        let size = this.dst.inner.size().min(this.data.len() as u64) as usize;
+        let dst = this.dst.deref_mut().inner_mut();
+        let data: &[u8] = &this.data[..size];
+        ctx.record(|ctx, command_buffer| unsafe {
+            ctx.device().cmd_update_buffer(
+                command_buffer,
+                dst.raw_buffer(),
+                offset,
+                data,
+            );
+        });
+        Poll::Ready(((), ()))
+    }
+    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
+        let this = self.project();
+
+        ctx.write(
+            this.dst,
+            vk::PipelineStageFlags2::COPY,
+            vk::AccessFlags2::TRANSFER_WRITE,
+        );
+    }
+}
+
+
+pub fn update_buffer<
+    T: BufferLike,
+    TRef: DerefMut<Target = RenderRes<T>>,
+    const N: usize
+>(
+    dst: TRef,
+    data: [u8; N]
+) -> UpdateBufferFuture<T, TRef, N> {
+    UpdateBufferFuture {
+        dst,
+        data
+    }
+}
+
 pub struct ResidentBuffer {
     allocator: Allocator,
     buffer: vk::Buffer,

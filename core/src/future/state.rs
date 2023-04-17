@@ -88,7 +88,29 @@ pub fn use_shared_state<T>(
         SharedDeviceState(this.as_ref().unwrap().0.clone())
     }
 }
-
+pub fn use_shared_state_initialized<'a, T, Fut: GPUCommandFuture<Output = RenderRes<T>>>(
+    this: &'a mut Option<SharedDeviceStateHostContainer<T>>,
+    create: impl FnOnce(Option<&T>) -> Fut + 'a,
+    should_update: impl FnOnce(&T) -> bool + 'a,
+) -> impl GPUCommandFuture<Output = RenderRes<SharedDeviceState<T>>> + 'a
+    where Fut::RetainedState: 'a, Fut::RecycledState: 'a {
+    commands! { move
+        if let Some(inner) = this {
+            let inner = &mut inner.0;
+            if should_update(&inner) {
+                let res = create(Some(&inner)).await.map(|a| Arc::new(a));
+                *inner = res.inner().clone();
+                res.map(|a| SharedDeviceState(a))
+            } else {
+                RenderRes::new(SharedDeviceState(inner.clone()))
+            }
+        } else {
+            let res = create(None).await.map(|a| Arc::new(a));
+            *this = Some(SharedDeviceStateHostContainer(res.inner().clone()));
+            res.map(|a| SharedDeviceState(a))
+        }
+    }
+}
 /// Returns (new, old)
 pub fn use_shared_state_with_old<T>(
     this: &mut Option<SharedDeviceStateHostContainer<T>>,
@@ -119,6 +141,10 @@ use crate::BufferLike;
 use crate::HasDevice;
 use crate::ImageLike;
 use crate::ImageViewLike;
+use crate::macros::commands;
+
+use super::GPUCommandFuture;
+use super::RenderRes;
 // probably needs a mpsc channel.
 pub struct PerFrameState<T> {
     receiver: crossbeam_channel::Receiver<T>,
