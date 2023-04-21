@@ -1,6 +1,7 @@
 use ash::prelude::VkResult;
 use ash::vk;
 use std::ffi::CStr;
+use std::fmt::Debug;
 use std::ops::Deref;
 use std::{collections::HashMap, sync::Arc};
 
@@ -113,6 +114,11 @@ impl<T: Deref<Target = [u32]>> ReflectedSpirvShader<T> {
 pub struct ShaderModule {
     device: Arc<Device>,
     module: vk::ShaderModule,
+}
+impl Debug for ShaderModule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ShaderModule").field(&self.module).finish()
+    }
 }
 impl ShaderModule {
     pub fn raw(&self) -> vk::ShaderModule {
@@ -235,7 +241,7 @@ impl SpecializationInfo {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SpecializedShader<'a, S: Deref<Target = ShaderModule>> {
     pub stage: vk::ShaderStageFlags,
     pub flags: vk::PipelineShaderStageCreateFlags,

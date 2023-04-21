@@ -35,7 +35,7 @@ impl RayTracingPipeline {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum RayTracingHitGroupType {
     Procedural,
     Triangle,
@@ -293,6 +293,11 @@ impl RayTracingPipeline {
             let groups = SendMarker::new(groups);
             let specialization_infos = SendMarker::new(specialization_infos);
             let device = layout.device().clone();
+            let library_interface = SendMarker::new(vk::RayTracingPipelineInterfaceCreateInfoKHR {
+                max_pipeline_ray_payload_size: info.max_pipeline_ray_payload_size,
+                max_pipeline_ray_hit_attribute_size: info.max_pipeline_ray_hit_attribute_size,
+                ..Default::default()
+            });
             async move {
                 let stages_ref = SendMarker::new(stages.as_slice());
                 let groups_ref = SendMarker::new(groups.as_slice());
@@ -304,6 +309,7 @@ impl RayTracingPipeline {
                     group_count: groups_ref.len() as u32,
                     p_groups: groups_ref.as_ptr(),
                     max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
+                    p_library_interface: library_interface.deref(),
                     layout: layout.raw(),
                     ..Default::default()
                 });
@@ -323,6 +329,7 @@ impl RayTracingPipeline {
                 drop(stages);
                 drop(groups);
                 drop(info);
+                drop(library_interface);
 
                 let sbt_handles = SbtHandles::new(
                     &device,
