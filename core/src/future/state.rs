@@ -93,7 +93,10 @@ pub fn use_shared_state_initialized<'a, T, Fut: GPUCommandFuture<Output = Render
     create: impl FnOnce(Option<&T>) -> Fut + 'a,
     should_update: impl FnOnce(&T) -> bool + 'a,
 ) -> impl GPUCommandFuture<Output = RenderRes<SharedDeviceState<T>>> + 'a
-    where Fut::RetainedState: 'a, Fut::RecycledState: 'a {
+where
+    Fut::RetainedState: 'a,
+    Fut::RecycledState: 'a,
+{
     commands! { move
         if let Some(inner) = this {
             let inner = &mut inner.0;
@@ -137,11 +140,11 @@ pub fn use_shared_state_with_old<T>(
 
 use std::sync::atomic::AtomicUsize;
 
+use crate::macros::commands;
 use crate::BufferLike;
 use crate::HasDevice;
 use crate::ImageLike;
 use crate::ImageViewLike;
-use crate::macros::commands;
 
 use super::GPUCommandFuture;
 use super::RenderRes;

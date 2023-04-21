@@ -168,98 +168,30 @@ impl RayTracingPipelineLibrary {
                 Option<SpecializedShader<'a, S>>, // rchit
                 Option<SpecializedShader<'a, S>>, // rint
                 Option<SpecializedShader<'a, S>>, // rahit
+                RayTracingHitGroupType,
             ),
         >,
         info: &'a RayTracingPipelineLibraryCreateInfo,
-        ty: RayTracingHitGroupType,
         pipeline_cache: Option<&'a PipelineCache>,
         pool: Arc<DeferredOperationTaskPool>,
     ) -> impl Future<Output = VkResult<Self>> + Send + 'a {
         let mut stages: Vec<vk::PipelineShaderStageCreateInfo> =
             Vec::with_capacity(hitgroups.len() * 3);
-        let mut specialization_info: Vec<vk::SpecializationInfo> =
+        let mut specialization_infos: Vec<vk::SpecializationInfo> =
             Vec::with_capacity(hitgroups.len() * 3);
         let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR> =
             Vec::with_capacity(hitgroups.len());
 
-        for (rchit, rint, rahit) in hitgroups {
-            let mut rchit_stage: u32 = vk::SHADER_UNUSED_KHR;
-            let mut rint_stage: u32 = vk::SHADER_UNUSED_KHR;
-            let mut rahit_stage: u32 = vk::SHADER_UNUSED_KHR;
-            if let Some(shader) = rchit.as_ref() {
-                assert_eq!(shader.stage, vk::ShaderStageFlags::CLOSEST_HIT_KHR);
-                rchit_stage = stages.len() as u32;
-
-                let p_specialization_info = specialization_info.as_ptr_range().end;
-                specialization_info.push(vk::SpecializationInfo {
-                    map_entry_count: shader.specialization_info.entries.len() as u32,
-                    p_map_entries: shader.specialization_info.entries.as_ptr(),
-                    data_size: shader.specialization_info.data.len(),
-                    p_data: shader.specialization_info.data.as_ptr() as *const _,
-                });
-                stages.push(vk::PipelineShaderStageCreateInfo {
-                    flags: shader.flags,
-                    stage: vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-                    module: shader.shader.raw(),
-                    p_name: shader.entry_point.as_ptr(),
-                    p_specialization_info,
-                    ..Default::default()
-                });
-            }
-
-            if let Some(shader) = rint.as_ref() {
-                assert_eq!(shader.stage, vk::ShaderStageFlags::INTERSECTION_KHR);
-                rint_stage = stages.len() as u32;
-
-                let p_specialization_info = specialization_info.as_ptr_range().end;
-                specialization_info.push(vk::SpecializationInfo {
-                    map_entry_count: shader.specialization_info.entries.len() as u32,
-                    p_map_entries: shader.specialization_info.entries.as_ptr(),
-                    data_size: shader.specialization_info.data.len(),
-                    p_data: shader.specialization_info.data.as_ptr() as *const _,
-                });
-                stages.push(vk::PipelineShaderStageCreateInfo {
-                    flags: shader.flags,
-                    stage: vk::ShaderStageFlags::INTERSECTION_KHR,
-                    module: shader.shader.raw(),
-                    p_name: shader.entry_point.as_ptr(),
-                    p_specialization_info,
-                    ..Default::default()
-                });
-            }
-            if let Some(shader) = rahit.as_ref() {
-                assert_eq!(shader.stage, vk::ShaderStageFlags::ANY_HIT_KHR);
-                rahit_stage = stages.len() as u32;
-
-                let p_specialization_info = specialization_info.as_ptr_range().end;
-                specialization_info.push(vk::SpecializationInfo {
-                    map_entry_count: shader.specialization_info.entries.len() as u32,
-                    p_map_entries: shader.specialization_info.entries.as_ptr(),
-                    data_size: shader.specialization_info.data.len(),
-                    p_data: shader.specialization_info.data.as_ptr() as *const _,
-                });
-                stages.push(vk::PipelineShaderStageCreateInfo {
-                    flags: shader.flags,
-                    stage: vk::ShaderStageFlags::ANY_HIT_KHR,
-                    module: shader.shader.raw(),
-                    p_name: shader.entry_point.as_ptr(),
-                    p_specialization_info,
-                    ..Default::default()
-                });
-            }
-            groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
-                ty: ty.into(),
-                closest_hit_shader: rchit_stage,
-                any_hit_shader: rahit_stage,
-                intersection_shader: rint_stage,
-                general_shader: vk::SHADER_UNUSED_KHR,
-                ..Default::default()
-            })
-        }
         unsafe {
+            build_hitgroup_shaders(
+                &mut specialization_infos,
+                &mut stages,
+                &mut groups,
+                hitgroups,
+            );
             let stages = SendMarker::new(stages);
             let groups = SendMarker::new(groups);
-            let specialization_info = SendMarker::new(specialization_info);
+            let specialization_infos = SendMarker::new(specialization_infos);
             async move {
                 let stages_ref = SendMarker::new(stages.as_slice());
                 let groups_ref = SendMarker::new(groups.as_slice());
@@ -274,7 +206,7 @@ impl RayTracingPipelineLibrary {
                 )
                 .await?;
                 result.num_hitgroup = num_hitgroup;
-                drop(specialization_info); // Make sure specialization info lives across await point
+                drop(specialization_infos); // Make sure specialization info lives across await point
                 drop(stages);
                 drop(groups);
                 Ok(result)
@@ -288,66 +220,15 @@ impl RayTracingPipelineLibrary {
         pipeline_cache: Option<&'a PipelineCache>,
         pool: Arc<DeferredOperationTaskPool>,
     ) -> impl Future<Output = VkResult<Self>> + Send + 'a {
-        let mut num_raygen: u32 = 0;
-        let mut num_raymiss: u32 = 0;
-        let mut num_callable: u32 = 0;
-        for shader in shaders.iter() {
-            match shader.stage {
-                vk::ShaderStageFlags::RAYGEN_KHR => {
-                    assert!(
-                        num_callable == 0 && num_raymiss == 0,
-                        "Ray Generation Shader must be specified before everything else"
-                    );
-                    num_raygen += 1;
-                }
-                vk::ShaderStageFlags::MISS_KHR => {
-                    assert!(
-                        num_callable == 0,
-                        "Miss Shader must be specified before Callable shaders"
-                    );
-                    num_raymiss += 1;
-                }
-                vk::ShaderStageFlags::CALLABLE_KHR => {
-                    num_callable += 1;
-                }
-                vk::ShaderStageFlags::ANY_HIT_KHR
-                | vk::ShaderStageFlags::CLOSEST_HIT_KHR
-                | vk::ShaderStageFlags::INTERSECTION_KHR => {
-                    panic!("For hitgroup shaders, use `RayTracingPipelineLibrary::create_for_hitgroup`")
-                }
-                _ => {
-                    panic!()
-                }
-            }
-        }
+        let (num_raygen, num_miss, num_callable) = verify_general_shader_orders(shaders);
         unsafe {
-            let specialization_infos: Vec<_> = shaders
-                .iter()
-                .map(|shader| shader.specialization_info.raw_info())
-                .collect();
-            let (stages, groups): (Vec<_>, Vec<_>) = shaders
-                .iter()
-                .enumerate()
-                .map(|(i, shader)| {
-                    let stage = vk::PipelineShaderStageCreateInfo {
-                        flags: shader.flags,
-                        stage: shader.stage,
-                        module: shader.shader.raw(),
-                        p_name: shader.entry_point.as_ptr(),
-                        p_specialization_info: specialization_infos.as_ptr().add(i),
-                        ..Default::default()
-                    };
-                    let group = vk::RayTracingShaderGroupCreateInfoKHR {
-                        ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
-                        general_shader: i as u32,
-                        closest_hit_shader: vk::SHADER_UNUSED_KHR,
-                        any_hit_shader: vk::SHADER_UNUSED_KHR,
-                        intersection_shader: vk::SHADER_UNUSED_KHR,
-                        ..Default::default()
-                    };
-                    (stage, group)
-                })
-                .unzip();
+            let mut stages: Vec<vk::PipelineShaderStageCreateInfo> =
+                Vec::with_capacity(shaders.len());
+            let mut specialization_infos: Vec<vk::SpecializationInfo> =
+                Vec::with_capacity(shaders.len());
+            let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR> =
+                Vec::with_capacity(shaders.len());
+            build_general_shaders(&mut specialization_infos, &mut stages, &mut groups, shaders);
 
             let stages = SendMarker::new(stages);
             let groups = SendMarker::new(groups);
@@ -368,7 +249,7 @@ impl RayTracingPipelineLibrary {
                 drop(stages);
                 drop(groups);
                 result.num_raygen = num_raygen;
-                result.num_raymiss = num_raymiss;
+                result.num_raymiss = num_miss;
                 result.num_callable = num_callable;
                 Ok(result)
             }
@@ -377,6 +258,88 @@ impl RayTracingPipelineLibrary {
 }
 
 impl RayTracingPipeline {
+    pub fn create_for_shaders<'a, S: Deref<Target = ShaderModule>>(
+        layout: Arc<PipelineLayout>,
+        shaders: &'a [SpecializedShader<'a, S>],
+        hitgroups: impl ExactSizeIterator<
+            Item = (
+                Option<SpecializedShader<'a, S>>, // rchit
+                Option<SpecializedShader<'a, S>>, // rint
+                Option<SpecializedShader<'a, S>>, // rahit
+                RayTracingHitGroupType,
+            ),
+        >,
+        info: &'a RayTracingPipelineLibraryCreateInfo,
+        pipeline_cache: Option<&'a PipelineCache>,
+        pool: Arc<DeferredOperationTaskPool>,
+    ) -> impl Future<Output = VkResult<Self>> + Send + 'a {
+        let (num_raygen, num_miss, num_callable) = verify_general_shader_orders(shaders);
+        let num_hitgroups = hitgroups.len() as u32;
+        unsafe {
+            let mut stages: Vec<vk::PipelineShaderStageCreateInfo> =
+                Vec::with_capacity(hitgroups.len() * 3 + shaders.len());
+            let mut specialization_infos: Vec<vk::SpecializationInfo> =
+                Vec::with_capacity(hitgroups.len() * 3 + shaders.len());
+            let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR> =
+                Vec::with_capacity(hitgroups.len() + shaders.len());
+            build_general_shaders(&mut specialization_infos, &mut stages, &mut groups, shaders);
+            build_hitgroup_shaders(
+                &mut specialization_infos,
+                &mut stages,
+                &mut groups,
+                hitgroups,
+            );
+            let stages = SendMarker::new(stages);
+            let groups = SendMarker::new(groups);
+            let specialization_infos = SendMarker::new(specialization_infos);
+            let device = layout.device().clone();
+            async move {
+                let stages_ref = SendMarker::new(stages.as_slice());
+                let groups_ref = SendMarker::new(groups.as_slice());
+                let mut pipeline = vk::Pipeline::null();
+                let info = SendMarker::new(vk::RayTracingPipelineCreateInfoKHR {
+                    flags: info.pipeline_create_flags,
+                    stage_count: stages_ref.len() as u32,
+                    p_stages: stages_ref.as_ptr(),
+                    group_count: groups_ref.len() as u32,
+                    p_groups: groups_ref.as_ptr(),
+                    max_pipeline_ray_recursion_depth: info.max_pipeline_ray_recursion_depth,
+                    layout: layout.raw(),
+                    ..Default::default()
+                });
+                pool.schedule(|deferred_operation| {
+                    (device.rtx_loader().fp().create_ray_tracing_pipelines_khr)(
+                        device.handle(),
+                        deferred_operation.map(|a| a.raw()).unwrap_or_default(),
+                        pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
+                        1,
+                        info.deref(),
+                        std::ptr::null(),
+                        &mut pipeline,
+                    )
+                })
+                .await?;
+                drop(specialization_infos);
+                drop(stages);
+                drop(groups);
+                drop(info);
+
+                let sbt_handles = SbtHandles::new(
+                    &device,
+                    pipeline,
+                    num_raygen,
+                    num_miss,
+                    num_callable,
+                    num_hitgroups,
+                )?;
+                Ok(Self {
+                    layout,
+                    pipeline,
+                    sbt_handles,
+                })
+            }
+        }
+    }
     pub fn create_from_libraries<'a>(
         libs: impl Iterator<Item = &'a RayTracingPipelineLibrary>,
         info: &'a RayTracingPipelineLibraryCreateInfo,
@@ -572,4 +535,177 @@ impl SbtHandles {
         let end = start + self.handle_layout.size();
         &self.data[start..end]
     }
+}
+
+fn verify_general_shader_orders<'a, S: Deref<Target = ShaderModule>>(
+    shaders: &'a [SpecializedShader<'a, S>],
+) -> (u32, u32, u32) {
+    let mut num_raygen: u32 = 0;
+    let mut num_raymiss: u32 = 0;
+    let mut num_callable: u32 = 0;
+    for shader in shaders.iter() {
+        match shader.stage {
+            vk::ShaderStageFlags::RAYGEN_KHR => {
+                assert!(
+                    num_callable == 0 && num_raymiss == 0,
+                    "Ray Generation Shader must be specified before everything else"
+                );
+                num_raygen += 1;
+            }
+            vk::ShaderStageFlags::MISS_KHR => {
+                assert!(
+                    num_callable == 0,
+                    "Miss Shader must be specified before Callable shaders"
+                );
+                num_raymiss += 1;
+            }
+            vk::ShaderStageFlags::CALLABLE_KHR => {
+                num_callable += 1;
+            }
+            vk::ShaderStageFlags::ANY_HIT_KHR
+            | vk::ShaderStageFlags::CLOSEST_HIT_KHR
+            | vk::ShaderStageFlags::INTERSECTION_KHR => {
+                panic!("For hitgroup shaders, use `RayTracingPipelineLibrary::create_for_hitgroup`")
+            }
+            _ => {
+                panic!()
+            }
+        }
+    }
+    (num_raygen, num_raymiss, num_callable)
+}
+
+unsafe fn build_general_shaders<'a, S: Deref<Target = ShaderModule>>(
+    specialization_infos: &mut Vec<vk::SpecializationInfo>,
+    stages: &mut Vec<vk::PipelineShaderStageCreateInfo>,
+    groups: &mut Vec<vk::RayTracingShaderGroupCreateInfoKHR>,
+    shaders: &'a [SpecializedShader<'a, S>],
+) {
+    let specialization_infos_ptr = specialization_infos.as_ptr();
+    specialization_infos.extend(
+        shaders
+            .iter()
+            .map(|shader| shader.specialization_info.raw_info()),
+    );
+
+    for (i, shader) in shaders.iter().enumerate() {
+        stages.push(vk::PipelineShaderStageCreateInfo {
+            flags: shader.flags,
+            stage: shader.stage,
+            module: shader.shader.raw(),
+            p_name: shader.entry_point.as_ptr(),
+            p_specialization_info: specialization_infos_ptr.add(i),
+            ..Default::default()
+        });
+        groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
+            ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+            general_shader: i as u32,
+            closest_hit_shader: vk::SHADER_UNUSED_KHR,
+            any_hit_shader: vk::SHADER_UNUSED_KHR,
+            intersection_shader: vk::SHADER_UNUSED_KHR,
+            ..Default::default()
+        });
+    }
+}
+
+fn build_hitgroup_shaders<'a, S: Deref<Target = ShaderModule>>(
+    specialization_info: &mut Vec<vk::SpecializationInfo>,
+    stages: &mut Vec<vk::PipelineShaderStageCreateInfo>,
+    groups: &mut Vec<vk::RayTracingShaderGroupCreateInfoKHR>,
+    hitgroups: impl ExactSizeIterator<
+        Item = (
+            Option<SpecializedShader<'a, S>>, // rchit
+            Option<SpecializedShader<'a, S>>, // rint
+            Option<SpecializedShader<'a, S>>, // rahit
+            RayTracingHitGroupType,
+        ),
+    >,
+) {
+    let initial_capacity = (
+        stages.capacity(),
+        groups.capacity(),
+        specialization_info.capacity(),
+    );
+
+    for (rchit, rint, rahit, ty) in hitgroups {
+        let mut rchit_stage: u32 = vk::SHADER_UNUSED_KHR;
+        let mut rint_stage: u32 = vk::SHADER_UNUSED_KHR;
+        let mut rahit_stage: u32 = vk::SHADER_UNUSED_KHR;
+        if let Some(shader) = rchit.as_ref() {
+            assert_eq!(shader.stage, vk::ShaderStageFlags::CLOSEST_HIT_KHR);
+            rchit_stage = stages.len() as u32;
+
+            let p_specialization_info = specialization_info.as_ptr_range().end;
+            specialization_info.push(vk::SpecializationInfo {
+                map_entry_count: shader.specialization_info.entries.len() as u32,
+                p_map_entries: shader.specialization_info.entries.as_ptr(),
+                data_size: shader.specialization_info.data.len(),
+                p_data: shader.specialization_info.data.as_ptr() as *const _,
+            });
+            stages.push(vk::PipelineShaderStageCreateInfo {
+                flags: shader.flags,
+                stage: vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                module: shader.shader.raw(),
+                p_name: shader.entry_point.as_ptr(),
+                p_specialization_info,
+                ..Default::default()
+            });
+        }
+
+        if let Some(shader) = rint.as_ref() {
+            assert_eq!(shader.stage, vk::ShaderStageFlags::INTERSECTION_KHR);
+            rint_stage = stages.len() as u32;
+
+            let p_specialization_info = specialization_info.as_ptr_range().end;
+            specialization_info.push(vk::SpecializationInfo {
+                map_entry_count: shader.specialization_info.entries.len() as u32,
+                p_map_entries: shader.specialization_info.entries.as_ptr(),
+                data_size: shader.specialization_info.data.len(),
+                p_data: shader.specialization_info.data.as_ptr() as *const _,
+            });
+            stages.push(vk::PipelineShaderStageCreateInfo {
+                flags: shader.flags,
+                stage: vk::ShaderStageFlags::INTERSECTION_KHR,
+                module: shader.shader.raw(),
+                p_name: shader.entry_point.as_ptr(),
+                p_specialization_info,
+                ..Default::default()
+            });
+        }
+        if let Some(shader) = rahit.as_ref() {
+            assert_eq!(shader.stage, vk::ShaderStageFlags::ANY_HIT_KHR);
+            rahit_stage = stages.len() as u32;
+
+            let p_specialization_info = specialization_info.as_ptr_range().end;
+            specialization_info.push(vk::SpecializationInfo {
+                map_entry_count: shader.specialization_info.entries.len() as u32,
+                p_map_entries: shader.specialization_info.entries.as_ptr(),
+                data_size: shader.specialization_info.data.len(),
+                p_data: shader.specialization_info.data.as_ptr() as *const _,
+            });
+            stages.push(vk::PipelineShaderStageCreateInfo {
+                flags: shader.flags,
+                stage: vk::ShaderStageFlags::ANY_HIT_KHR,
+                module: shader.shader.raw(),
+                p_name: shader.entry_point.as_ptr(),
+                p_specialization_info,
+                ..Default::default()
+            });
+        }
+        groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
+            ty: ty.into(),
+            closest_hit_shader: rchit_stage,
+            any_hit_shader: rahit_stage,
+            intersection_shader: rint_stage,
+            general_shader: vk::SHADER_UNUSED_KHR,
+            ..Default::default()
+        })
+    }
+
+    let end_capacity = (
+        stages.capacity(),
+        groups.capacity(),
+        specialization_info.capacity(),
+    );
+    assert_eq!(initial_capacity, end_capacity);
 }

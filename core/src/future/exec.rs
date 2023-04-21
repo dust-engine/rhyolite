@@ -564,7 +564,9 @@ impl StageContext {
         self.add_barrier_tracking(&mut tracking, &access);
 
         if res.layout == res.old_layout
-        && (tracking.queue_family == tracking.prev_queue_family || tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED) {
+            && (tracking.queue_family == tracking.prev_queue_family
+                || tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED)
+        {
             // Global memory barrier would suffice.
             get_memory_access(
                 &mut self.global_access,
@@ -574,21 +576,21 @@ impl StageContext {
             );
         } else {
             let image_barrier = self
-            .image_accesses
-            .entry(StageContextImage {
-                image: res.inner().raw_image(),
-                subresource_range: res.inner().subresource_range(),
-                extent: res.inner().extent(),
-            })
-            .or_insert(StageImageBarrier {
-                barrier: Default::default(),
-                src_layout: vk::ImageLayout::UNDEFINED,
-                dst_layout: layout,
-                src_queue_family: vk::QUEUE_FAMILY_IGNORED,
-                dst_queue_family: vk::QUEUE_FAMILY_IGNORED,
-                src_queue: QueueRef::null(),
-                dst_queue: QueueRef::null(),
-            });
+                .image_accesses
+                .entry(StageContextImage {
+                    image: res.inner().raw_image(),
+                    subresource_range: res.inner().subresource_range(),
+                    extent: res.inner().extent(),
+                })
+                .or_insert(StageImageBarrier {
+                    barrier: Default::default(),
+                    src_layout: vk::ImageLayout::UNDEFINED,
+                    dst_layout: layout,
+                    src_queue_family: vk::QUEUE_FAMILY_IGNORED,
+                    dst_queue_family: vk::QUEUE_FAMILY_IGNORED,
+                    src_queue: QueueRef::null(),
+                    dst_queue: QueueRef::null(),
+                });
             get_memory_access(
                 &mut image_barrier.barrier,
                 &tracking.prev_stage_access,
@@ -634,7 +636,9 @@ impl StageContext {
         self.add_barrier_tracking(&mut tracking, &access);
 
         if res.layout == res.old_layout
-        && (tracking.queue_family == tracking.prev_queue_family || tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED) {
+            && (tracking.queue_family == tracking.prev_queue_family
+                || tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED)
+        {
             // Global memory barrier would suffice.
             get_memory_access(
                 &mut self.global_access,
@@ -644,25 +648,25 @@ impl StageContext {
             );
         } else {
             let image_barrier = self
-            .image_accesses
-            .entry(StageContextImage {
-                image: res.inner().raw_image(),
-                subresource_range: res.inner().subresource_range(),
-                extent: res.inner().extent(),
-            })
-            .or_insert(StageImageBarrier {
-                barrier: Default::default(),
-                src_layout: res.old_layout.get(),
-                dst_layout: layout,
-                src_queue_family: tracking.prev_queue_family,
-                dst_queue_family: if tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED {
-                    vk::QUEUE_FAMILY_IGNORED
-                } else {
-                    self.queue_family_index
-                },
-                src_queue: QueueRef::null(),
-                dst_queue: QueueRef::null(),
-            });
+                .image_accesses
+                .entry(StageContextImage {
+                    image: res.inner().raw_image(),
+                    subresource_range: res.inner().subresource_range(),
+                    extent: res.inner().extent(),
+                })
+                .or_insert(StageImageBarrier {
+                    barrier: Default::default(),
+                    src_layout: res.old_layout.get(),
+                    dst_layout: layout,
+                    src_queue_family: tracking.prev_queue_family,
+                    dst_queue_family: if tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED {
+                        vk::QUEUE_FAMILY_IGNORED
+                    } else {
+                        self.queue_family_index
+                    },
+                    src_queue: QueueRef::null(),
+                    dst_queue: QueueRef::null(),
+                });
             get_memory_access(
                 &mut image_barrier.barrier,
                 &tracking.prev_stage_access,
