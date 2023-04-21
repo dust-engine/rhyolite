@@ -117,6 +117,7 @@ impl ManagedBufferUnsized {
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
         layout: Layout,
+        base_alignment: usize,
     ) -> Self {
         use crate::PhysicalDeviceMemoryModel::*;
         match allocator.physical_device().memory_model() {
@@ -124,11 +125,13 @@ impl ManagedBufferUnsized {
                 allocator,
                 buffer_usage_flags,
                 layout,
+                base_alignment
             )),
             Discrete | Bar => Self::StagingBuffer(ManagedBufferStrategyStagingUnsized::new(
                 allocator,
                 buffer_usage_flags,
                 layout,
+                base_alignment
             )),
         }
     }
@@ -282,6 +285,7 @@ impl<T> ManagedBufferStrategyDirectWrite<T> {
 }
 
 pub struct ManagedBufferStrategyDirectWriteUnsized {
+    base_alignment: usize,
     layout: Layout,
     allocator: Allocator,
     buffer_usage_flags: vk::BufferUsageFlags,
@@ -295,6 +299,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
         layout: Layout,
+        base_alignment: usize,
     ) -> Self {
         Self {
             layout,
@@ -304,6 +309,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
             objects_buffer: Vec::new(),
             changeset: Default::default(),
             num_items: 0,
+            base_alignment
         }
     }
     pub fn len(&self) -> usize {
@@ -364,9 +370,10 @@ impl ManagedBufferStrategyDirectWriteUnsized {
         let create_buffer = || {
             let create_buffer = self
                 .allocator
-                .create_write_buffer_uninit(
+                .create_write_buffer_uninit_aligned(
                     self.objects_buffer.capacity() as u64,
                     self.buffer_usage_flags,
+                    self.base_alignment as u64
                 )
                 .unwrap();
             create_buffer.contents_mut().unwrap()[0..self.objects_buffer.len()]
@@ -552,12 +559,14 @@ pub struct ManagedBufferStrategyStagingUnsized {
     /// Mapping from raw index to index in change_buffer
     changes: BTreeMap<usize, usize>,
     num_items: usize,
+    base_alignment: usize,
 }
 impl ManagedBufferStrategyStagingUnsized {
     pub fn new(
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
         layout: Layout,
+        base_alignment: usize
     ) -> Self {
         Self {
             layout,
@@ -568,6 +577,7 @@ impl ManagedBufferStrategyStagingUnsized {
             change_buffer: Vec::new(),
             changes: Default::default(),
             num_items: 0,
+            base_alignment,
         }
     }
     pub fn len(&self) -> usize {
@@ -697,9 +707,10 @@ impl ManagedBufferStrategyStagingUnsized {
             &mut self.device_buffer,
             |_| {
                 self.allocator
-                    .create_device_buffer_uninit(
+                    .create_device_buffer_uninit_aligned(
                         expected_whole_buffer_size,
                         self.buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST,
+                        self.base_alignment as u64
                     )
                     .unwrap()
             },
