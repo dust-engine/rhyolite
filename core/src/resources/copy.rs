@@ -127,3 +127,52 @@ pub fn copy_buffer_to_image<
         target_layout,
     }
 }
+
+
+#[pin_project]
+pub struct EnsureImageLayoutFuture<
+    T: ImageLike,
+    TRef: DerefMut<Target = RenderImage<T>>,
+> {
+    pub dst: TRef,
+    pub target_layout: vk::ImageLayout,
+}
+impl<
+        T: ImageLike,
+        TRef: DerefMut<Target = RenderImage<T>>,
+    > GPUCommandFuture for EnsureImageLayoutFuture<T, TRef>
+{
+    type Output = ();
+    type RetainedState = ();
+    type RecycledState = ();
+    #[inline]
+    fn record(
+        self: Pin<&mut Self>,
+        ctx: &mut CommandBufferRecordContext,
+        _recycled_state: &mut Self::RecycledState,
+    ) -> Poll<(Self::Output, Self::RetainedState)> {
+        Poll::Ready(((), ()))
+    }
+    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
+        let this = self.project();
+        ctx.read_image(
+            this.dst,
+            vk::PipelineStageFlags2::empty(),
+            vk::AccessFlags2::empty(),
+            *this.target_layout
+        );
+    }
+}
+
+pub fn ensure_image_layout<
+    T: ImageLike,
+    TRef: DerefMut<Target = RenderImage<T>>
+>(
+    dst: TRef,
+    target_layout: vk::ImageLayout,
+) -> EnsureImageLayoutFuture<T, TRef> {
+    EnsureImageLayoutFuture {
+        dst,
+        target_layout
+    }
+}

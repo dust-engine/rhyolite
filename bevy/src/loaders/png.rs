@@ -10,6 +10,7 @@ use rhyolite::{
     macros::commands,
     ImageLike, ImageRequest, QueueRef,
 };
+use rhyolite::ensure_image_layout;
 
 pub struct PngLoader {
     allocator: crate::Allocator,
@@ -158,6 +159,7 @@ impl AssetLoader for PngLoader {
                 let buf = RenderRes::new(dst_buf);
                 let mut img = RenderImage::new(image, vk::ImageLayout::UNDEFINED);
                 copy_buffer_to_image(&buf, &mut img, vk::ImageLayout::TRANSFER_DST_OPTIMAL).await;
+                ensure_image_layout(&mut img, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL).await;
                 retain!(buf);
                 img
             }
