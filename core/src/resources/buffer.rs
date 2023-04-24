@@ -332,6 +332,20 @@ impl Allocator {
             size: buffer_info.size,
         })
     }
+    pub fn create_resident_buffer_aligned(
+        &self,
+        buffer_info: &vk::BufferCreateInfo,
+        create_info: &vk_mem::AllocationCreateInfo,
+        alignment: u32
+    ) -> VkResult<ResidentBuffer> {
+        let staging_buffer = unsafe { self.inner().create_buffer_with_alignment(buffer_info, create_info, alignment as u64)? };
+        Ok(ResidentBuffer {
+            allocator: self.clone(),
+            buffer: staging_buffer.0,
+            allocation: staging_buffer.1,
+            size: buffer_info.size,
+        })
+    }
     /// Create uninitialized buffer visible to the CPU and local to the GPU.
     /// Only applicable to Bar, ReBar, Integrated memory architecture.
     pub fn create_write_buffer_uninit(
@@ -563,6 +577,7 @@ impl Allocator {
         &self,
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
+        alignment: u32
     ) -> VkResult<ResidentBuffer> {
         let mut create_info = vk::BufferCreateInfo {
             size,
@@ -574,7 +589,7 @@ impl Allocator {
             PhysicalDeviceMemoryModel::UMA
             | PhysicalDeviceMemoryModel::Bar
             | PhysicalDeviceMemoryModel::ResizableBar => {
-                let buf = self.create_resident_buffer(
+                let buf = self.create_resident_buffer_aligned(
                     &create_info,
                     &vk_mem::AllocationCreateInfo {
                         flags: vk_mem::AllocationCreateFlags::MAPPED
@@ -586,18 +601,20 @@ impl Allocator {
                         user_data: 0,
                         priority: 0.0,
                     },
+                    alignment
                 )?;
                 buf
             }
             PhysicalDeviceMemoryModel::Discrete => {
                 create_info.usage |= vk::BufferUsageFlags::TRANSFER_DST;
-                let dst_buffer = self.create_resident_buffer(
+                let dst_buffer = self.create_resident_buffer_aligned(
                     &create_info,
                     &vk_mem::AllocationCreateInfo {
                         flags: vk_mem::AllocationCreateFlags::empty(),
                         usage: vk_mem::MemoryUsage::AutoPreferDevice,
                         ..Default::default()
                     },
+                    alignment
                 )?;
                 dst_buffer
             }
@@ -703,7 +720,7 @@ impl Allocator {
         usage: vk::BufferUsageFlags,
         writer: impl for<'a> FnOnce(&'a mut [u8]),
     ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
-        let dst_buffer = self.create_upload_buffer_uninit(size, usage)?;
+        let dst_buffer = self.create_upload_buffer_uninit(size, usage, 0)?;
         let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {
             writer(contents);
             None
@@ -735,7 +752,7 @@ impl Allocator {
         data: &[u8],
         usage: vk::BufferUsageFlags,
     ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
-        let dst_buffer = self.create_upload_buffer_uninit(data.len() as u64, usage)?;
+        let dst_buffer = self.create_upload_buffer_uninit(data.len() as u64, usage, 0)?;
         let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {
             contents[..data.len()].copy_from_slice(data);
             None
@@ -767,7 +784,7 @@ impl Allocator {
         usage: vk::BufferUsageFlags,
         writer: impl for<'a> FnOnce(&'a mut [u8]),
     ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
-        let dst_buffer = self.create_upload_buffer_uninit(size, usage)?;
+        let dst_buffer = self.create_upload_buffer_uninit(size, usage, 0)?;
         let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {
             writer(contents);
             None
@@ -797,8 +814,9 @@ impl Allocator {
         &self,
         data: &[u8],
         usage: vk::BufferUsageFlags,
+        alignment: u32
     ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
-        let dst_buffer = self.create_upload_buffer_uninit(data.len() as u64, usage)?;
+        let dst_buffer = self.create_upload_buffer_uninit(data.len() as u64, usage, alignment)?;
         let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {
             contents[..data.len()].copy_from_slice(data);
             None
