@@ -643,11 +643,8 @@ fn build_hitgroup_shaders<'a, S: Deref<Target = ShaderModule>>(
             rchit_stage = stages.len() as u32;
 
             let p_specialization_info = specialization_info.as_ptr_range().end;
-            specialization_info.push(vk::SpecializationInfo {
-                map_entry_count: shader.specialization_info.entries.len() as u32,
-                p_map_entries: shader.specialization_info.entries.as_ptr(),
-                data_size: shader.specialization_info.data.len(),
-                p_data: shader.specialization_info.data.as_ptr() as *const _,
+            specialization_info.push(unsafe {
+                shader.specialization_info.raw_info()
             });
             stages.push(vk::PipelineShaderStageCreateInfo {
                 flags: shader.flags,
@@ -664,11 +661,8 @@ fn build_hitgroup_shaders<'a, S: Deref<Target = ShaderModule>>(
             rint_stage = stages.len() as u32;
 
             let p_specialization_info = specialization_info.as_ptr_range().end;
-            specialization_info.push(vk::SpecializationInfo {
-                map_entry_count: shader.specialization_info.entries.len() as u32,
-                p_map_entries: shader.specialization_info.entries.as_ptr(),
-                data_size: shader.specialization_info.data.len(),
-                p_data: shader.specialization_info.data.as_ptr() as *const _,
+            specialization_info.push(unsafe {
+                shader.specialization_info.raw_info()
             });
             stages.push(vk::PipelineShaderStageCreateInfo {
                 flags: shader.flags,
@@ -684,11 +678,8 @@ fn build_hitgroup_shaders<'a, S: Deref<Target = ShaderModule>>(
             rahit_stage = stages.len() as u32;
 
             let p_specialization_info = specialization_info.as_ptr_range().end;
-            specialization_info.push(vk::SpecializationInfo {
-                map_entry_count: shader.specialization_info.entries.len() as u32,
-                p_map_entries: shader.specialization_info.entries.as_ptr(),
-                data_size: shader.specialization_info.data.len(),
-                p_data: shader.specialization_info.data.as_ptr() as *const _,
+            specialization_info.push(unsafe {
+                shader.specialization_info.raw_info()
             });
             stages.push(vk::PipelineShaderStageCreateInfo {
                 flags: shader.flags,

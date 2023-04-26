@@ -192,9 +192,17 @@ impl SpecializationInfo {
     pub unsafe fn raw_info(&self) -> vk::SpecializationInfo {
         vk::SpecializationInfo {
             map_entry_count: self.entries.len() as u32,
-            p_map_entries: self.entries.as_ptr(),
+            p_map_entries: if self.entries.is_empty() {
+                std::ptr::null()
+            } else {
+                self.entries.as_ptr()
+            },
             data_size: self.data.len(),
-            p_data: self.data.as_ptr() as *const _,
+            p_data: if self.data.is_empty() {
+                std::ptr::null()
+            } else {
+                self.data.as_ptr() as *const _
+            }
         }
     }
     pub const fn new() -> Self {
