@@ -84,6 +84,47 @@ impl<T> RenderRes<T> {
             dispose_marker: Dispose::new(),
         }
     }
+    pub fn merge<O>(self, other: RenderRes<O>) -> RenderRes<(T, O)> {
+        let self_tracking = self.tracking_info.borrow();
+        let other_tracking = other.tracking_info.borrow();
+
+        let queue_family = if self_tracking.queue_family == vk::QUEUE_FAMILY_IGNORED {
+            other_tracking.queue_family
+        } else {
+            self_tracking.queue_family
+        };
+        let prev_queue_family = if other_tracking.queue_family == vk::QUEUE_FAMILY_IGNORED {
+            self_tracking.queue_family
+        } else {
+            other_tracking.queue_family
+        };
+        assert!(self_tracking.queue_family == vk::QUEUE_FAMILY_IGNORED ||
+            other_tracking.queue_family == vk::QUEUE_FAMILY_IGNORED ||
+            self_tracking.queue_family == other_tracking.queue_family);
+        assert!(self_tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED ||
+            other_tracking.prev_queue_family == vk::QUEUE_FAMILY_IGNORED ||
+            self_tracking.prev_queue_family == other_tracking.prev_queue_family);
+        assert_eq!(self_tracking.prev_queue_family, other_tracking.prev_queue_family);
+        assert!(self_tracking.untracked_semaphore.is_none() || other_tracking.untracked_semaphore.is_none());
+        let merged_tracking = ResTrackingInfo {
+            prev_stage_access: self_tracking.prev_stage_access.merge(&other_tracking.prev_stage_access),
+            current_stage_access: self_tracking.current_stage_access.merge(&other_tracking.current_stage_access),
+            last_accessed_stage_index: self_tracking.last_accessed_stage_index.max(other_tracking.last_accessed_stage_index),
+            queue_family,
+            queue_index: self_tracking.queue_index.max(other_tracking.queue_index),
+            prev_queue_family,
+            prev_queue_index: self_tracking.prev_queue_index.max(other_tracking.prev_queue_index),
+            last_accessed_timeline: self_tracking.last_accessed_timeline.max(other_tracking.last_accessed_timeline),
+            untracked_semaphore: self_tracking.untracked_semaphore.or(other_tracking.untracked_semaphore),
+        };
+        self.dispose_marker.dispose();
+        other.dispose_marker.dispose();
+        RenderRes {
+            tracking_info: RefCell::new(merged_tracking),
+            inner: (self.inner, other.inner),
+            dispose_marker: Dispose::new()
+        }
+    }
 }
 
 pub struct RenderImage<T> {
@@ -808,6 +849,14 @@ impl Access {
     }
     pub fn has_write(&self) -> bool {
         !self.write_stages.is_empty()
+    }
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            read_access: self.read_access | other.read_access,
+            write_access: self.write_access | other.write_access,
+            write_stages: self.write_stages | other.write_stages,
+            read_stages: self.read_stages | other.read_stages
+        }
     }
 }
 

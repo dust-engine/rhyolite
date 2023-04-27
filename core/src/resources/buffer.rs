@@ -71,6 +71,46 @@ impl<T: BufferLike + ?Sized> BufferLike for Box<T> {
         (**self).device_address()
     }
 }
+
+pub struct BufferSliceMut<'a, T: BufferLike> {
+    buffer: &'a T,
+    offset: u64,
+    size: u64
+}
+impl<'a, T: BufferLike> BufferLike for BufferSliceMut<'a, T> {
+    fn raw_buffer(&self) -> vk::Buffer {
+        self.buffer.raw_buffer()
+    }
+
+    fn size(&self) -> vk::DeviceSize {
+        self.size
+    }
+
+    fn device_address(&self) -> vk::DeviceAddress {
+        self.buffer.device_address()
+    }
+    fn offset(&self) -> vk::DeviceSize {
+        self.offset
+    }
+}
+
+pub trait BufferExt: BufferLike {
+    fn split_at_mut(&mut self, n: u64) -> (BufferSliceMut<Self>, BufferSliceMut<Self>) where Self: Sized {
+        let a = BufferSliceMut {
+            buffer: self,
+            offset: self.offset(),
+            size: n,
+        };
+        let b = BufferSliceMut {
+            buffer: self,
+            offset: self.offset() + n,
+            size: self.size() - n,
+        };
+        (a, b)
+    }
+}
+impl<T: BufferLike> BufferExt for T {
+}
 // Everyone wants a mutable refence to outer.
 // Some people wants a mutable reference to inner.
 // In the case of Fork. Each fork gets a & of the container. Container must be generic over &mut, and BorrowMut.
@@ -226,6 +266,71 @@ pub fn update_buffer<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>, const
     data: [u8; N],
 ) -> UpdateBufferFuture<T, TRef, N> {
     UpdateBufferFuture { dst, data }
+}
+
+
+#[pin_project]
+pub struct FillBufferFuture<
+    T: BufferLike,
+    TRef: DerefMut<Target = RenderRes<T>>,
+> {
+    pub dst: TRef,
+    data: u32
+}
+impl<
+    T: BufferLike,
+    TRef: DerefMut<Target = RenderRes<T>>,
+    > GPUCommandFuture for FillBufferFuture<T, TRef>
+{
+    type Output = ();
+    type RetainedState = ();
+    type RecycledState = ();
+    #[inline]
+    fn record(
+        self: Pin<&mut Self>,
+        ctx: &mut CommandBufferRecordContext,
+        _recycled_state: &mut Self::RecycledState,
+    ) -> Poll<(Self::Output, Self::RetainedState)> {
+        let this = self.project();
+        let offset = this.dst.inner.offset();
+        let size = this.dst.inner.size();
+        let dst = this.dst.deref_mut().inner_mut();
+        let data: u32 = *this.data;
+        ctx.record(|ctx, command_buffer| unsafe {
+            println!("Fill buffer: offset {} size {} fill with {}", offset, size, data);
+            ctx.device().cmd_fill_buffer(
+                command_buffer,
+                dst.raw_buffer(),
+                offset,
+                size,
+                data,
+            );
+        });
+        Poll::Ready(((), ()))
+    }
+    fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
+        let this = self.project();
+
+        ctx.write(
+            this.dst,
+            vk::PipelineStageFlags2::COPY,
+            vk::AccessFlags2::TRANSFER_WRITE,
+        );
+    }
+}
+
+
+pub fn fill_buffer<
+    T: BufferLike,
+    TRef: DerefMut<Target = RenderRes<T>>,
+>(
+    dst: TRef,
+    data: u32
+) -> FillBufferFuture<T, TRef> {
+    FillBufferFuture {
+        dst,
+        data
+    }
 }
 
 pub struct ResidentBuffer {
