@@ -123,8 +123,10 @@ impl Plugin for RenderPlugin {
             .next()
             .unwrap();
         tracing::info!(
-            "Using physical device {:?}",
-            physical_device.properties().device_name()
+            "Using {:?} {:?} with memory model {:?}",
+            physical_device.properties().inner.properties.device_type,
+            physical_device.properties().device_name(),
+            physical_device.memory_model()
         );
         let queues_router = rhyolite::QueuesRouter::new(&physical_device);
 
