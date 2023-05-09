@@ -241,7 +241,12 @@ pub fn get_surface_preferred_format(
                     0
                 }
             };
-            (color_space_priority, legacy_priority, format_priority, linearity_priority)
+            (
+                color_space_priority,
+                legacy_priority,
+                format_priority,
+                linearity_priority,
+            )
         })
         .cloned()
         .unwrap_or(vk::SurfaceFormatKHR {

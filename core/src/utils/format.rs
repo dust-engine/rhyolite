@@ -397,40 +397,41 @@ impl ColorSpace {
 }
 impl ColorSpaceType {
     pub const fn primaries(&self) -> ColorSpacePrimaries {
-        const D65: (f32, f32) = (0.3127, 0.3290);
+        use glam::Vec2;
+        const D65: Vec2 = Vec2::new(0.3127, 0.3290);
         match self {
             ColorSpaceType::sRGB | ColorSpaceType::ExtendedSrgb | ColorSpaceType::BT709 => {
                 ColorSpacePrimaries {
-                    r: (0.64, 0.33),
-                    g: (0.3, 0.6),
-                    b: (0.15, 0.06),
+                    r: Vec2::new(0.64, 0.33),
+                    g: Vec2::new(0.3, 0.6),
+                    b: Vec2::new(0.15, 0.06),
                     white_point: D65,
                 }
             }
             ColorSpaceType::Display_P3 => ColorSpacePrimaries {
-                r: (0.68, 0.32),
-                g: (0.265, 0.69),
-                b: (0.15, 0.06),
+                r: Vec2::new(0.68, 0.32),
+                g: Vec2::new(0.265, 0.69),
+                b: Vec2::new(0.15, 0.06),
                 white_point: D65,
             },
             ColorSpaceType::DCI_P3 => ColorSpacePrimaries {
-                r: (1.0, 0.0),
-                g: (0.0, 1.0),
-                b: (0.0, 0.0),
-                white_point: (0.3333, 0.3333),
+                r: Vec2::new(1.0, 0.0),
+                g: Vec2::new(0.0, 1.0),
+                b: Vec2::new(0.0, 0.0),
+                white_point: Vec2::new(0.3333, 0.3333),
             },
             ColorSpaceType::HDR10_ST2084
             | ColorSpaceType::DolbyVision
             | ColorSpaceType::HDR10_HLG => ColorSpacePrimaries {
-                r: (0.708, 0.292),
-                g: (0.170, 0.797),
-                b: (0.131, 0.046),
+                r: Vec2::new(0.708, 0.292),
+                g: Vec2::new(0.170, 0.797),
+                b: Vec2::new(0.131, 0.046),
                 white_point: D65,
             },
             ColorSpaceType::AdobeRGB => ColorSpacePrimaries {
-                r: (0.64, 0.33),
-                g: (0.21, 0.71),
-                b: (0.15, 0.06),
+                r: Vec2::new(0.64, 0.33),
+                g: Vec2::new(0.21, 0.71),
+                b: Vec2::new(0.15, 0.06),
                 white_point: D65,
             },
         }
@@ -438,23 +439,37 @@ impl ColorSpaceType {
 }
 
 pub struct ColorSpacePrimaries {
-    pub r: (f32, f32),
-    pub g: (f32, f32),
-    pub b: (f32, f32),
-    pub white_point: (f32, f32),
+    pub r: glam::Vec2,
+    pub g: glam::Vec2,
+    pub b: glam::Vec2,
+    pub white_point: glam::Vec2,
 }
 impl ColorSpacePrimaries {
     pub fn area_size(&self) -> f32 {
-        let v1 = (self.r.0 - self.g.0, self.r.1 - self.g.1);
-        let v2 = (self.g.0 - self.b.0, self.g.1 - self.b.1);
-        let v3 = (self.b.0 - self.r.0, self.b.1 - self.r.1);
-
-        let a = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
-        let b = (v2.0 * v2.0 + v2.1 * v2.1).sqrt();
-        let c = (v3.0 * v3.0 + v3.1 * v3.1).sqrt();
+        let a = (self.r - self.g).length();
+        let b = (self.g - self.b).length();
+        let c = (self.b - self.r).length();
         let s = (a + b + c) / 2.0;
         let area = (s * (s - a) * (s - b) * (s - c)).sqrt();
         area
+    }
+    #[allow(non_snake_case)]
+    pub fn to_xyz(&self) -> glam::Mat3 {
+        use glam::{Mat3, Vec3, Vec3A, Vec4, Vec4Swizzles};
+        let x = Vec4::new(self.r.x, self.g.x, self.b.x, self.white_point.x);
+        let y = Vec4::new(self.r.y, self.g.y, self.b.y, self.white_point.y);
+        let X = x / y;
+        let Z = (1.0 - x - y) / y;
+
+        let mat = Mat3::from_cols(X.xyz(), Vec3::ONE, Z.xyz()).transpose();
+        let white_point = Vec3A::new(X.w, 1.0, Z.w);
+
+        let S = mat.inverse() * white_point;
+        mat * Mat3::from_diagonal(S.into())
+    }
+
+    pub fn to_color_space(&self, other_color_space: Self) -> glam::Mat3 {
+        other_color_space.to_xyz().inverse() * self.to_xyz()
     }
 }
 
