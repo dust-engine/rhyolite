@@ -202,7 +202,7 @@ impl SpecializationInfo {
                 std::ptr::null()
             } else {
                 self.data.as_ptr() as *const _
-            }
+            },
         }
     }
     pub const fn new() -> Self {

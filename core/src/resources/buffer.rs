@@ -75,7 +75,7 @@ impl<T: BufferLike + ?Sized> BufferLike for Box<T> {
 pub struct BufferSliceMut<'a, T: BufferLike> {
     buffer: &'a T,
     offset: u64,
-    size: u64
+    size: u64,
 }
 impl<'a, T: BufferLike> BufferLike for BufferSliceMut<'a, T> {
     fn raw_buffer(&self) -> vk::Buffer {
@@ -95,7 +95,10 @@ impl<'a, T: BufferLike> BufferLike for BufferSliceMut<'a, T> {
 }
 
 pub trait BufferExt: BufferLike {
-    fn split_at_mut(&mut self, n: u64) -> (BufferSliceMut<Self>, BufferSliceMut<Self>) where Self: Sized {
+    fn split_at_mut(&mut self, n: u64) -> (BufferSliceMut<Self>, BufferSliceMut<Self>)
+    where
+        Self: Sized,
+    {
         let a = BufferSliceMut {
             buffer: self,
             offset: self.offset(),
@@ -109,8 +112,7 @@ pub trait BufferExt: BufferLike {
         (a, b)
     }
 }
-impl<T: BufferLike> BufferExt for T {
-}
+impl<T: BufferLike> BufferExt for T {}
 // Everyone wants a mutable refence to outer.
 // Some people wants a mutable reference to inner.
 // In the case of Fork. Each fork gets a & of the container. Container must be generic over &mut, and BorrowMut.
@@ -268,19 +270,13 @@ pub fn update_buffer<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>, const
     UpdateBufferFuture { dst, data }
 }
 
-
 #[pin_project]
-pub struct FillBufferFuture<
-    T: BufferLike,
-    TRef: DerefMut<Target = RenderRes<T>>,
-> {
+pub struct FillBufferFuture<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>> {
     pub dst: TRef,
-    data: u32
+    data: u32,
 }
-impl<
-    T: BufferLike,
-    TRef: DerefMut<Target = RenderRes<T>>,
-    > GPUCommandFuture for FillBufferFuture<T, TRef>
+impl<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>> GPUCommandFuture
+    for FillBufferFuture<T, TRef>
 {
     type Output = ();
     type RetainedState = ();
@@ -297,14 +293,12 @@ impl<
         let dst = this.dst.deref_mut().inner_mut();
         let data: u32 = *this.data;
         ctx.record(|ctx, command_buffer| unsafe {
-            println!("Fill buffer: offset {} size {} fill with {}", offset, size, data);
-            ctx.device().cmd_fill_buffer(
-                command_buffer,
-                dst.raw_buffer(),
-                offset,
-                size,
-                data,
+            println!(
+                "Fill buffer: offset {} size {} fill with {}",
+                offset, size, data
             );
+            ctx.device()
+                .cmd_fill_buffer(command_buffer, dst.raw_buffer(), offset, size, data);
         });
         Poll::Ready(((), ()))
     }
@@ -319,18 +313,11 @@ impl<
     }
 }
 
-
-pub fn fill_buffer<
-    T: BufferLike,
-    TRef: DerefMut<Target = RenderRes<T>>,
->(
+pub fn fill_buffer<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>>(
     dst: TRef,
-    data: u32
+    data: u32,
 ) -> FillBufferFuture<T, TRef> {
-    FillBufferFuture {
-        dst,
-        data
-    }
+    FillBufferFuture { dst, data }
 }
 
 pub struct ResidentBuffer {
@@ -441,9 +428,12 @@ impl Allocator {
         &self,
         buffer_info: &vk::BufferCreateInfo,
         create_info: &vk_mem::AllocationCreateInfo,
-        alignment: u32
+        alignment: u32,
     ) -> VkResult<ResidentBuffer> {
-        let staging_buffer = unsafe { self.inner().create_buffer_with_alignment(buffer_info, create_info, alignment as u64)? };
+        let staging_buffer = unsafe {
+            self.inner()
+                .create_buffer_with_alignment(buffer_info, create_info, alignment as u64)?
+        };
         Ok(ResidentBuffer {
             allocator: self.clone(),
             buffer: staging_buffer.0,
@@ -682,7 +672,7 @@ impl Allocator {
         &self,
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
-        alignment: u32
+        alignment: u32,
     ) -> VkResult<ResidentBuffer> {
         let mut create_info = vk::BufferCreateInfo {
             size,
@@ -706,7 +696,7 @@ impl Allocator {
                         user_data: 0,
                         priority: 0.0,
                     },
-                    alignment
+                    alignment,
                 )?;
                 buf
             }
@@ -719,7 +709,7 @@ impl Allocator {
                         usage: vk_mem::MemoryUsage::AutoPreferDevice,
                         ..Default::default()
                     },
-                    alignment
+                    alignment,
                 )?;
                 dst_buffer
             }
@@ -919,7 +909,7 @@ impl Allocator {
         &self,
         data: &[u8],
         usage: vk::BufferUsageFlags,
-        alignment: u32
+        alignment: u32,
     ) -> VkResult<impl GPUCommandFuture<Output = RenderRes<ResidentBuffer>>> {
         let dst_buffer = self.create_upload_buffer_uninit(data.len() as u64, usage, alignment)?;
         let staging_buffer = if let Some(contents) = dst_buffer.contents_mut() {

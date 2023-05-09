@@ -34,6 +34,12 @@ pub struct Surface {
 }
 
 impl Surface {
+    pub fn raw(&self) -> vk::SurfaceKHR {
+        self.surface
+    }
+    pub fn instance(&self) -> &Arc<Instance> {
+        &self.instance
+    }
     pub fn create(
         instance: Arc<Instance>,
         window_handle: &impl raw_window_handle::HasRawWindowHandle,

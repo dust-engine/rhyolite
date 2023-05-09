@@ -1,4 +1,4 @@
-use crate::{QueueInfo, Queues, Version};
+use crate::{QueueInfo, Queues, Surface, Version};
 
 use super::{Device, Instance};
 use ash::{prelude::VkResult, vk};
@@ -121,6 +121,15 @@ impl PhysicalDevice {
     }
     pub fn memory_heaps(&self) -> &[vk::MemoryHeap] {
         &self.memory_properties.memory_heaps[0..self.memory_properties.memory_heap_count as usize]
+    }
+    pub fn get_surface_formats(&self, surface: &Surface) -> VkResult<Vec<vk::SurfaceFormatKHR>> {
+        assert!(Arc::ptr_eq(surface.instance(), self.instance()));
+        unsafe {
+            surface
+                .instance()
+                .surface_loader()
+                .get_physical_device_surface_formats(self.raw(), surface.raw())
+        }
     }
     pub fn image_format_properties(
         &self,

@@ -125,13 +125,13 @@ impl ManagedBufferUnsized {
                 allocator,
                 buffer_usage_flags,
                 layout,
-                base_alignment
+                base_alignment,
             )),
             Discrete | Bar => Self::StagingBuffer(ManagedBufferStrategyStagingUnsized::new(
                 allocator,
                 buffer_usage_flags,
                 layout,
-                base_alignment
+                base_alignment,
             )),
         }
     }
@@ -309,7 +309,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
             objects_buffer: Vec::new(),
             changeset: Default::default(),
             num_items: 0,
-            base_alignment
+            base_alignment,
         }
     }
     pub fn len(&self) -> usize {
@@ -373,7 +373,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
                 .create_write_buffer_uninit_aligned(
                     self.objects_buffer.capacity() as u64,
                     self.buffer_usage_flags,
-                    self.base_alignment as u64
+                    self.base_alignment as u64,
                 )
                 .unwrap();
             create_buffer.contents_mut().unwrap()[0..self.objects_buffer.len()]
@@ -566,7 +566,7 @@ impl ManagedBufferStrategyStagingUnsized {
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
         layout: Layout,
-        base_alignment: usize
+        base_alignment: usize,
     ) -> Self {
         Self {
             layout,
@@ -710,7 +710,7 @@ impl ManagedBufferStrategyStagingUnsized {
                     .create_device_buffer_uninit_aligned(
                         expected_whole_buffer_size,
                         self.buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST,
-                        self.base_alignment as u64
+                        self.base_alignment as u64,
                     )
                     .unwrap()
             },

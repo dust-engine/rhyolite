@@ -643,9 +643,7 @@ fn build_hitgroup_shaders<'a, S: Deref<Target = ShaderModule>>(
             rchit_stage = stages.len() as u32;
 
             let p_specialization_info = specialization_info.as_ptr_range().end;
-            specialization_info.push(unsafe {
-                shader.specialization_info.raw_info()
-            });
+            specialization_info.push(unsafe { shader.specialization_info.raw_info() });
             stages.push(vk::PipelineShaderStageCreateInfo {
                 flags: shader.flags,
                 stage: vk::ShaderStageFlags::CLOSEST_HIT_KHR,
@@ -661,9 +659,7 @@ fn build_hitgroup_shaders<'a, S: Deref<Target = ShaderModule>>(
             rint_stage = stages.len() as u32;
 
             let p_specialization_info = specialization_info.as_ptr_range().end;
-            specialization_info.push(unsafe {
-                shader.specialization_info.raw_info()
-            });
+            specialization_info.push(unsafe { shader.specialization_info.raw_info() });
             stages.push(vk::PipelineShaderStageCreateInfo {
                 flags: shader.flags,
                 stage: vk::ShaderStageFlags::INTERSECTION_KHR,
@@ -678,9 +674,7 @@ fn build_hitgroup_shaders<'a, S: Deref<Target = ShaderModule>>(
             rahit_stage = stages.len() as u32;
 
             let p_specialization_info = specialization_info.as_ptr_range().end;
-            specialization_info.push(unsafe {
-                shader.specialization_info.raw_info()
-            });
+            specialization_info.push(unsafe { shader.specialization_info.raw_info() });
             stages.push(vk::PipelineShaderStageCreateInfo {
                 flags: shader.flags,
                 stage: vk::ShaderStageFlags::ANY_HIT_KHR,

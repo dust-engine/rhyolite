@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
 use bevy_window::{RawHandleWrapper, Window};
-use rhyolite::{ash::vk, AcquireFuture, HasDevice, PhysicalDevice};
+use rhyolite::{
+    ash::{prelude::VkResult, vk},
+    utils::format::{ColorSpace, ColorSpacePrimaries, ColorSpaceType},
+    AcquireFuture, HasDevice, PhysicalDevice, Surface,
+};
 
 use crate::{queue::Queues, Device, Frame, SharingMode};
 
@@ -22,11 +26,14 @@ impl Swapchain {
     ) -> rhyolite::SwapchainCreateInfo<'a> {
         let surface_capabilities = surface.get_capabilities(pdevice).unwrap();
         let supported_present_modes = surface.get_present_modes(pdevice).unwrap();
+        let image_format = config.image_format.unwrap_or_else(|| {
+            get_surface_preferred_format(surface, pdevice, config.required_feature_flags)
+        });
         rhyolite::SwapchainCreateInfo {
             flags: config.flags,
             min_image_count: config.min_image_count,
-            image_format: config.image_format,
-            image_color_space: config.image_color_space,
+            image_format: image_format.format,
+            image_color_space: image_format.color_space,
             image_extent: vk::Extent2D {
                 width: window.resolution.physical_width(),
                 height: window.resolution.physical_height(),
@@ -150,10 +157,11 @@ pub(super) fn extract_windows(
 pub struct SwapchainConfigExt {
     pub flags: vk::SwapchainCreateFlagsKHR,
     pub min_image_count: u32,
-    pub image_format: vk::Format,
-    pub image_color_space: vk::ColorSpaceKHR,
+    /// If set to None, the implementation will select the best available color space.
+    pub image_format: Option<vk::SurfaceFormatKHR>,
     pub image_array_layers: u32,
     pub image_usage: vk::ImageUsageFlags,
+    pub required_feature_flags: vk::FormatFeatureFlags,
     pub sharing_mode: SharingMode,
     pub pre_transform: vk::SurfaceTransformFlagsKHR,
     pub clipped: bool,
@@ -164,15 +172,79 @@ impl Default for SwapchainConfigExt {
         Self {
             flags: vk::SwapchainCreateFlagsKHR::empty(),
             min_image_count: 3,
-            image_format: vk::Format::B8G8R8A8_SRGB,
-            image_color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            image_format: None,
             image_array_layers: 1,
             image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
             sharing_mode: SharingMode::Exclusive,
             pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
             clipped: false,
+            required_feature_flags: vk::FormatFeatureFlags::COLOR_ATTACHMENT,
         }
     }
+}
+
+pub fn get_surface_preferred_format(
+    surface: &Surface,
+    physical_device: &PhysicalDevice,
+    required_feature_flags: vk::FormatFeatureFlags,
+) -> vk::SurfaceFormatKHR {
+    let supported_formats = physical_device.get_surface_formats(surface).unwrap();
+
+    // Select color spaces based on the following criteria:
+    // Prefer larger swapchain sizes over small ones
+    // If small swapchain format, prefer non-linear. Otherwise, prefer linear.
+    supported_formats
+        .iter()
+        .filter(|&surface_format| {
+            let format_properties = unsafe {
+                physical_device
+                    .instance()
+                    .get_physical_device_format_properties(
+                        physical_device.raw(),
+                        surface_format.format,
+                    )
+            };
+            format_properties
+                .optimal_tiling_features
+                .contains(required_feature_flags)
+                | format_properties
+                    .linear_tiling_features
+                    .contains(required_feature_flags)
+        })
+        .max_by_key(|&surface_format| {
+            let format: rhyolite::utils::format::Format = surface_format.format.into();
+            let format_priority = format.r + format.g + format.b;
+
+            let color_space: ColorSpace = surface_format.color_space.into();
+            let color_space_priority = match color_space.ty {
+                ColorSpaceType::ExtendedSrgb => {
+                    ColorSpaceType::HDR10_ST2084.primaries().area_size()
+                }
+                _ => color_space.primaries().area_size(),
+            } * 4096.0;
+            let color_space_priority = color_space_priority as u32;
+            let linearity_priority: u8 = if format_priority < 30 {
+                // < 8 bit color. Prefer non-linear color space
+                if color_space.linear {
+                    0
+                } else {
+                    1
+                }
+            } else {
+                // >= 8 bit color, for example 10 bit color and above. Prefer linear color space
+                if color_space.linear {
+                    1
+                } else {
+                    0
+                }
+            };
+            (color_space_priority, format_priority, linearity_priority)
+        })
+        .cloned()
+        .unwrap_or(vk::SurfaceFormatKHR {
+            format: vk::Format::B8G8R8A8_SRGB,
+            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        })
 }
 
 #[derive(Default)]

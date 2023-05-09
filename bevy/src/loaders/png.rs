@@ -3,6 +3,7 @@ use std::fmt::{Debug, Display};
 use crate::{AsyncQueues, QueuesRouter};
 use bevy_asset::{AssetLoader, LoadedAsset};
 use bevy_ecs::world::{FromWorld, World};
+use rhyolite::ensure_image_layout;
 use rhyolite::{
     ash::vk,
     copy_buffer_to_image,
@@ -10,7 +11,6 @@ use rhyolite::{
     macros::commands,
     ImageLike, ImageRequest, QueueRef,
 };
-use rhyolite::ensure_image_layout;
 
 pub struct PngLoader {
     allocator: crate::Allocator,

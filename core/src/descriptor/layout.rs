@@ -11,7 +11,7 @@ pub struct DescriptorSetLayoutBindingInfo {
     pub immutable_samplers: Vec<Arc<Sampler>>,
 }
 impl std::hash::Hash for DescriptorSetLayoutBindingInfo {
-    fn hash<H: ~const std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.binding.hash(state);
         self.descriptor_type.hash(state);
         self.descriptor_count.hash(state);
