@@ -190,9 +190,6 @@ pub fn get_surface_preferred_format(
 ) -> vk::SurfaceFormatKHR {
     let supported_formats = physical_device.get_surface_formats(surface).unwrap();
 
-    // Select color spaces based on the following criteria:
-    // Prefer larger swapchain sizes over small ones
-    // If small swapchain format, prefer non-linear. Otherwise, prefer linear.
     supported_formats
         .iter()
         .filter(|&surface_format| {
@@ -212,12 +209,18 @@ pub fn get_surface_preferred_format(
                     .contains(required_feature_flags)
         })
         .max_by_key(|&surface_format| {
+            // Select color spaces based on the following criteria:
+            // Prefer larger color spaces. For extended srgb, consider it the same as Rec2020 but after all other Rec2020 color spaces.
+            // Prefer formats with larger color depth.
+            // If small swapchain format, prefer non-linear. Otherwise, prefer linear.
             let format: rhyolite::utils::format::Format = surface_format.format.into();
             let format_priority = format.r + format.g + format.b;
 
             let color_space: ColorSpace = surface_format.color_space.into();
+            let mut legacy_priority = 1;
             let color_space_priority = match color_space.ty {
                 ColorSpaceType::ExtendedSrgb => {
+                    legacy_priority = 0;
                     ColorSpaceType::HDR10_ST2084.primaries().area_size()
                 }
                 _ => color_space.primaries().area_size(),
@@ -238,7 +241,7 @@ pub fn get_surface_preferred_format(
                     0
                 }
             };
-            (color_space_priority, format_priority, linearity_priority)
+            (color_space_priority, legacy_priority, format_priority, linearity_priority)
         })
         .cloned()
         .unwrap_or(vk::SurfaceFormatKHR {

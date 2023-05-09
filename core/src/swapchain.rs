@@ -141,6 +141,7 @@ impl Swapchain {
         surface: Arc<Surface>,
         info: SwapchainCreateInfo,
     ) -> VkResult<Self> {
+        tracing::info!(format = ?info.image_format, color_space = ?info.image_color_space, usage = ?info.image_usage, "Creating swapchain");
         unsafe {
             let mut create_info = vk::SwapchainCreateInfoKHR {
                 flags: info.flags,

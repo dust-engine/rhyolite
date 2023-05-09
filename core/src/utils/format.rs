@@ -445,9 +445,13 @@ pub struct ColorSpacePrimaries {
 }
 impl ColorSpacePrimaries {
     pub fn area_size(&self) -> f32 {
-        let a = (self.r.0 * self.r.0 + self.r.1 * self.r.1).sqrt();
-        let b = (self.g.0 * self.g.0 + self.g.1 * self.g.1).sqrt();
-        let c = (self.b.0 * self.b.0 + self.b.1 * self.b.1).sqrt();
+        let v1 = (self.r.0 - self.g.0, self.r.1 - self.g.1);
+        let v2 = (self.g.0 - self.b.0, self.g.1 - self.b.1);
+        let v3 = (self.b.0 - self.r.0, self.b.1 - self.r.1);
+
+        let a = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
+        let b = (v2.0 * v2.0 + v2.1 * v2.1).sqrt();
+        let c = (v3.0 * v3.0 + v3.1 * v3.1).sqrt();
         let s = (a + b + c) / 2.0;
         let area = (s * (s - a) * (s - b) * (s - c)).sqrt();
         area
