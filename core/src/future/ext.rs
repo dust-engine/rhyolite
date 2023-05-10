@@ -347,7 +347,7 @@ where
         ctx: &mut CommandBufferRecordContext,
         recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
-        let mut this = &mut *self.project().inner.borrow_mut();
+        let this = &mut *self.project().inner.borrow_mut();
         if !this.ready.iter().all(|a| *a) {
             // no op.
             return Poll::Pending;

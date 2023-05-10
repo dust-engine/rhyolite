@@ -183,6 +183,11 @@ pub struct Queues {
 
 /// Safety: async_submission_receiver should never be used when we only have &self
 unsafe impl Sync for Queues {}
+impl HasDevice for Queues {
+    fn device(&self) -> &Arc<rhyolite::Device> {
+        self.queues.device()
+    }
+}
 
 impl Queues {
     pub fn new(queues: rhyolite::Queues, max_frame_in_flight: usize) -> Self {

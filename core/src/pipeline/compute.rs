@@ -52,12 +52,19 @@ impl ComputePipeline {
         shader: SpecializedReflectedShader<'a>,
         info: ComputePipelineCreateInfo<'a>,
     ) -> VkResult<Self> {
-        let device = shader.device().clone();
         let layout = PipelineLayout::for_layout(
-            device.clone(),
+            shader.device().clone(),
             shader.entry_point().clone(),
             info.pipeline_layout_create_flags,
         )?;
+        Self::create_with_reflected_shader_and_layout(shader, info, Arc::new(layout))
+    }
+    pub fn create_with_reflected_shader_and_layout<'a>(
+        shader: SpecializedReflectedShader<'a>,
+        info: ComputePipelineCreateInfo<'a>,
+        layout: Arc<PipelineLayout>,
+    ) -> VkResult<Self> {
+        let device = shader.device().clone();
         let pipeline = unsafe {
             let mut pipeline = vk::Pipeline::null();
             let specialization_info = shader.specialization_info.raw_info();
@@ -87,9 +94,6 @@ impl ComputePipeline {
             )
             .result_with_success(pipeline)
         }?;
-        Ok(Self {
-            layout: Arc::new(layout),
-            pipeline,
-        })
+        Ok(Self { layout, pipeline })
     }
 }

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use bevy_ecs::prelude::*;
 use bevy_window::{RawHandleWrapper, Window};
 use rhyolite::{
-    ash::{prelude::VkResult, vk},
-    utils::format::{ColorSpace, ColorSpacePrimaries, ColorSpaceType},
+    ash::vk,
+    utils::format::{ColorSpace, ColorSpaceType},
     AcquireFuture, HasDevice, PhysicalDevice, Surface,
 };
 
@@ -27,7 +27,14 @@ impl Swapchain {
         let surface_capabilities = surface.get_capabilities(pdevice).unwrap();
         let supported_present_modes = surface.get_present_modes(pdevice).unwrap();
         let image_format = config.image_format.unwrap_or_else(|| {
-            get_surface_preferred_format(surface, pdevice, config.required_feature_flags)
+            if config.hdr {
+                get_surface_preferred_format(surface, pdevice, config.required_feature_flags)
+            } else {
+                vk::SurfaceFormatKHR {
+                    format: vk::Format::B8G8R8A8_SRGB,
+                    color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                }
+            }
         });
         rhyolite::SwapchainCreateInfo {
             flags: config.flags,
@@ -165,6 +172,12 @@ pub struct SwapchainConfigExt {
     pub sharing_mode: SharingMode,
     pub pre_transform: vk::SurfaceTransformFlagsKHR,
     pub clipped: bool,
+
+    /// If set to true and the `image_format` property weren't set,
+    /// the implementation will select the best available HDR color space.
+    /// On Windows 11, it is recommended to turn this off when the application was started in Windowed mode
+    /// and the system HDR toggle was turned off. Otherwise, the screen may flash when the application is started.
+    pub hdr: bool,
 }
 
 impl Default for SwapchainConfigExt {
@@ -179,6 +192,7 @@ impl Default for SwapchainConfigExt {
             pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
             clipped: false,
             required_feature_flags: vk::FormatFeatureFlags::COLOR_ATTACHMENT,
+            hdr: true,
         }
     }
 }

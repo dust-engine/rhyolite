@@ -213,7 +213,10 @@ impl SpecializationInfo {
     }
     pub fn push<T: Copy + 'static>(&mut self, constant_id: u32, item: T) {
         if std::any::TypeId::of::<T>() == std::any::TypeId::of::<bool>() {
-            panic!("Use push_bool")
+            unsafe {
+                let value: bool = std::mem::transmute_copy(&item);
+                self.push_bool(constant_id, value);
+            }
         }
         let size = std::mem::size_of::<T>();
         self.entries.push(vk::SpecializationMapEntry {
@@ -228,7 +231,7 @@ impl SpecializationInfo {
             self.data.set_len(self.data.len() + size);
         }
     }
-    pub fn push_bool(&mut self, constant_id: u32, item: bool) {
+    fn push_bool(&mut self, constant_id: u32, item: bool) {
         let size = std::mem::size_of::<vk::Bool32>();
         self.entries.push(vk::SpecializationMapEntry {
             constant_id,
@@ -276,6 +279,10 @@ impl<'a> SpecializedReflectedShader<'a> {
             .entry_points
             .get(self.entry_point.to_str().unwrap())
             .unwrap()
+    }
+    pub fn with_const<T: Copy + 'static>(mut self, constant_id: u32, item: T) -> Self {
+        self.specialization_info.push(constant_id, item);
+        self
     }
 }
 impl<'a> HasDevice for SpecializedReflectedShader<'a> {

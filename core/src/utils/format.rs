@@ -297,12 +297,14 @@ impl From<vk::Format> for Format {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ColorSpace {
     pub ty: ColorSpaceType,
     pub linear: bool,
 }
 
 #[allow(non_camel_case_types)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ColorSpaceType {
     sRGB,
     Display_P3,
@@ -348,15 +350,15 @@ impl From<vk::ColorSpaceKHR> for ColorSpace {
             },
             vk::ColorSpaceKHR::HDR10_ST2084_EXT => ColorSpace {
                 ty: ColorSpaceType::HDR10_ST2084,
-                linear: true,
+                linear: false,
             },
             vk::ColorSpaceKHR::DOLBYVISION_EXT => ColorSpace {
                 ty: ColorSpaceType::DolbyVision,
-                linear: true,
+                linear: false,
             },
             vk::ColorSpaceKHR::HDR10_HLG_EXT => ColorSpace {
                 ty: ColorSpaceType::HDR10_HLG,
-                linear: true,
+                linear: false,
             },
             vk::ColorSpaceKHR::ADOBERGB_LINEAR_EXT => ColorSpace {
                 ty: ColorSpaceType::AdobeRGB,
@@ -475,27 +477,12 @@ impl ColorSpacePrimaries {
 
 #[allow(non_camel_case_types)]
 pub enum ColorSpaceTransferFunction {
-    LINEAR,
-    DCI_P3,
-    Display_P3,
-    ITU,
-    sRGB,
-    ST2084_PQ,
-    HLG,
-    AdobeRGB,
-}
-
-impl ColorSpaceTransferFunction {
-    pub const fn to_str(&self) -> &'static str {
-        match self {
-            ColorSpaceTransferFunction::LINEAR => "OETF_LINEAR",
-            ColorSpaceTransferFunction::DCI_P3 => "OETF_DCI_P3",
-            ColorSpaceTransferFunction::Display_P3 => "OETF_DISPLAY_P3",
-            ColorSpaceTransferFunction::ITU => "OETF_ITU",
-            ColorSpaceTransferFunction::sRGB => "OETF_SRGB",
-            ColorSpaceTransferFunction::ST2084_PQ => "OETF_ST2084_PQ",
-            ColorSpaceTransferFunction::HLG => "OETF_HLG",
-            ColorSpaceTransferFunction::AdobeRGB => "OETF_ADOBE_RGB",
-        }
-    }
+    LINEAR = 0,
+    sRGB = 1,
+    DCI_P3 = 2,
+    Display_P3 = 3,
+    ITU = 4,
+    ST2084_PQ = 5,
+    HLG = 6,
+    AdobeRGB = 7,
 }

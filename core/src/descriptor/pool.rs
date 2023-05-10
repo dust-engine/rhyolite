@@ -14,6 +14,11 @@ impl Drop for DescriptorPool {
         }
     }
 }
+impl HasDevice for DescriptorPool {
+    fn device(&self) -> &Arc<Device> {
+        &self.device
+    }
+}
 
 impl DescriptorPool {
     pub fn allocate_for_pipeline_layout(

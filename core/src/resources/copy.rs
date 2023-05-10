@@ -142,7 +142,7 @@ impl<T: ImageLike, TRef: DerefMut<Target = RenderImage<T>>> GPUCommandFuture
     #[inline]
     fn record(
         self: Pin<&mut Self>,
-        ctx: &mut CommandBufferRecordContext,
+        _ctx: &mut CommandBufferRecordContext,
         _recycled_state: &mut Self::RecycledState,
     ) -> Poll<(Self::Output, Self::RetainedState)> {
         Poll::Ready(((), ()))

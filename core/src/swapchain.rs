@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::{ops::Deref, pin::Pin};
 
 use crate::future::{Access, RenderImage, StageContextImage};
+use crate::utils::format::ColorSpace;
 use crate::{
     Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueFuture, QueueFuturePoll,
     QueueMask, QueueRef, QueueSubmissionContextExport, QueueSubmissionContextSemaphoreWait,
@@ -41,6 +42,7 @@ pub struct SwapchainInner {
     generation: u64,
 
     surface: Arc<Surface>,
+    color_space: ColorSpace,
     extent: vk::Extent2D,
     layer_count: u32,
 }
@@ -181,6 +183,7 @@ impl Swapchain {
                 extent: info.image_extent,
                 layer_count: info.image_array_layers,
                 format: info.image_format,
+                color_space: info.image_color_space.into(),
             };
             Ok(Self {
                 inner: Arc::new(inner),
@@ -232,6 +235,7 @@ impl Swapchain {
                 extent: info.image_extent,
                 layer_count: info.image_array_layers,
                 format: info.image_format,
+                color_space: info.image_color_space.into(),
             };
             self.inner = Arc::new(inner);
         }
@@ -261,6 +265,7 @@ impl Swapchain {
             extent: self.inner.extent,
             layer_count: self.inner.layer_count,
             presented: false,
+            color_space: self.inner.color_space.clone(),
         };
         AcquireFuture {
             image: Some(swapchain_image),
@@ -280,7 +285,7 @@ pub struct SwapchainImage {
     generation: u64,
     extent: vk::Extent2D,
     layer_count: u32,
-
+    color_space: ColorSpace,
     presented: bool,
 }
 impl Drop for SwapchainImage {
@@ -288,6 +293,11 @@ impl Drop for SwapchainImage {
         if !self.presented {
             panic!("SwapchainImage must be returned to the OS by calling Present!")
         }
+    }
+}
+impl SwapchainImage {
+    pub fn color_space(&self) -> &ColorSpace {
+        &self.color_space
     }
 }
 impl HasDevice for SwapchainImage {

@@ -16,7 +16,6 @@ use bevy_app::prelude::*;
 use bevy_asset::AddAsset;
 use bevy_ecs::prelude::*;
 
-use bevy_window::Window;
 use rhyolite::{
     ash::{self, vk},
     cstr, Instance, Version,
