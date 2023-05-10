@@ -149,10 +149,11 @@ impl<T: ImageLike, TRef: DerefMut<Target = RenderImage<T>>> GPUCommandFuture
     }
     fn context(self: Pin<&mut Self>, ctx: &mut StageContext) {
         let this = self.project();
+        // Guard against all future reads.
         ctx.read_image(
             this.dst,
-            vk::PipelineStageFlags2::empty(),
-            vk::AccessFlags2::empty(),
+            vk::PipelineStageFlags2::ALL_COMMANDS,
+            vk::AccessFlags2::MEMORY_READ,
             *this.target_layout,
         );
     }
