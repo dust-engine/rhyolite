@@ -4,7 +4,7 @@ use bevy_ecs::prelude::*;
 use bevy_window::{RawHandleWrapper, Window};
 use rhyolite::{
     ash::vk,
-    utils::format::{ColorSpace, ColorSpaceType},
+    utils::format::{ColorSpace, ColorSpaceType, FormatType},
     AcquireFuture, HasDevice, PhysicalDevice, Surface,
 };
 
@@ -28,7 +28,7 @@ impl Swapchain {
         let supported_present_modes = surface.get_present_modes(pdevice).unwrap();
         let image_format = config.image_format.unwrap_or_else(|| {
             if config.hdr {
-                get_surface_preferred_format(surface, pdevice, config.required_feature_flags)
+                get_surface_preferred_format(surface, pdevice, config.required_feature_flags, config.srgb_format)
             } else {
                 vk::SurfaceFormatKHR {
                     format: vk::Format::B8G8R8A8_SRGB,
@@ -178,6 +178,16 @@ pub struct SwapchainConfigExt {
     /// On Windows 11, it is recommended to turn this off when the application was started in Windowed mode
     /// and the system HDR toggle was turned off. Otherwise, the screen may flash when the application is started.
     pub hdr: bool,
+
+    /// If set to true, SDR swapchains will be created with a sRGB format.
+    /// If set to false, SDR swapchains will be created with a UNORM format.
+    ///
+    /// Set this to false if the data will be written to the swapchain image as a storage image,
+    /// and the tonemapper will apply gamma correction manually. This is the default.
+    ///
+    /// Set this to true if the swapchain will be directly used as a render target. In this case,
+    /// the sRGB gamma correction will be applied automatically.
+    pub srgb_format: bool,
 }
 
 impl Default for SwapchainConfigExt {
@@ -193,6 +203,7 @@ impl Default for SwapchainConfigExt {
             clipped: false,
             required_feature_flags: vk::FormatFeatureFlags::COLOR_ATTACHMENT,
             hdr: true,
+            srgb_format: false,
         }
     }
 }
@@ -201,6 +212,7 @@ pub fn get_surface_preferred_format(
     surface: &Surface,
     physical_device: &PhysicalDevice,
     required_feature_flags: vk::FormatFeatureFlags,
+    use_srgb_format: bool,
 ) -> vk::SurfaceFormatKHR {
     let supported_formats = physical_device.get_surface_formats(surface).unwrap();
 
@@ -231,10 +243,8 @@ pub fn get_surface_preferred_format(
             let format_priority = format.r + format.g + format.b;
 
             let color_space: ColorSpace = surface_format.color_space.into();
-            let mut legacy_priority = 1;
             let color_space_priority = match color_space.ty {
                 ColorSpaceType::ExtendedSrgb => {
-                    legacy_priority = 0;
                     ColorSpaceType::HDR10_ST2084.primaries().area_size()
                 }
                 _ => color_space.primaries().area_size(),
@@ -255,11 +265,17 @@ pub fn get_surface_preferred_format(
                     0
                 }
             };
+
+            let srgb_priority = if (format.ty == FormatType::sRGB) ^ use_srgb_format {
+                0_u8
+            } else {
+                1_u8
+            };
             (
                 color_space_priority,
-                legacy_priority,
                 format_priority,
                 linearity_priority,
+                srgb_priority
             )
         })
         .cloned()

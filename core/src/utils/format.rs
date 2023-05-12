@@ -1,6 +1,7 @@
 use ash::vk;
 
 #[allow(non_camel_case_types)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FormatType {
     /// Value will be converted to a float in the range of [0, 1]
     UNorm,
@@ -311,6 +312,7 @@ pub enum ColorSpaceType {
     DCI_P3,
     ExtendedSrgb,
     BT709,
+    BT2020,
     HDR10_ST2084,
     DolbyVision,
     HDR10_HLG,
@@ -347,6 +349,10 @@ impl From<vk::ColorSpaceKHR> for ColorSpace {
             vk::ColorSpaceKHR::BT709_NONLINEAR_EXT => ColorSpace {
                 ty: ColorSpaceType::BT709,
                 linear: false,
+            },
+            vk::ColorSpaceKHR::BT2020_LINEAR_EXT => ColorSpace {
+                ty: ColorSpaceType::BT2020,
+                linear: true
             },
             vk::ColorSpaceKHR::HDR10_ST2084_EXT => ColorSpace {
                 ty: ColorSpaceType::HDR10_ST2084,
@@ -391,6 +397,7 @@ impl ColorSpace {
             ColorSpaceType::DolbyVision => ColorSpaceTransferFunction::ST2084_PQ,
             ColorSpaceType::HDR10_HLG => ColorSpaceTransferFunction::HLG,
             ColorSpaceType::AdobeRGB => ColorSpaceTransferFunction::AdobeRGB,
+            ColorSpaceType::BT2020 => ColorSpaceTransferFunction::LINEAR,
         }
     }
     pub const fn primaries(&self) -> ColorSpacePrimaries {
@@ -424,7 +431,8 @@ impl ColorSpaceType {
             },
             ColorSpaceType::HDR10_ST2084
             | ColorSpaceType::DolbyVision
-            | ColorSpaceType::HDR10_HLG => ColorSpacePrimaries {
+            | ColorSpaceType::HDR10_HLG
+            | ColorSpaceType::BT2020 => ColorSpacePrimaries {
                 r: Vec2::new(0.708, 0.292),
                 g: Vec2::new(0.170, 0.797),
                 b: Vec2::new(0.131, 0.046),
@@ -440,6 +448,7 @@ impl ColorSpaceType {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct ColorSpacePrimaries {
     pub r: glam::Vec2,
     pub g: glam::Vec2,
@@ -470,7 +479,10 @@ impl ColorSpacePrimaries {
         mat * Mat3::from_diagonal(S.into())
     }
 
-    pub fn to_color_space(&self, other_color_space: Self) -> glam::Mat3 {
+    pub fn to_color_space(&self, other_color_space: &Self) -> glam::Mat3 {
+        if self == other_color_space {
+            return glam::Mat3::IDENTITY;
+        }
         other_color_space.to_xyz().inverse() * self.to_xyz()
     }
 }
