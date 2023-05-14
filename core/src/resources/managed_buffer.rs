@@ -6,8 +6,8 @@ use std::{
 use crate::{
     copy_buffer, copy_buffer_regions,
     future::{
-        use_shared_state_with_old, GPUCommandFuture, PerFrameContainer, PerFrameState, RenderRes,
-        SharedDeviceState, SharedDeviceStateHostContainer,
+        use_shared_state_with_old, GPUCommandFuture, PerFrameContainer, PerFrameState, RenderData,
+        RenderRes, SharedDeviceState, SharedDeviceStateHostContainer,
     },
     utils::{either::Either, merge_ranges::MergeRangeIteratorExt},
     Allocator, BufferLike, HasDevice, ResidentBuffer,
@@ -160,7 +160,9 @@ impl ManagedBufferUnsized {
         }
     }
 
-    pub fn buffer(&mut self) -> Option<impl GPUCommandFuture<Output = RenderRes<impl BufferLike>>> {
+    pub fn buffer(
+        &mut self,
+    ) -> Option<impl GPUCommandFuture<Output = RenderRes<impl BufferLike + RenderData>>> {
         let buffer = match self {
             Self::DirectWrite(strategy) => strategy.buffer().map(|b| Either::Left(b)),
             Self::StagingBuffer(strategy) => strategy.buffer().map(|b| Either::Right(b)),
@@ -528,10 +530,10 @@ impl<T> ManagedBufferStrategyStaging<T> {
         );
 
         let fut = commands! {
-            let mut device_buffer = RenderRes::new(device_buffer);
+            let mut device_buffer = device_buffer;
 
             if let Some(old_buffer) = old_device_buffer {
-                let old_buffer = RenderRes::new(old_buffer);
+                let old_buffer = old_buffer;
                 copy_buffer(&old_buffer, &mut device_buffer).await;
                 retain!(old_buffer);
             }
@@ -718,10 +720,10 @@ impl ManagedBufferStrategyStagingUnsized {
         );
 
         let fut = commands! {
-            let mut device_buffer = RenderRes::new(device_buffer);
+            let mut device_buffer = device_buffer;
 
             if let Some(old_buffer) = old_device_buffer {
-                let old_buffer = RenderRes::new(old_buffer);
+                let old_buffer = old_buffer;
                 copy_buffer(&old_buffer, &mut device_buffer).await;
                 retain!(old_buffer);
             }

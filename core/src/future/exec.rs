@@ -43,23 +43,92 @@ impl Default for ResTrackingInfo {
     }
 }
 
-pub struct RenderRes<T> {
+#[derive(Clone)]
+pub struct TrackingFeedback {
+    queue_family: u32,
+    queue_index: QueueRef,
+    access: Access,
+    layout: vk::ImageLayout,
+}
+impl Default for TrackingFeedback {
+    fn default() -> Self {
+        Self {
+            queue_family: vk::QUEUE_FAMILY_IGNORED,
+            queue_index: QueueRef::null(),
+            access: Access::default(),
+            layout: vk::ImageLayout::UNDEFINED,
+        }
+    }
+}
+/// A marker trait for things to be placed inside `RenderRes` or `RenderImage`.
+/// Applications need to implement this for all types that they want to use inside
+/// `RenderRes` or `RenderImage`. Once Rust specialization is implemented and major
+/// bugs addressed, we can add a blanket implementation for all types.
+/// `impl<T> RenderData for T {}``
+pub trait RenderData {
+    fn tracking_feedback(&mut self, _feedback: &TrackingFeedback) {}
+}
+impl RenderData for () {}
+macro_rules! impl_tuple {
+    ($($idx:tt $t:tt),+) => {
+        impl<$($t,)+> RenderData for ($($t,)+)
+        where
+            $($t: RenderData,)+
+        {
+            fn tracking_feedback(&mut self, feedback: &TrackingFeedback) {
+                $(
+                    $t :: tracking_feedback(&mut self.$idx, feedback);
+                )+
+            }
+        }
+    };
+}
+
+impl_tuple!(0 A);
+impl_tuple!(0 A, 1 B);
+impl_tuple!(0 A, 1 B, 2 C);
+impl_tuple!(0 A, 1 B, 2 C, 3 D);
+impl_tuple!(0 A, 1 B, 2 C, 3 D, 4 E);
+impl_tuple!(0 A, 1 B, 2 C, 3 D, 4 E, 5 F);
+impl_tuple!(0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G);
+impl_tuple!(0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H);
+
+pub struct RenderRes<T: RenderData> {
     pub tracking_info: RefCell<ResTrackingInfo>,
     pub inner: T,
     dispose_marker: Dispose<T>,
 }
-impl<T> Disposable for RenderRes<T> {
+impl<T: RenderData> Disposable for RenderRes<T> {
+    fn retire(&mut self) {
+        let tracking = self.tracking_info.borrow();
+        self.inner.tracking_feedback(&TrackingFeedback {
+            queue_family: tracking.queue_family,
+            queue_index: tracking.queue_index,
+            access: tracking.current_stage_access.clone(),
+            layout: vk::ImageLayout::UNDEFINED,
+        });
+    }
     fn dispose(self) {
         self.dispose_marker.dispose();
     }
 }
-impl<T> RenderRes<T> {
+impl<T: RenderData> RenderRes<T> {
     pub fn new(inner: T) -> Self {
         Self {
             tracking_info: Default::default(),
             inner,
             dispose_marker: Dispose::new(),
         }
+    }
+    pub(crate) fn with_feedback(inner: T, feedback: &TrackingFeedback) -> Self {
+        let this = Self::new(inner);
+        {
+            let mut tracking = this.tracking_info.borrow_mut();
+            tracking.current_stage_access = feedback.access.clone();
+            tracking.queue_family = feedback.queue_family;
+            tracking.queue_index = feedback.queue_index;
+        }
+        this
     }
     pub fn inner(&self) -> &T {
         &self.inner
@@ -76,7 +145,7 @@ impl<T> RenderRes<T> {
         self
     }
 
-    pub fn map<RET>(self, mapper: impl FnOnce(T) -> RET) -> RenderRes<RET> {
+    pub fn map<RET: RenderData>(self, mapper: impl FnOnce(T) -> RET) -> RenderRes<RET> {
         self.dispose_marker.dispose();
         RenderRes {
             inner: (mapper)(self.inner),
@@ -84,7 +153,7 @@ impl<T> RenderRes<T> {
             dispose_marker: Dispose::new(),
         }
     }
-    pub fn merge<O>(self, other: RenderRes<O>) -> RenderRes<(T, O)> {
+    pub fn merge<O: RenderData>(self, other: RenderRes<O>) -> RenderRes<(T, O)> {
         let self_tracking = self.tracking_info.borrow();
         let other_tracking = other.tracking_info.borrow();
 
@@ -149,23 +218,42 @@ impl<T> RenderRes<T> {
     }
 }
 
-pub struct RenderImage<T> {
+pub struct RenderImage<T: RenderData> {
     pub res: RenderRes<T>,
     pub old_layout: Cell<vk::ImageLayout>,
     pub layout: Cell<vk::ImageLayout>,
 }
-impl<T> Disposable for RenderImage<T> {
+impl<T: RenderData> Disposable for RenderImage<T> {
+    fn retire(&mut self) {
+        let tracking = self.res.tracking_info.borrow();
+        self.res.inner.tracking_feedback(&TrackingFeedback {
+            queue_family: tracking.queue_family,
+            queue_index: tracking.queue_index,
+            access: tracking.current_stage_access.clone(),
+            layout: self.layout.get(),
+        });
+    }
     fn dispose(self) {
         self.res.dispose()
     }
 }
-impl<T> RenderImage<T> {
+impl<T: RenderData> RenderImage<T> {
     pub fn new(inner: T, initial_layout: vk::ImageLayout) -> Self {
         Self {
             res: RenderRes::new(inner),
             layout: Cell::new(initial_layout),
             old_layout: Cell::new(initial_layout),
         }
+    }
+    pub(crate) fn with_feedback(inner: T, feedback: &TrackingFeedback) -> Self {
+        let this = Self::new(inner, feedback.layout);
+        {
+            let mut tracking = this.res.tracking_info.borrow_mut();
+            tracking.current_stage_access = feedback.access.clone();
+            tracking.queue_family = feedback.queue_family;
+            tracking.queue_index = feedback.queue_index;
+        }
+        this
     }
     pub fn inner(&self) -> &T {
         &self.res.inner
@@ -176,7 +264,7 @@ impl<T> RenderImage<T> {
     pub fn into_inner(self) -> T {
         self.res.into_inner()
     }
-    pub fn map<RET>(self, mapper: impl FnOnce(T) -> RET) -> RenderImage<RET> {
+    pub fn map<RET: RenderData>(self, mapper: impl FnOnce(T) -> RET) -> RenderImage<RET> {
         let res = self.res.map(mapper);
         RenderImage {
             res,
@@ -423,6 +511,7 @@ impl StageContext {
     }
     fn add_barrier_tracking(&mut self, tracking: &mut ResTrackingInfo, access: &Access) {
         if tracking.last_accessed_timeline < self.timeline_index {
+            let last_accessed_timeline = tracking.last_accessed_timeline;
             tracking.prev_queue_family =
                 std::mem::replace(&mut tracking.queue_family, self.queue_family_index);
             tracking.prev_queue_index =
@@ -455,8 +544,9 @@ impl StageContext {
                     });
 
                 *untracked_semaphore = vk::Semaphore::null();
-            } else if tracking.prev_queue_family != vk::QUEUE_FAMILY_IGNORED {
+            } else if last_accessed_timeline != 0 {
                 assert!(!tracking.prev_queue_index.is_null());
+                assert!(tracking.prev_queue_family != vk::QUEUE_FAMILY_IGNORED);
                 let mut barrier = vk::MemoryBarrier2::default();
                 // TODO: Do we have to consider image layout transfers here?
                 get_memory_access(&mut barrier, &tracking.prev_stage_access, access, false);
@@ -472,7 +562,7 @@ impl StageContext {
     }
     /// Declare a global memory write
     #[inline]
-    pub fn write<T>(
+    pub fn write<T: RenderData>(
         &mut self,
         res: &mut RenderRes<T>,
         stages: vk::PipelineStageFlags2,
@@ -504,7 +594,7 @@ impl StageContext {
     }
     /// Declare a global memory read
     #[inline]
-    pub fn read<T>(
+    pub fn read<T: RenderData>(
         &mut self,
         res: &RenderRes<T>,
         stages: vk::PipelineStageFlags2,
@@ -561,7 +651,7 @@ impl StageContext {
     }
     /// Declare a global memory read
     #[inline]
-    pub fn read_others<T>(
+    pub fn read_others<T: RenderData>(
         &mut self,
         res: &RenderRes<T>,
         stages: vk::PipelineStageFlags2,
@@ -596,7 +686,7 @@ impl StageContext {
         tracking.last_accessed_stage_index = self.stage_index;
     }
     #[inline]
-    pub fn write_image<T>(
+    pub fn write_image<T: RenderData>(
         &mut self,
         res: &mut RenderImage<T>,
         stages: vk::PipelineStageFlags2,
@@ -668,7 +758,7 @@ impl StageContext {
     }
     /// Declare a global memory read
     #[inline]
-    pub fn read_image<T>(
+    pub fn read_image<T: RenderData>(
         &mut self,
         res: &RenderImage<T>,
         stages: vk::PipelineStageFlags2,

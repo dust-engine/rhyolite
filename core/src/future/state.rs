@@ -1,3 +1,4 @@
+use std::cell::UnsafeCell;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -13,56 +14,81 @@ pub fn use_state<T>(
     this.get_or_insert_with(init)
 }
 
-pub struct SharedDeviceStateHostContainer<T>(Arc<T>);
+struct SharedDeviceStateInner<T> {
+    item: T,
+    tracking_feedback: UnsafeCell<TrackingFeedback>, // TODO: remove Mutex
+    fetched: AtomicBool,
+}
+unsafe impl<T> Send for SharedDeviceStateInner<T> {}
+unsafe impl<T> Sync for SharedDeviceStateInner<T> {}
+
+pub struct SharedDeviceStateHostContainer<T>(Arc<SharedDeviceStateInner<T>>);
 
 /// Indicates shared resource access on the device-side only.
 /// It is safe to implement ImageLike and BufferLike, because
 /// it is implied that at any given time, only one submission
 /// may hold a SharedDeviceState<T>.
-pub struct SharedDeviceState<T>(Arc<T>);
+pub struct SharedDeviceState<T>(Arc<SharedDeviceStateInner<T>>);
+impl<T> RenderData for SharedDeviceState<T> {
+    fn tracking_feedback(&mut self, feedback: &super::TrackingFeedback) {
+        assert!(self.0.fetched.load(std::sync::atomic::Ordering::Relaxed));
+        self.0
+            .fetched
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            *self.0.tracking_feedback.get() = feedback.clone();
+        }
+    }
+}
+impl<T> SharedDeviceStateInner<T> {
+    pub fn get_tracking_feedback(&self) -> &super::TrackingFeedback {
+        assert!(self.fetched.load(std::sync::atomic::Ordering::Relaxed));
+        unsafe { &*self.tracking_feedback.get() }
+    }
+}
 impl<T: HasDevice> HasDevice for SharedDeviceState<T> {
     fn device(&self) -> &Arc<crate::Device> {
-        self.0.device()
+        self.0.item.device()
     }
 }
 impl<T: ImageLike> ImageLike for SharedDeviceState<T> {
     fn raw_image(&self) -> ash::vk::Image {
-        self.0.raw_image()
+        self.0.item.raw_image()
     }
 
     fn subresource_range(&self) -> ash::vk::ImageSubresourceRange {
-        self.0.subresource_range()
+        self.0.item.subresource_range()
     }
 
     fn extent(&self) -> ash::vk::Extent3D {
-        self.0.extent()
+        self.0.item.extent()
     }
 
     fn format(&self) -> ash::vk::Format {
-        self.0.format()
+        self.0.item.format()
     }
     fn offset(&self) -> ash::vk::Offset3D {
-        self.0.offset()
+        self.0.item.offset()
     }
 }
 impl<T: BufferLike> BufferLike for SharedDeviceState<T> {
     fn raw_buffer(&self) -> ash::vk::Buffer {
-        self.0.raw_buffer()
+        self.0.item.raw_buffer()
     }
 
     fn size(&self) -> ash::vk::DeviceSize {
-        self.0.size()
+        self.0.item.size()
     }
     fn offset(&self) -> ash::vk::DeviceSize {
-        self.0.offset()
+        self.0.item.offset()
     }
     fn device_address(&self) -> ash::vk::DeviceAddress {
-        self.0.device_address()
+        self.0.item.device_address()
     }
 }
 impl<T: ImageViewLike> ImageViewLike for SharedDeviceState<T> {
     fn raw_image_view(&self) -> ash::vk::ImageView {
-        self.0.raw_image_view()
+        self.0.item.raw_image_view()
     }
 }
 
@@ -75,19 +101,72 @@ pub fn use_shared_state<T>(
     this: &mut Option<SharedDeviceStateHostContainer<T>>,
     create: impl FnOnce(Option<&T>) -> T,
     should_update: impl FnOnce(&T) -> bool,
-) -> SharedDeviceState<T> {
+) -> RenderRes<SharedDeviceState<T>> {
     if let Some(inner) = this {
         let inner = &mut inner.0;
-        if should_update(&inner) {
-            *inner = Arc::new(create(Some(&inner)));
+        if should_update(&inner.item) {
+            *inner = Arc::new(SharedDeviceStateInner {
+                item: create(Some(&inner.item)),
+                tracking_feedback: Default::default(),
+                fetched: AtomicBool::new(true),
+            });
+            RenderRes::new(SharedDeviceState(inner.clone()))
+        } else {
+            inner
+                .fetched
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            RenderRes::with_feedback(
+                SharedDeviceState(inner.clone()),
+                &inner.get_tracking_feedback(),
+            )
         }
-        SharedDeviceState(inner.clone())
     } else {
-        let item = Arc::new(create(None));
+        let item = Arc::new(SharedDeviceStateInner {
+            item: create(None),
+            tracking_feedback: Default::default(),
+            fetched: AtomicBool::new(true),
+        });
         *this = Some(SharedDeviceStateHostContainer(item));
-        SharedDeviceState(this.as_ref().unwrap().0.clone())
+        RenderRes::new(SharedDeviceState(this.as_ref().unwrap().0.clone()))
     }
 }
+
+pub fn use_shared_image<T>(
+    this: &mut Option<SharedDeviceStateHostContainer<T>>,
+    create: impl FnOnce(Option<&T>) -> (T, vk::ImageLayout),
+    should_update: impl FnOnce(&T) -> bool,
+) -> RenderImage<SharedDeviceState<T>> {
+    if let Some(inner) = this {
+        let inner = &mut inner.0;
+        if should_update(&inner.item) {
+            let (item, layout) = create(Some(&inner.item));
+            *inner = Arc::new(SharedDeviceStateInner {
+                item,
+                tracking_feedback: Default::default(),
+                fetched: AtomicBool::new(true),
+            });
+            RenderImage::new(SharedDeviceState(inner.clone()), layout)
+        } else {
+            inner
+                .fetched
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            RenderImage::with_feedback(
+                SharedDeviceState(inner.clone()),
+                &inner.get_tracking_feedback(),
+            )
+        }
+    } else {
+        let (item, layout) = create(None);
+        let item = Arc::new(SharedDeviceStateInner {
+            item,
+            tracking_feedback: Default::default(),
+            fetched: AtomicBool::new(true),
+        });
+        *this = Some(SharedDeviceStateHostContainer(item));
+        RenderImage::new(SharedDeviceState(this.as_ref().unwrap().0.clone()), layout)
+    }
+}
+/*
 pub fn use_shared_state_initialized<'a, T, Fut: GPUCommandFuture<Output = RenderRes<T>>>(
     this: &'a mut Option<SharedDeviceStateHostContainer<T>>,
     create: impl FnOnce(Option<&T>) -> Fut + 'a,
@@ -100,8 +179,8 @@ where
     commands! { move
         if let Some(inner) = this {
             let inner = &mut inner.0;
-            if should_update(&inner) {
-                let res = create(Some(&inner)).await.map(|a| Arc::new(a));
+            if should_update(&inner.item) {
+                let res = create(Some(&inner.item)).await.map(|a| Arc::new(a));
                 *inner = res.inner().clone();
                 res.map(|a| SharedDeviceState(a))
             } else {
@@ -114,40 +193,70 @@ where
         }
     }
 }
+*/
 /// Returns (new, old)
 pub fn use_shared_state_with_old<T>(
     this: &mut Option<SharedDeviceStateHostContainer<T>>,
     create: impl FnOnce(Option<&T>) -> T,
     should_update: impl FnOnce(&T) -> bool,
-) -> (SharedDeviceState<T>, Option<SharedDeviceState<T>>) {
+) -> (
+    RenderRes<SharedDeviceState<T>>,
+    Option<RenderRes<SharedDeviceState<T>>>,
+) {
     if let Some(inner) = this {
         let inner = &mut inner.0;
-        let old = if should_update(&inner) {
-            Some(std::mem::replace(inner, Arc::new(create(Some(&inner)))))
+        if should_update(&inner.item) {
+            let old = std::mem::replace(
+                inner,
+                Arc::new(SharedDeviceStateInner {
+                    item: create(Some(&inner.item)),
+                    tracking_feedback: Default::default(),
+                    fetched: AtomicBool::new(true),
+                }),
+            );
+            let old =
+                RenderRes::with_feedback(SharedDeviceState(old), inner.get_tracking_feedback());
+            (RenderRes::new(SharedDeviceState(inner.clone())), Some(old))
         } else {
-            None
-        };
-        (
-            SharedDeviceState(inner.clone()),
-            old.map(|old| SharedDeviceState(old)),
-        )
+            inner
+                .fetched
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            (
+                RenderRes::with_feedback(
+                    SharedDeviceState(inner.clone()),
+                    inner.get_tracking_feedback(),
+                ),
+                None,
+            )
+        }
     } else {
-        let item = Arc::new(create(None));
+        let item = Arc::new(SharedDeviceStateInner {
+            item: create(None),
+            tracking_feedback: Default::default(),
+            fetched: AtomicBool::new(true),
+        });
         *this = Some(SharedDeviceStateHostContainer(item));
-        (SharedDeviceState(this.as_ref().unwrap().0.clone()), None)
+        (
+            RenderRes::new(SharedDeviceState(this.as_ref().unwrap().0.clone())),
+            None,
+        )
     }
 }
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 
-use crate::macros::commands;
+use ash::vk;
+
 use crate::BufferLike;
 use crate::HasDevice;
 use crate::ImageLike;
 use crate::ImageViewLike;
 
-use super::GPUCommandFuture;
+use super::RenderData;
+use super::RenderImage;
 use super::RenderRes;
+use super::TrackingFeedback;
 // probably needs a mpsc channel.
 pub struct PerFrameState<T> {
     receiver: crossbeam_channel::Receiver<T>,
@@ -224,6 +333,7 @@ pub struct PerFrameContainer<T> {
     item: Option<T>,
     reused: bool,
 }
+impl<T: RenderData> RenderData for PerFrameContainer<T> {}
 impl<T> PerFrameContainer<T> {
     pub fn reuse(mut self, reuse: impl FnOnce(&mut T)) -> Self {
         if self.reused {

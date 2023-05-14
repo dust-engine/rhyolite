@@ -352,7 +352,7 @@ impl From<vk::ColorSpaceKHR> for ColorSpace {
             },
             vk::ColorSpaceKHR::BT2020_LINEAR_EXT => ColorSpace {
                 ty: ColorSpaceType::BT2020,
-                linear: true
+                linear: true,
             },
             vk::ColorSpaceKHR::HDR10_ST2084_EXT => ColorSpace {
                 ty: ColorSpaceType::HDR10_ST2084,

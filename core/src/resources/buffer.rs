@@ -10,7 +10,7 @@ use pin_project::pin_project;
 
 use crate::{
     debug::DebugObject,
-    future::{CommandBufferRecordContext, GPUCommandFuture, RenderRes, StageContext},
+    future::{CommandBufferRecordContext, GPUCommandFuture, RenderData, RenderRes, StageContext},
     macros::commands,
     utils::either::Either,
     Allocator, HasDevice, PhysicalDeviceMemoryModel, SharingMode,
@@ -120,8 +120,8 @@ impl<T: BufferLike> BufferExt for T {}
 
 #[pin_project]
 pub struct CopyBufferFuture<
-    S: BufferLike,
-    T: BufferLike,
+    S: BufferLike + RenderData,
+    T: BufferLike + RenderData,
     SRef: Deref<Target = RenderRes<S>>,
     TRef: DerefMut<Target = RenderRes<T>>,
 > {
@@ -132,8 +132,8 @@ pub struct CopyBufferFuture<
     pub regions: Option<Vec<vk::BufferCopy>>,
 }
 impl<
-        S: BufferLike,
-        T: BufferLike,
+        S: BufferLike + RenderData,
+        T: BufferLike + RenderData,
         SRef: Deref<Target = RenderRes<S>>,
         TRef: DerefMut<Target = RenderRes<T>>,
     > GPUCommandFuture for CopyBufferFuture<S, T, SRef, TRef>
@@ -189,8 +189,8 @@ impl<
 }
 
 pub fn copy_buffer<
-    S: BufferLike,
-    T: BufferLike,
+    S: BufferLike + RenderData,
+    T: BufferLike + RenderData,
     SRef: Deref<Target = RenderRes<S>>,
     TRef: DerefMut<Target = RenderRes<T>>,
 >(
@@ -204,8 +204,8 @@ pub fn copy_buffer<
     }
 }
 pub fn copy_buffer_regions<
-    S: BufferLike,
-    T: BufferLike,
+    S: BufferLike + RenderData,
+    T: BufferLike + RenderData,
     SRef: Deref<Target = RenderRes<S>>,
     TRef: DerefMut<Target = RenderRes<T>>,
 >(
@@ -221,13 +221,16 @@ pub fn copy_buffer_regions<
 }
 
 #[pin_project]
-pub struct UpdateBufferFuture<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>, const N: usize>
-{
+pub struct UpdateBufferFuture<
+    T: BufferLike + RenderData,
+    TRef: DerefMut<Target = RenderRes<T>>,
+    const N: usize,
+> {
     pub dst: TRef,
     data: [u8; N],
 }
-impl<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>, const N: usize> GPUCommandFuture
-    for UpdateBufferFuture<T, TRef, N>
+impl<T: BufferLike + RenderData, TRef: DerefMut<Target = RenderRes<T>>, const N: usize>
+    GPUCommandFuture for UpdateBufferFuture<T, TRef, N>
 {
     type Output = ();
     type RetainedState = ();
@@ -263,7 +266,11 @@ impl<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>, const N: usize> GPUCo
     }
 }
 
-pub fn update_buffer<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>, const N: usize>(
+pub fn update_buffer<
+    T: BufferLike + RenderData,
+    TRef: DerefMut<Target = RenderRes<T>>,
+    const N: usize,
+>(
     dst: TRef,
     data: [u8; N],
 ) -> UpdateBufferFuture<T, TRef, N> {
@@ -271,11 +278,11 @@ pub fn update_buffer<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>, const
 }
 
 #[pin_project]
-pub struct FillBufferFuture<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>> {
+pub struct FillBufferFuture<T: BufferLike + RenderData, TRef: DerefMut<Target = RenderRes<T>>> {
     pub dst: TRef,
     data: u32,
 }
-impl<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>> GPUCommandFuture
+impl<T: BufferLike + RenderData, TRef: DerefMut<Target = RenderRes<T>>> GPUCommandFuture
     for FillBufferFuture<T, TRef>
 {
     type Output = ();
@@ -293,10 +300,6 @@ impl<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>> GPUCommandFuture
         let dst = this.dst.deref_mut().inner_mut();
         let data: u32 = *this.data;
         ctx.record(|ctx, command_buffer| unsafe {
-            println!(
-                "Fill buffer: offset {} size {} fill with {}",
-                offset, size, data
-            );
             ctx.device()
                 .cmd_fill_buffer(command_buffer, dst.raw_buffer(), offset, size, data);
         });
@@ -313,7 +316,7 @@ impl<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>> GPUCommandFuture
     }
 }
 
-pub fn fill_buffer<T: BufferLike, TRef: DerefMut<Target = RenderRes<T>>>(
+pub fn fill_buffer<T: BufferLike + RenderData, TRef: DerefMut<Target = RenderRes<T>>>(
     dst: TRef,
     data: u32,
 ) -> FillBufferFuture<T, TRef> {
@@ -326,6 +329,7 @@ pub struct ResidentBuffer {
     allocation: vk_mem::Allocation,
     size: vk::DeviceSize,
 }
+impl RenderData for ResidentBuffer {}
 
 impl ResidentBuffer {
     pub fn contents(&self) -> Option<&[u8]> {

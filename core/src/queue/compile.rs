@@ -4,8 +4,9 @@ use ash::vk;
 
 use super::exec::CachedStageSubmissions;
 use crate::{
-    commands::SharedCommandPool, HasDevice, QueueFuture, QueueFuturePoll, QueueMask,
-    QueueSubmissionContext, QueueSubmissionType, SubmissionContext, TimelineSemaphorePool,
+    commands::SharedCommandPool, future::Disposable, HasDevice, QueueFuture, QueueFuturePoll,
+    QueueMask, QueueSubmissionContext, QueueSubmissionType, SubmissionContext,
+    TimelineSemaphorePool,
 };
 
 pub trait QueueCompileExt: QueueFuture {
@@ -192,7 +193,8 @@ pub trait QueueCompileExt: QueueFuture {
         }
 
         // No more touching of future! It's getting moved.
-        let fut_dispose = self.dispose();
+        let mut fut_dispose = self.dispose();
+        fut_dispose.retire();
         CompiledQueueFuture {
             submission_batch: submission_stages,
             fut_dispose,

@@ -15,6 +15,7 @@ pub use state::*;
 
 // TODO: Use the dispose crate.
 pub trait Disposable {
+    fn retire(&mut self) {}
     fn dispose(self);
 }
 pub struct Dispose<T>(PhantomData<T>);
@@ -61,17 +62,28 @@ impl Disposable for () {
     fn dispose(self) {}
 }
 impl Disposable for Box<dyn Disposable> {
+    fn retire(&mut self) {
+        (**self).retire()
+    }
     fn dispose(self) {
         (*self).dispose()
     }
 }
 
 impl Disposable for Box<dyn Disposable + Send> {
+    fn retire(&mut self) {
+        (**self).retire()
+    }
     fn dispose(self) {
         (*self).dispose()
     }
 }
 impl<T: Disposable> Disposable for Vec<T> {
+    fn retire(&mut self) {
+        for i in self.iter_mut() {
+            i.retire();
+        }
+    }
     fn dispose(self) {
         for i in self.into_iter() {
             i.dispose();
@@ -85,6 +97,11 @@ macro_rules! impl_tuple {
         where
             $($t: Disposable,)+
         {
+            fn retire(&mut self) {
+                $(
+                    $t :: retire(&mut self.$idx);
+                )+
+            }
             fn dispose(self) {
                 $(
                     $t :: dispose(self.$idx);
@@ -107,6 +124,11 @@ impl<T> Disposable for Option<T>
 where
     T: Disposable,
 {
+    fn retire(&mut self) {
+        if let Some(this) = self {
+            this.retire()
+        }
+    }
     fn dispose(self) {
         if let Some(this) = self {
             this.dispose()

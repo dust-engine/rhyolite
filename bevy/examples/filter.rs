@@ -8,7 +8,7 @@ use rhyolite::ash::vk;
 use rhyolite::descriptor::DescriptorPool;
 use rhyolite::future::{
     use_per_frame_state, DisposeContainer, GPUCommandFutureExt, PerFrameContainer, PerFrameState,
-    RenderImage,
+    RenderData, RenderImage,
 };
 use rhyolite::macros::glsl_reflected;
 use rhyolite::utils::retainer::{Retainer, RetainerHandle};
@@ -90,7 +90,6 @@ struct GaussianBlurPipeline {
 impl FromWorld for GaussianBlurPipeline {
     fn from_world(world: &mut World) -> Self {
         let shader = glsl_reflected!("filter.comp");
-        println!("{:?}", shader.entry_points.get("main").unwrap());
         let num_frame_in_flight = world.resource::<Queues>().num_frame_in_flight();
         let module = shader
             .build(world.resource::<Device>().inner().clone())
@@ -114,8 +113,8 @@ impl FromWorld for GaussianBlurPipeline {
 impl GaussianBlurPipeline {
     pub fn apply<
         'a,
-        S: ImageViewLike,
-        T: ImageViewLike,
+        S: ImageViewLike + RenderData,
+        T: ImageViewLike + RenderData,
         SRef: Deref<Target = RenderImage<S>>,
         TRef: DerefMut<Target = RenderImage<T>>,
     >(
@@ -134,8 +133,8 @@ impl GaussianBlurPipeline {
 #[pin_project]
 struct GaussianBlur<
     'a,
-    S: ImageViewLike,
-    T: ImageViewLike,
+    S: ImageViewLike + RenderData,
+    T: ImageViewLike + RenderData,
     SRef: Deref<Target = RenderImage<S>>,
     TRef: Deref<Target = RenderImage<T>>,
 > {
@@ -145,8 +144,8 @@ struct GaussianBlur<
 }
 impl<
         'a,
-        S: ImageViewLike,
-        T: ImageViewLike,
+        S: ImageViewLike + RenderData,
+        T: ImageViewLike + RenderData,
         SRef: Deref<Target = RenderImage<S>>,
         TRef: DerefMut<Target = RenderImage<T>>,
     > rhyolite::future::GPUCommandFuture for GaussianBlur<'a, S, T, SRef, TRef>
@@ -304,18 +303,20 @@ impl Plugin for RenderSystem {
                     let image_size = image_size;
                     let mut swapchain_image = swapchain_image.await;
 
-                    let intermediate_image = rhyolite::future::use_shared_state(using!(), |_| {
-                        println!("Created imagehhhh");
-                        allocator
-                        .create_device_image_uninit(
-                            &ImageRequest {
-                                usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST,
-                                extent: swapchain_image.inner().extent(),
-                                ..Default::default()
-                            }
-                        ).unwrap().as_2d_view().unwrap()
+                    let intermediate_image = rhyolite::future::use_shared_image(using!(), |_| {
+                        (
+                            allocator
+                                .create_device_image_uninit(
+                                    &ImageRequest {
+                                        usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST,
+                                        extent: swapchain_image.inner().extent(),
+                                        ..Default::default()
+                                    }
+                                ).unwrap().as_2d_view().unwrap(),
+                            vk::ImageLayout::UNDEFINED,
+                        )
                     }, |image| swapchain_image.inner().extent() != image.extent());
-                    let tmp_image = RenderImage::new(intermediate_image, vk::ImageLayout::UNDEFINED);
+                    let tmp_image = intermediate_image;
 
                     let mut tmp_image_region = tmp_image.map(|i| {
                         i.crop(vk::Extent3D {

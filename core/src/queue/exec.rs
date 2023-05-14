@@ -417,6 +417,7 @@ impl<Ret: Disposable + Send, Out> QueueFuture for QueueSubmitFuture<Ret, Out> {
     }
 
     fn dispose(mut self) -> Self::RetainedState {
+        // TODO: There might be a problem with retire() being called twice.
         self.retained_state.take().unwrap()
     }
 }

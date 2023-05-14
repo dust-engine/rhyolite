@@ -5,7 +5,10 @@ use ash::{
     vk::{self, Handle},
 };
 
-use crate::{debug::DebugObject, Allocator, BufferLike, Device, HasDevice, ResidentBuffer};
+use crate::{
+    debug::DebugObject, future::RenderData, Allocator, BufferLike, Device, HasDevice,
+    ResidentBuffer,
+};
 
 pub mod blas;
 pub mod build;
@@ -17,6 +20,8 @@ pub struct AccelerationStructure {
     ty: AccelerationStructureType,
     buffer: ResidentBuffer,
 }
+impl RenderData for AccelerationStructure {}
+impl RenderData for Arc<AccelerationStructure> {}
 
 impl HasDevice for AccelerationStructure {
     fn device(&self) -> &Arc<Device> {

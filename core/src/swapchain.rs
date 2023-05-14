@@ -6,7 +6,7 @@ use pin_project::pin_project;
 use std::sync::Arc;
 use std::{ops::Deref, pin::Pin};
 
-use crate::future::{Access, RenderImage, StageContextImage};
+use crate::future::{Access, RenderData, RenderImage, StageContextImage};
 use crate::utils::format::ColorSpace;
 use crate::{
     Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueFuture, QueueFuturePoll,
@@ -290,7 +290,7 @@ pub struct SwapchainImage {
 }
 impl Drop for SwapchainImage {
     fn drop(&mut self) {
-        if !self.presented {
+        if !self.presented && !std::thread::panicking() {
             panic!("SwapchainImage must be returned to the OS by calling Present!")
         }
     }
@@ -305,6 +305,7 @@ impl HasDevice for SwapchainImage {
         &self.device
     }
 }
+impl RenderData for SwapchainImage {}
 impl ImageLike for SwapchainImage {
     fn raw_image(&self) -> vk::Image {
         self.image

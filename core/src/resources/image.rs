@@ -2,7 +2,7 @@ use ash::{prelude::VkResult, vk};
 use std::{ops::DerefMut, sync::Arc};
 
 use crate::{
-    future::{GPUCommandFuture, RenderImage},
+    future::{GPUCommandFuture, RenderData, RenderImage},
     Allocator, Device, HasDevice, SharingMode,
 };
 
@@ -54,6 +54,7 @@ pub struct ImageSubregion<T: ImageLike> {
     extent: vk::Extent3D,
     offset: vk::Offset3D,
 }
+impl<T: ImageLike> RenderData for ImageSubregion<T> {}
 impl<T: ImageLike> ImageSubregion<T> {
     pub fn into_inner(self) -> T {
         self.inner
@@ -95,6 +96,7 @@ pub struct ResidentImage {
     level_count: u32,
     layer_count: u32,
 }
+impl RenderData for ResidentImage {}
 
 impl HasDevice for ResidentImage {
     fn device(&self) -> &Arc<Device> {
@@ -224,18 +226,21 @@ impl Allocator {
     }
 }
 
-pub fn clear_image<Img: ImageLike, ImgRef: DerefMut<Target = RenderImage<Img>>>(
+pub fn clear_image<Img: ImageLike + RenderData, ImgRef: DerefMut<Target = RenderImage<Img>>>(
     image: ImgRef,
     value: vk::ClearColorValue,
 ) -> ClearImageFuture<Img, ImgRef> {
     ClearImageFuture { image, value }
 }
 
-pub struct ClearImageFuture<Img: ImageLike, ImgRef: DerefMut<Target = RenderImage<Img>>> {
+pub struct ClearImageFuture<
+    Img: ImageLike + RenderData,
+    ImgRef: DerefMut<Target = RenderImage<Img>>,
+> {
     image: ImgRef,
     value: vk::ClearColorValue,
 }
-impl<Img: ImageLike, ImgRef: DerefMut<Target = RenderImage<Img>>> GPUCommandFuture
+impl<Img: ImageLike + RenderData, ImgRef: DerefMut<Target = RenderImage<Img>>> GPUCommandFuture
     for ClearImageFuture<Img, ImgRef>
 {
     type Output = ();

@@ -1,7 +1,6 @@
 #![feature(generators, generator_trait)]
 #![feature(trait_alias)]
 #![feature(negative_impls)]
-#![feature(specialization)]
 #![feature(const_trait_impl)]
 #![feature(get_mut_unchecked)]
 #![feature(array_zip)]

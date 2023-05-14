@@ -8,14 +8,17 @@ use ash::vk;
 use pin_project::pin_project;
 
 use crate::{
-    future::{CommandBufferRecordContext, GPUCommandFuture, RenderImage, RenderRes, StageContext},
+    future::{
+        CommandBufferRecordContext, GPUCommandFuture, RenderData, RenderImage, RenderRes,
+        StageContext,
+    },
     BufferLike, HasDevice, ImageLike,
 };
 
 #[pin_project]
 pub struct CopyBufferToImageFuture<
-    S: BufferLike,
-    T: ImageLike,
+    S: BufferLike + RenderData,
+    T: ImageLike + RenderData,
     SRef: Deref<Target = RenderRes<S>>,
     TRef: DerefMut<Target = RenderImage<T>>,
 > {
@@ -34,8 +37,8 @@ pub struct CopyBufferToImageFuture<
     pub target_layout: vk::ImageLayout,
 }
 impl<
-        S: BufferLike,
-        T: ImageLike,
+        S: BufferLike + RenderData,
+        T: ImageLike + RenderData,
         SRef: Deref<Target = RenderRes<S>>,
         TRef: DerefMut<Target = RenderImage<T>>,
     > GPUCommandFuture for CopyBufferToImageFuture<S, T, SRef, TRef>
@@ -97,8 +100,8 @@ impl<
 
 /// Copy data for a tightly packed image from a buffer to an image object, covering the entire extent of the image.
 pub fn copy_buffer_to_image<
-    S: BufferLike,
-    T: ImageLike,
+    S: BufferLike + RenderData,
+    T: ImageLike + RenderData,
     SRef: Deref<Target = RenderRes<S>>,
     TRef: DerefMut<Target = RenderImage<T>>,
 >(
@@ -129,11 +132,14 @@ pub fn copy_buffer_to_image<
 }
 
 #[pin_project]
-pub struct EnsureImageLayoutFuture<T: ImageLike, TRef: DerefMut<Target = RenderImage<T>>> {
+pub struct EnsureImageLayoutFuture<
+    T: ImageLike + RenderData,
+    TRef: DerefMut<Target = RenderImage<T>>,
+> {
     pub dst: TRef,
     pub target_layout: vk::ImageLayout,
 }
-impl<T: ImageLike, TRef: DerefMut<Target = RenderImage<T>>> GPUCommandFuture
+impl<T: ImageLike + RenderData, TRef: DerefMut<Target = RenderImage<T>>> GPUCommandFuture
     for EnsureImageLayoutFuture<T, TRef>
 {
     type Output = ();
@@ -159,7 +165,7 @@ impl<T: ImageLike, TRef: DerefMut<Target = RenderImage<T>>> GPUCommandFuture
     }
 }
 
-pub fn ensure_image_layout<T: ImageLike, TRef: DerefMut<Target = RenderImage<T>>>(
+pub fn ensure_image_layout<T: ImageLike + RenderData, TRef: DerefMut<Target = RenderImage<T>>>(
     dst: TRef,
     target_layout: vk::ImageLayout,
 ) -> EnsureImageLayoutFuture<T, TRef> {

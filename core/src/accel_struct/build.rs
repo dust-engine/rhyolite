@@ -3,7 +3,8 @@ use std::{ops::Range, sync::Arc};
 use super::AccelerationStructure;
 use crate::debug::DebugObject;
 use crate::future::{
-    use_shared_state, DisposeContainer, RenderRes, SharedDeviceStateHostContainer,
+    use_shared_state, DisposeContainer, RenderData, RenderRes, SharedDeviceState,
+    SharedDeviceStateHostContainer,
 };
 use crate::HasDevice;
 use crate::{future::GPUCommandFuture, Allocator, BufferLike, ResidentBuffer};
@@ -251,7 +252,10 @@ impl TLASBuildInfo {
     }
 }
 impl TLASBuildInfo {
-    pub fn build_for<T: BufferLike>(mut self, buffer: RenderRes<T>) -> TLASBuildFuture<T> {
+    pub fn build_for<T: BufferLike + RenderData>(
+        mut self,
+        buffer: RenderRes<T>,
+    ) -> TLASBuildFuture<T> {
         self.geometry_info.geometry = vk::AccelerationStructureGeometryDataKHR {
             instances: vk::AccelerationStructureGeometryInstancesDataKHR {
                 array_of_pointers: vk::FALSE,
@@ -282,7 +286,7 @@ impl TLASBuildInfo {
 }
 
 #[pin_project]
-pub struct TLASBuildFuture<T: BufferLike> {
+pub struct TLASBuildFuture<T: BufferLike + RenderData> {
     allocator: Allocator,
     input_buffer: Option<RenderRes<T>>,
     acceleration_structure: Option<RenderRes<AccelerationStructure>>,
@@ -292,7 +296,7 @@ pub struct TLASBuildFuture<T: BufferLike> {
     build_size: vk::AccelerationStructureBuildSizesInfoKHR,
 }
 
-impl<T: BufferLike + Send> GPUCommandFuture for TLASBuildFuture<T> {
+impl<T: BufferLike + Send + RenderData> GPUCommandFuture for TLASBuildFuture<T> {
     type Output = RenderRes<AccelerationStructure>;
     fn record(
         self: std::pin::Pin<&mut Self>,
@@ -323,7 +327,7 @@ impl<T: BufferLike + Send> GPUCommandFuture for TLASBuildFuture<T> {
             |old| old.size() < this.build_size.build_scratch_size,
         );
         this.build_info.scratch_data = vk::DeviceOrHostAddressKHR {
-            device_address: scratch_buffer.device_address(),
+            device_address: scratch_buffer.inner().device_address(),
         };
         this.build_info.p_geometries = this.geometry_info; // Fix link
         let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR {
@@ -343,11 +347,14 @@ impl<T: BufferLike + Send> GPUCommandFuture for TLASBuildFuture<T> {
         });
         std::task::Poll::Ready((
             this.acceleration_structure.take().unwrap(),
-            this.input_buffer.take().unwrap(),
+            (this.input_buffer.take().unwrap(), scratch_buffer),
         ))
     }
 
-    type RetainedState = RenderRes<T>;
+    type RetainedState = (
+        RenderRes<T>,                                 // input buffer
+        RenderRes<SharedDeviceState<ResidentBuffer>>, // scratch buffer
+    );
 
     type RecycledState = Option<SharedDeviceStateHostContainer<ResidentBuffer>>;
 
@@ -363,5 +370,6 @@ impl<T: BufferLike + Send> GPUCommandFuture for TLASBuildFuture<T> {
             vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
             vk::AccessFlags2::MEMORY_READ_KHR,
         );
+        // TODO: indicate read&write on scratch buffer. Rn it's not tracked.
     }
 }

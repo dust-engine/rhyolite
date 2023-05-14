@@ -28,7 +28,12 @@ impl Swapchain {
         let supported_present_modes = surface.get_present_modes(pdevice).unwrap();
         let image_format = config.image_format.unwrap_or_else(|| {
             if config.hdr {
-                get_surface_preferred_format(surface, pdevice, config.required_feature_flags, config.srgb_format)
+                get_surface_preferred_format(
+                    surface,
+                    pdevice,
+                    config.required_feature_flags,
+                    config.srgb_format,
+                )
             } else {
                 vk::SurfaceFormatKHR {
                     format: vk::Format::B8G8R8A8_SRGB,
@@ -275,7 +280,7 @@ pub fn get_surface_preferred_format(
                 color_space_priority,
                 format_priority,
                 linearity_priority,
-                srgb_priority
+                srgb_priority,
             )
         })
         .cloned()
