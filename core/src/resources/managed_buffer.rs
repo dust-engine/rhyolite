@@ -669,7 +669,7 @@ impl ManagedBufferStrategyStagingUnsized {
                 });
 
             let changes = std::mem::take(&mut self.changes);
-            let ordered_change_buffer = staging_buffer.contents_mut().unwrap();
+            let ordered_change_buffer = &mut staging_buffer.contents_mut().unwrap()[0..self.change_buffer.len()];
             {
                 let mut ordered_change_buffer_len = 0;
                 for (_, change_buffer_index) in changes.iter() {
