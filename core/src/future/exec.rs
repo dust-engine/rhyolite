@@ -12,6 +12,7 @@ use std::{
 
 use super::{Disposable, Dispose, GPUCommandFuture};
 
+#[derive(Debug)]
 pub struct ResTrackingInfo {
     pub prev_stage_access: Access,
     pub current_stage_access: Access,
@@ -43,7 +44,7 @@ impl Default for ResTrackingInfo {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TrackingFeedback {
     queue_family: u32,
     queue_index: QueueRef,
@@ -607,11 +608,15 @@ impl StageContext {
             read_stages: stages,
             ..Default::default()
         };
-        let mut tracking = res.tracking_info.borrow_mut();
+        let mut tracking = &mut *res.tracking_info.borrow_mut();
         if tracking.last_accessed_stage_index < self.stage_index
             || tracking.last_accessed_timeline < self.timeline_index
         {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
+
+            // Read after write does not need memory barriers. Therefore old memory access info must be carried forward.
+            tracking.current_stage_access.write_access |= tracking.prev_stage_access.write_access;
+            tracking.current_stage_access.write_stages |= tracking.prev_stage_access.write_stages;
         }
         self.add_barrier_tracking(&mut tracking, &access);
         if tracking.prev_queue_family == self.queue_family_index
@@ -662,11 +667,15 @@ impl StageContext {
             read_stages: stages,
             ..Default::default()
         };
-        let mut tracking = res.tracking_info.borrow_mut();
+        let mut tracking = &mut *res.tracking_info.borrow_mut();
         if tracking.last_accessed_stage_index < self.stage_index
             || tracking.last_accessed_timeline < self.timeline_index
         {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
+
+            // Read after write does not need memory barriers. Therefore old memory access info must be carried forward.
+            tracking.current_stage_access.write_access |= tracking.prev_stage_access.write_access;
+            tracking.current_stage_access.write_stages |= tracking.prev_stage_access.write_stages;
         }
         self.add_barrier_tracking(&mut tracking, &access);
         if tracking.prev_queue_family == self.queue_family_index
@@ -772,13 +781,16 @@ impl StageContext {
             read_stages: stages,
             ..Default::default()
         };
-        let mut tracking = res.res.tracking_info.borrow_mut();
+        let mut tracking = &mut *res.res.tracking_info.borrow_mut();
         if tracking.last_accessed_stage_index < self.stage_index
             || tracking.last_accessed_timeline < self.timeline_index
         {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
             res.old_layout.replace(res.layout.get());
             res.layout.replace(layout);
+            
+            // Read after write does not need memory barriers. Therefore old memory access info must be carried forward.
+            // TODO: However, it's unclear how image layout transfer would impact this. So let's just leave it here for now.
         } else {
             assert_eq!(
                 tracking.queue_family, self.queue_family_index,
@@ -957,10 +969,10 @@ pub struct Access {
 
 impl Access {
     pub fn has_read(&self) -> bool {
-        !self.read_stages.is_empty()
+        !self.read_stages.is_empty() || !self.read_access.is_empty()
     }
     pub fn has_write(&self) -> bool {
-        !self.write_stages.is_empty()
+        !self.write_stages.is_empty() || !self.write_access.is_empty()
     }
     pub fn merge(&self, other: &Self) -> Self {
         Self {
