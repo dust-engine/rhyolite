@@ -2,11 +2,33 @@ use std::ops::Index;
 
 use ash::{prelude::VkResult, vk};
 
-use crate::{HasDevice, ImageLike};
+use crate::{HasDevice, ImageLike, Sampler};
 
 pub trait ImageViewLike: ImageLike {
     fn raw_image_view(&self) -> vk::ImageView;
 }
+
+pub trait ImageViewExt: ImageViewLike {
+    fn as_descriptor(&self, image_layout: vk::ImageLayout) -> vk::DescriptorImageInfo {
+        vk::DescriptorImageInfo {
+            image_layout,
+            image_view: self.raw_image_view(),
+            sampler: vk::Sampler::null(),
+        }
+    }
+    fn as_descriptor_with_sampler(
+        &self,
+        image_layout: vk::ImageLayout,
+        sampler: &Sampler,
+    ) -> vk::DescriptorImageInfo {
+        vk::DescriptorImageInfo {
+            image_layout,
+            image_view: self.raw_image_view(),
+            sampler: unsafe { sampler.raw() },
+        }
+    }
+}
+impl<T> ImageViewExt for T where T: ImageViewLike {}
 
 pub struct ImageView<T: ImageLike> {
     image: T,

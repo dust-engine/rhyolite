@@ -111,6 +111,14 @@ pub trait BufferExt: BufferLike {
         };
         (a, b)
     }
+
+    fn as_descriptor(&self) -> vk::DescriptorBufferInfo {
+        vk::DescriptorBufferInfo {
+            buffer: self.raw_buffer(),
+            offset: self.offset(),
+            range: self.size(),
+        }
+    }
 }
 impl<T: BufferLike> BufferExt for T {}
 // Everyone wants a mutable refence to outer.

@@ -788,7 +788,7 @@ impl StageContext {
             tracking.prev_stage_access = std::mem::take(&mut tracking.current_stage_access);
             res.old_layout.replace(res.layout.get());
             res.layout.replace(layout);
-            
+
             // Read after write does not need memory barriers. Therefore old memory access info must be carried forward.
             // TODO: However, it's unclear how image layout transfer would impact this. So let's just leave it here for now.
         } else {
