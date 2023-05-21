@@ -1,6 +1,7 @@
 use crate::{QueueRef, RunCommandsQueueFuture};
 
 use super::{CommandBufferRecordContext, Disposable, GPUCommandFuture, StageContext};
+use ash::vk;
 use pin_project::pin_project;
 use std::any::Any;
 use std::cell::RefCell;
@@ -497,5 +498,50 @@ pub fn join_vec<T: GPUCommandFuture>(vec: Vec<T>) -> GPUCommandJoinVec<T> {
         inner: vec.into_boxed_slice(),
         results,
         results_taken: false,
+    }
+}
+
+pub fn run<Cmd, Ctx>(command: Cmd, ctx: Ctx) -> InlineCommandFuture<Cmd, Ctx>
+where
+    Ctx: FnOnce(&mut rhyolite::future::StageContext),
+    Cmd: FnOnce(&rhyolite::future::CommandBufferRecordContext, vk::CommandBuffer),
+{
+    InlineCommandFuture {
+        command: Some(command),
+        ctx: Some(ctx),
+    }
+}
+// TODO: group base alignment
+#[pin_project]
+pub struct InlineCommandFuture<Cmd, Ctx>
+where
+    Ctx: FnOnce(&mut rhyolite::future::StageContext),
+    Cmd: FnOnce(&rhyolite::future::CommandBufferRecordContext, vk::CommandBuffer),
+{
+    command: Option<Cmd>,
+    ctx: Option<Ctx>,
+}
+
+impl<Cmd, Ctx> GPUCommandFuture for InlineCommandFuture<Cmd, Ctx>
+where
+    Ctx: FnOnce(&mut rhyolite::future::StageContext),
+    Cmd: FnOnce(&rhyolite::future::CommandBufferRecordContext, vk::CommandBuffer),
+{
+    type Output = ();
+    type RetainedState = ();
+
+    type RecycledState = ();
+
+    fn record(
+        mut self: std::pin::Pin<&mut Self>,
+        ctx: &mut rhyolite::future::CommandBufferRecordContext,
+        recycled_state: &mut Self::RecycledState,
+    ) -> std::task::Poll<(Self::Output, Self::RetainedState)> {
+        ctx.record(self.command.take().unwrap());
+        std::task::Poll::Ready(((), ()))
+    }
+
+    fn context(mut self: std::pin::Pin<&mut Self>, ctx: &mut rhyolite::future::StageContext) {
+        (self.ctx.take().unwrap())(ctx);
     }
 }
