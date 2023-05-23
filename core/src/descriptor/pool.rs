@@ -228,7 +228,7 @@ impl<'a> DescriptorSetWrite<'a> {
         set: vk::DescriptorSet,
         binding: u32,
         array_element: u32,
-        data: &'a [u8],
+        data: &'a [u32],
     ) -> Self {
         Self {
             dst_set: set,
@@ -237,7 +237,7 @@ impl<'a> DescriptorSetWrite<'a> {
             ty: DescriptorSetWriteType::InlineUniformBlock {
                 info: vk::WriteDescriptorSetInlineUniformBlock {
                     p_data: data.as_ptr() as *const _,
-                    data_size: data.len() as u32,
+                    data_size: std::mem::size_of_val(data) as u32,
                     ..Default::default()
                 },
                 data,
@@ -263,7 +263,7 @@ pub enum DescriptorSetWriteType<'a> {
 
     InlineUniformBlock {
         info: vk::WriteDescriptorSetInlineUniformBlock,
-        data: &'a [u8],
+        data: &'a [u32],
     },
 
     AccelerationStructure {
@@ -344,9 +344,10 @@ impl Device {
                     write.p_next = info as *const _ as *const _;
                 }
                 DescriptorSetWriteType::InlineUniformBlock { info, data } => {
-                    write.descriptor_count = data.len() as u32;
-                    info.p_data = (*data).as_ptr() as *const _;
-                    info.data_size = data.len() as u32;
+                    let data: &[u32] = *data;
+                    write.descriptor_count = std::mem::size_of_val(data) as u32;
+                    info.p_data = data.as_ptr() as *const _;
+                    info.data_size = std::mem::size_of_val(data) as u32;
                     write.p_next = info as *const _ as *const _;
                 }
             }
