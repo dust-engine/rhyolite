@@ -783,22 +783,6 @@ impl Allocator {
         Ok(dst_buffer)
     }
 
-    /// Create uninitialized, cached buffer on the host-side
-    pub fn create_readback_buffer(&self, size: vk::DeviceSize) -> VkResult<ResidentBuffer> {
-        let buffer_create_info = vk::BufferCreateInfo {
-            size,
-            usage: vk::BufferUsageFlags::TRANSFER_DST,
-            ..Default::default()
-        };
-        let alloc_info = vk_mem::AllocationCreateInfo {
-            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM
-                | vk_mem::AllocationCreateFlags::MAPPED,
-            usage: vk_mem::MemoryUsage::AutoPreferHost,
-            ..Default::default()
-        };
-        self.create_resident_buffer(&buffer_create_info, &alloc_info)
-    }
-
     pub fn create_staging_buffer(&self, size: vk::DeviceSize) -> VkResult<ResidentBuffer> {
         self.create_resident_buffer(
             &vk::BufferCreateInfo {

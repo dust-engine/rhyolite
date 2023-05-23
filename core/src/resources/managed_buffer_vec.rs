@@ -15,14 +15,14 @@ use crate::{
 use ash::vk;
 use rhyolite::macros::commands;
 
-type ManagedBufferInner =
+type ManagedBufferVecInner =
     Either<PerFrameContainer<ResidentBuffer>, SharedDeviceState<ResidentBuffer>>;
 
-pub enum ManagedBuffer<T> {
-    DirectWrite(ManagedBufferStrategyDirectWrite<T>),
-    StagingBuffer(ManagedBufferStrategyStaging<T>),
+pub enum ManagedBufferVec<T> {
+    DirectWrite(ManagedBufferVecStrategyDirectWrite<T>),
+    StagingBuffer(ManagedBufferVecStrategyStaging<T>),
 }
-impl<T> HasDevice for ManagedBuffer<T> {
+impl<T> HasDevice for ManagedBufferVec<T> {
     fn device(&self) -> &std::sync::Arc<crate::Device> {
         match self {
             Self::DirectWrite(a) => a.allocator.device(),
@@ -31,7 +31,7 @@ impl<T> HasDevice for ManagedBuffer<T> {
     }
 }
 
-impl<T> ManagedBuffer<T> {
+impl<T> ManagedBufferVec<T> {
     pub fn new(
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
@@ -39,12 +39,12 @@ impl<T> ManagedBuffer<T> {
     ) -> Self {
         use crate::PhysicalDeviceMemoryModel::*;
         match allocator.physical_device().memory_model() {
-            ResizableBar | UMA => Self::DirectWrite(ManagedBufferStrategyDirectWrite::new(
+            ResizableBar | UMA => Self::DirectWrite(ManagedBufferVecStrategyDirectWrite::new(
                 allocator,
                 buffer_usage_flags,
                 alignment,
             )),
-            Discrete | Bar => Self::StagingBuffer(ManagedBufferStrategyStaging::new(
+            Discrete | Bar => Self::StagingBuffer(ManagedBufferVecStrategyStaging::new(
                 allocator,
                 buffer_usage_flags,
                 alignment,
@@ -78,7 +78,7 @@ impl<T> ManagedBuffer<T> {
 
     pub fn buffer(
         &mut self,
-    ) -> Option<impl GPUCommandFuture<Output = RenderRes<ManagedBufferInner>>> {
+    ) -> Option<impl GPUCommandFuture<Output = RenderRes<ManagedBufferVecInner>>> {
         let buffer = match self {
             Self::DirectWrite(strategy) => strategy.buffer().map(|b| Either::Left(b)),
             Self::StagingBuffer(strategy) => strategy.buffer().map(|b| Either::Right(b)),
@@ -99,11 +99,11 @@ impl<T> ManagedBuffer<T> {
     }
 }
 
-pub enum ManagedBufferUnsized {
-    DirectWrite(ManagedBufferStrategyDirectWriteUnsized),
-    StagingBuffer(ManagedBufferStrategyStagingUnsized),
+pub enum ManagedBufferVecUnsized {
+    DirectWrite(ManagedBufferVecStrategyDirectWriteUnsized),
+    StagingBuffer(ManagedBufferVecStrategyStagingUnsized),
 }
-impl HasDevice for ManagedBufferUnsized {
+impl HasDevice for ManagedBufferVecUnsized {
     fn device(&self) -> &std::sync::Arc<crate::Device> {
         match self {
             Self::DirectWrite(a) => a.allocator.device(),
@@ -112,7 +112,7 @@ impl HasDevice for ManagedBufferUnsized {
     }
 }
 
-impl ManagedBufferUnsized {
+impl ManagedBufferVecUnsized {
     pub fn new(
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
@@ -121,13 +121,13 @@ impl ManagedBufferUnsized {
     ) -> Self {
         use crate::PhysicalDeviceMemoryModel::*;
         match allocator.physical_device().memory_model() {
-            ResizableBar | UMA => Self::DirectWrite(ManagedBufferStrategyDirectWriteUnsized::new(
+            ResizableBar | UMA => Self::DirectWrite(ManagedBufferVecStrategyDirectWriteUnsized::new(
                 allocator,
                 buffer_usage_flags,
                 layout,
                 base_alignment,
             )),
-            Discrete | Bar => Self::StagingBuffer(ManagedBufferStrategyStagingUnsized::new(
+            Discrete | Bar => Self::StagingBuffer(ManagedBufferVecStrategyStagingUnsized::new(
                 allocator,
                 buffer_usage_flags,
                 layout,
@@ -183,7 +183,7 @@ impl ManagedBufferUnsized {
     }
 }
 
-pub struct ManagedBufferStrategyDirectWrite<T> {
+pub struct ManagedBufferVecStrategyDirectWrite<T> {
     allocator: Allocator,
     buffer_usage_flags: vk::BufferUsageFlags,
     buffers: PerFrameState<ResidentBuffer>,
@@ -191,7 +191,7 @@ pub struct ManagedBufferStrategyDirectWrite<T> {
     changeset: BTreeMap<vk::Buffer, BTreeSet<usize>>,
     alignment: u32,
 }
-impl<T> ManagedBufferStrategyDirectWrite<T> {
+impl<T> ManagedBufferVecStrategyDirectWrite<T> {
     pub fn new(
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
@@ -286,7 +286,7 @@ impl<T> ManagedBufferStrategyDirectWrite<T> {
     }
 }
 
-pub struct ManagedBufferStrategyDirectWriteUnsized {
+pub struct ManagedBufferVecStrategyDirectWriteUnsized {
     base_alignment: usize,
     layout: Layout,
     allocator: Allocator,
@@ -296,7 +296,7 @@ pub struct ManagedBufferStrategyDirectWriteUnsized {
     num_items: usize,
     changeset: BTreeMap<vk::Buffer, BTreeSet<usize>>,
 }
-impl ManagedBufferStrategyDirectWriteUnsized {
+impl ManagedBufferVecStrategyDirectWriteUnsized {
     pub fn new(
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
@@ -419,7 +419,7 @@ impl ManagedBufferStrategyDirectWriteUnsized {
     }
 }
 
-pub struct ManagedBufferStrategyStaging<T> {
+pub struct ManagedBufferVecStrategyStaging<T> {
     allocator: Allocator,
     buffer_usage_flags: vk::BufferUsageFlags,
 
@@ -429,7 +429,7 @@ pub struct ManagedBufferStrategyStaging<T> {
     num_items: usize,
     alignment: u32,
 }
-impl<T> ManagedBufferStrategyStaging<T> {
+impl<T> ManagedBufferVecStrategyStaging<T> {
     pub fn new(
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,
@@ -549,7 +549,7 @@ impl<T> ManagedBufferStrategyStaging<T> {
     }
 }
 
-pub struct ManagedBufferStrategyStagingUnsized {
+pub struct ManagedBufferVecStrategyStagingUnsized {
     layout: Layout,
     allocator: Allocator,
     buffer_usage_flags: vk::BufferUsageFlags,
@@ -563,7 +563,7 @@ pub struct ManagedBufferStrategyStagingUnsized {
     num_items: usize,
     base_alignment: usize,
 }
-impl ManagedBufferStrategyStagingUnsized {
+impl ManagedBufferVecStrategyStagingUnsized {
     pub fn new(
         allocator: Allocator,
         buffer_usage_flags: vk::BufferUsageFlags,

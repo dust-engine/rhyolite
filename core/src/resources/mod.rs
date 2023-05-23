@@ -6,8 +6,8 @@ pub use copy::*;
 pub use image::*;
 mod image_view;
 pub use image_view::*;
-mod managed_buffer;
-pub use managed_buffer::*;
+mod managed_buffer_vec;
+pub use managed_buffer_vec::*;
 
 #[derive(Clone)]
 pub enum SharingMode<'a> {

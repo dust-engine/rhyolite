@@ -24,6 +24,27 @@ unsafe impl<T> Sync for SharedDeviceStateInner<T> {}
 
 pub struct SharedDeviceStateHostContainer<T>(Arc<SharedDeviceStateInner<T>>);
 
+impl<T> SharedDeviceStateHostContainer<T> {
+    pub fn new(item: T) -> Self {
+        Self(Arc::new(SharedDeviceStateInner {
+            item,
+            tracking_feedback: Default::default(),
+            fetched: AtomicBool::new(false),
+        }))
+    }
+    pub fn fetch(&mut self) -> RenderRes<SharedDeviceState<T>> {
+        let inner = &mut self.0;
+
+        inner
+            .fetched
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        RenderRes::with_feedback(
+            SharedDeviceState(inner.clone()),
+            &inner.get_tracking_feedback(),
+        )
+    }
+}
+
 /// Indicates shared resource access on the device-side only.
 /// It is safe to implement ImageLike and BufferLike, because
 /// it is implied that at any given time, only one submission
