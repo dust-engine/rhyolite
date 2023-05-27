@@ -90,7 +90,7 @@ impl<T: ImageLike> ImageLike for ImageSubregion<T> {
 pub struct ResidentImage {
     allocator: Allocator,
     image: vk::Image,
-    allocation: vk_mem::Allocation,
+    allocation: vma::Allocation,
     extent: vk::Extent3D,
     format: vk::Format,
     level_count: u32,
@@ -184,7 +184,7 @@ impl Allocator {
         &self,
         image_request: &ImageRequest,
     ) -> VkResult<ResidentImage> {
-        use vk_mem::Alloc;
+        use vma::Alloc;
         let mut build_info = vk::ImageCreateInfo {
             flags: vk::ImageCreateFlags::empty(),
             image_type: image_request.image_type,
@@ -208,9 +208,9 @@ impl Allocator {
             }
             _ => (),
         };
-        let create_info = vk_mem::AllocationCreateInfo {
-            flags: vk_mem::AllocationCreateFlags::empty(),
-            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+        let create_info = vma::AllocationCreateInfo {
+            flags: vma::AllocationCreateFlags::empty(),
+            usage: vma::MemoryUsage::AutoPreferDevice,
             ..Default::default()
         };
         let (image, allocation) = unsafe { self.inner().create_image(&build_info, &create_info) }?;

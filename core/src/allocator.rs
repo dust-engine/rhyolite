@@ -5,7 +5,7 @@ use ash::vk;
 
 struct AllocatorInner {
     // This needs to be defined before device, so that it gets dropped hefore device gets dropped.
-    inner: vk_mem::Allocator,
+    inner: vma::Allocator,
     device: Arc<Device>,
 }
 
@@ -13,12 +13,12 @@ struct AllocatorInner {
 pub struct Allocator(Arc<AllocatorInner>);
 
 impl Allocator {
-    pub fn inner(&self) -> &vk_mem::Allocator {
+    pub fn inner(&self) -> &vma::Allocator {
         &self.0.inner
     }
     pub fn new(device: Arc<Device>) -> Self {
-        let mut allocator_flags: vk_mem::AllocatorCreateFlags =
-            vk_mem::AllocatorCreateFlags::empty();
+        let mut allocator_flags: vma::AllocatorCreateFlags =
+            vma::AllocatorCreateFlags::empty();
         if device
             .physical_device()
             .features()
@@ -26,11 +26,11 @@ impl Allocator {
             .buffer_device_address
             == vk::TRUE
         {
-            allocator_flags |= vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+            allocator_flags |= vma::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
         }
 
-        let allocator = vk_mem::Allocator::new(
-            vk_mem::AllocatorCreateInfo::new(
+        let allocator = vma::Allocator::new(
+            vma::AllocatorCreateInfo::new(
                 device.instance().as_ref(),
                 device.as_ref(),
                 device.physical_device().raw(),

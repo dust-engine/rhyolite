@@ -10,7 +10,6 @@ use crate::HasDevice;
 use crate::{future::GPUCommandFuture, Allocator, BufferLike, ResidentBuffer};
 use ash::vk;
 use pin_project::pin_project;
-use vk_mem::Alloc;
 
 pub struct AccelerationStructureBuild {
     pub accel_struct: AccelerationStructure,

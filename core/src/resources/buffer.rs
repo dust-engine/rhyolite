@@ -15,7 +15,7 @@ use crate::{
     utils::either::Either,
     Allocator, HasDevice, PhysicalDeviceMemoryModel, SharingMode,
 };
-use vk_mem::Alloc;
+use vma::Alloc;
 
 pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
@@ -335,7 +335,7 @@ pub fn fill_buffer<T: BufferLike + RenderData, TRef: DerefMut<Target = RenderRes
 pub struct ResidentBuffer {
     allocator: Allocator,
     buffer: vk::Buffer,
-    allocation: vk_mem::Allocation,
+    allocation: vma::Allocation,
     size: vk::DeviceSize,
 }
 impl RenderData for ResidentBuffer {}
@@ -427,7 +427,7 @@ impl Allocator {
     pub fn create_resident_buffer(
         &self,
         buffer_info: &vk::BufferCreateInfo,
-        create_info: &vk_mem::AllocationCreateInfo,
+        create_info: &vma::AllocationCreateInfo,
     ) -> VkResult<ResidentBuffer> {
         let staging_buffer = unsafe { self.inner().create_buffer(buffer_info, create_info)? };
         Ok(ResidentBuffer {
@@ -440,7 +440,7 @@ impl Allocator {
     pub fn create_resident_buffer_aligned(
         &self,
         buffer_info: &vk::BufferCreateInfo,
-        create_info: &vk_mem::AllocationCreateInfo,
+        create_info: &vma::AllocationCreateInfo,
         alignment: u32,
     ) -> VkResult<ResidentBuffer> {
         let staging_buffer = unsafe {
@@ -466,10 +466,10 @@ impl Allocator {
             usage,
             ..Default::default()
         };
-        let alloc_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::AutoPreferDevice,
-            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                | vk_mem::AllocationCreateFlags::MAPPED,
+        let alloc_info = vma::AllocationCreateInfo {
+            usage: vma::MemoryUsage::AutoPreferDevice,
+            flags: vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                | vma::AllocationCreateFlags::MAPPED,
             required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL
                 | vk::MemoryPropertyFlags::HOST_VISIBLE,
             ..Default::default()
@@ -489,10 +489,10 @@ impl Allocator {
             usage,
             ..Default::default()
         };
-        let alloc_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::AutoPreferDevice,
-            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                | vk_mem::AllocationCreateFlags::MAPPED,
+        let alloc_info = vma::AllocationCreateInfo {
+            usage: vma::MemoryUsage::AutoPreferDevice,
+            flags: vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                | vma::AllocationCreateFlags::MAPPED,
             required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL
                 | vk::MemoryPropertyFlags::HOST_VISIBLE,
             ..Default::default()
@@ -523,8 +523,8 @@ impl Allocator {
             usage,
             ..Default::default()
         };
-        let alloc_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+        let alloc_info = vma::AllocationCreateInfo {
+            usage: vma::MemoryUsage::AutoPreferDevice,
             ..Default::default()
         };
         self.create_resident_buffer(&buffer_create_info, &alloc_info)
@@ -541,8 +541,8 @@ impl Allocator {
             usage,
             ..Default::default()
         };
-        let alloc_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+        let alloc_info = vma::AllocationCreateInfo {
+            usage: vma::MemoryUsage::AutoPreferDevice,
             ..Default::default()
         };
         let (buffer, allocation) = unsafe {
@@ -585,10 +585,10 @@ impl Allocator {
             | PhysicalDeviceMemoryModel::ResizableBar => {
                 let buf = self.create_resident_buffer(
                     &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::MAPPED
-                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    &vma::AllocationCreateInfo {
+                        flags: vma::AllocationCreateFlags::MAPPED
+                            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vma::MemoryUsage::AutoPreferDevice,
                         required_flags: vk::MemoryPropertyFlags::empty(),
                         preferred_flags: vk::MemoryPropertyFlags::empty(),
                         memory_type_bits: 0,
@@ -602,10 +602,10 @@ impl Allocator {
                 create_info.usage |= vk::BufferUsageFlags::TRANSFER_SRC;
                 let dst_buffer = self.create_resident_buffer(
                     &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::MAPPED
-                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                        usage: vk_mem::MemoryUsage::AutoPreferHost,
+                    &vma::AllocationCreateInfo {
+                        flags: vma::AllocationCreateFlags::MAPPED
+                            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vma::MemoryUsage::AutoPreferHost,
                         ..Default::default()
                     },
                 )?;
@@ -633,10 +633,10 @@ impl Allocator {
             | PhysicalDeviceMemoryModel::ResizableBar => unsafe {
                 let (buf, alloc) = self.inner().create_buffer_with_alignment(
                     &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::MAPPED
-                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    &vma::AllocationCreateInfo {
+                        flags: vma::AllocationCreateFlags::MAPPED
+                            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vma::MemoryUsage::AutoPreferDevice,
                         required_flags: vk::MemoryPropertyFlags::empty(),
                         preferred_flags: vk::MemoryPropertyFlags::empty(),
                         memory_type_bits: 0,
@@ -656,10 +656,10 @@ impl Allocator {
                 create_info.usage |= vk::BufferUsageFlags::TRANSFER_SRC;
                 let (buffer, allocation) = self.inner().create_buffer_with_alignment(
                     &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::MAPPED
-                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                        usage: vk_mem::MemoryUsage::AutoPreferHost,
+                    &vma::AllocationCreateInfo {
+                        flags: vma::AllocationCreateFlags::MAPPED
+                            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vma::MemoryUsage::AutoPreferHost,
                         ..Default::default()
                     },
                     alignment,
@@ -699,10 +699,10 @@ impl Allocator {
             | PhysicalDeviceMemoryModel::ResizableBar => {
                 let buf = self.create_resident_buffer_aligned(
                     &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::MAPPED
-                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    &vma::AllocationCreateInfo {
+                        flags: vma::AllocationCreateFlags::MAPPED
+                            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vma::MemoryUsage::AutoPreferDevice,
                         required_flags: vk::MemoryPropertyFlags::empty(),
                         preferred_flags: vk::MemoryPropertyFlags::empty(),
                         memory_type_bits: 0,
@@ -717,9 +717,9 @@ impl Allocator {
                 create_info.usage |= vk::BufferUsageFlags::TRANSFER_DST;
                 let dst_buffer = self.create_resident_buffer_aligned(
                     &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::empty(),
-                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    &vma::AllocationCreateInfo {
+                        flags: vma::AllocationCreateFlags::empty(),
+                        usage: vma::MemoryUsage::AutoPreferDevice,
                         ..Default::default()
                     },
                     alignment,
@@ -755,10 +755,10 @@ impl Allocator {
             PhysicalDeviceMemoryModel::UMA | PhysicalDeviceMemoryModel::ResizableBar => {
                 let buf = self.create_resident_buffer(
                     &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::MAPPED
-                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    &vma::AllocationCreateInfo {
+                        flags: vma::AllocationCreateFlags::MAPPED
+                            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vma::MemoryUsage::AutoPreferDevice,
                         required_flags: vk::MemoryPropertyFlags::empty(),
                         preferred_flags: vk::MemoryPropertyFlags::empty(),
                         memory_type_bits: 0,
@@ -772,9 +772,9 @@ impl Allocator {
                 create_info.usage |= vk::BufferUsageFlags::TRANSFER_DST;
                 let dst_buffer = self.create_resident_buffer(
                     &create_info,
-                    &vk_mem::AllocationCreateInfo {
-                        flags: vk_mem::AllocationCreateFlags::empty(),
-                        usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    &vma::AllocationCreateInfo {
+                        flags: vma::AllocationCreateFlags::empty(),
+                        usage: vma::MemoryUsage::AutoPreferDevice,
                         ..Default::default()
                     },
                 )?;
@@ -791,10 +791,10 @@ impl Allocator {
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 ..Default::default()
             },
-            &vk_mem::AllocationCreateInfo {
-                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                    | vk_mem::AllocationCreateFlags::MAPPED,
-                usage: vk_mem::MemoryUsage::AutoPreferHost,
+            &vma::AllocationCreateInfo {
+                flags: vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                    | vma::AllocationCreateFlags::MAPPED,
+                usage: vma::MemoryUsage::AutoPreferHost,
                 ..Default::default()
             },
         )
