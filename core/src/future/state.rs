@@ -50,6 +50,13 @@ impl<T> SharedDeviceStateHostContainer<T> {
 /// it is implied that at any given time, only one submission
 /// may hold a SharedDeviceState<T>.
 pub struct SharedDeviceState<T>(Arc<SharedDeviceStateInner<T>>);
+impl<T> SharedDeviceState<T> {
+    pub fn reused(&self) -> bool {
+        unsafe {
+            (&mut *self.0.tracking_feedback.get()).reused
+        }
+    }
+}
 impl<T> RenderData for SharedDeviceState<T> {
     fn tracking_feedback(&mut self, feedback: &super::TrackingFeedback) {
         assert!(self.0.fetched.load(std::sync::atomic::Ordering::Relaxed));
@@ -187,34 +194,7 @@ pub fn use_shared_image<T>(
         RenderImage::new(SharedDeviceState(this.as_ref().unwrap().0.clone()), layout)
     }
 }
-/*
-pub fn use_shared_state_initialized<'a, T, Fut: GPUCommandFuture<Output = RenderRes<T>>>(
-    this: &'a mut Option<SharedDeviceStateHostContainer<T>>,
-    create: impl FnOnce(Option<&T>) -> Fut + 'a,
-    should_update: impl FnOnce(&T) -> bool + 'a,
-) -> impl GPUCommandFuture<Output = RenderRes<SharedDeviceState<T>>> + 'a
-where
-    Fut::RetainedState: 'a,
-    Fut::RecycledState: 'a,
-{
-    commands! { move
-        if let Some(inner) = this {
-            let inner = &mut inner.0;
-            if should_update(&inner.item) {
-                let res = create(Some(&inner.item)).await.map(|a| Arc::new(a));
-                *inner = res.inner().clone();
-                res.map(|a| SharedDeviceState(a))
-            } else {
-                RenderRes::new(SharedDeviceState(inner.clone()))
-            }
-        } else {
-            let res = create(None).await.map(|a| Arc::new(a));
-            *this = Some(SharedDeviceStateHostContainer(res.inner().clone()));
-            res.map(|a| SharedDeviceState(a))
-        }
-    }
-}
-*/
+
 /// Returns (new, old)
 pub fn use_shared_state_with_old<T>(
     this: &mut Option<SharedDeviceStateHostContainer<T>>,
@@ -268,12 +248,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 
 use ash::vk;
+use macros::commands;
 
 use crate::BufferLike;
 use crate::HasDevice;
 use crate::ImageLike;
 use crate::ImageViewLike;
 
+use super::GPUCommandFuture;
 use super::RenderData;
 use super::RenderImage;
 use super::RenderRes;

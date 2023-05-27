@@ -72,12 +72,17 @@ impl<T: BufferLike + ?Sized> BufferLike for Box<T> {
     }
 }
 
-pub struct BufferSliceMut<'a, T: BufferLike> {
-    buffer: &'a T,
+pub struct BufferSlice<T: BufferLike> {
+    buffer: T,
     offset: u64,
     size: u64,
 }
-impl<'a, T: BufferLike> BufferLike for BufferSliceMut<'a, T> {
+impl<T: BufferLike + RenderData> RenderData for BufferSlice<T> {
+    fn tracking_feedback(&mut self, feedback: &crate::future::TrackingFeedback) {
+        self.buffer.tracking_feedback(feedback);
+    }
+}
+impl<T: BufferLike> BufferLike for BufferSlice<T> {
     fn raw_buffer(&self) -> vk::Buffer {
         self.buffer.raw_buffer()
     }
@@ -95,21 +100,17 @@ impl<'a, T: BufferLike> BufferLike for BufferSliceMut<'a, T> {
 }
 
 pub trait BufferExt: BufferLike {
-    fn split_at_mut(&mut self, n: u64) -> (BufferSliceMut<Self>, BufferSliceMut<Self>)
+    fn slice(self, offset: u64, size: u64) -> BufferSlice<Self>
     where
         Self: Sized,
     {
-        let a = BufferSliceMut {
+        assert!(offset + size <= self.size());
+        let offset = self.offset() + offset;
+        BufferSlice {
             buffer: self,
-            offset: self.offset(),
-            size: n,
-        };
-        let b = BufferSliceMut {
-            buffer: self,
-            offset: self.offset() + n,
-            size: self.size() - n,
-        };
-        (a, b)
+            offset,
+            size,
+        }
     }
 
     fn as_descriptor(&self) -> vk::DescriptorBufferInfo {

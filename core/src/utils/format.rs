@@ -483,6 +483,12 @@ impl ColorSpacePrimaries {
         if self == other_color_space {
             return glam::Mat3::IDENTITY;
         }
+        if self == &ColorSpaceType::DCI_P3.primaries() {
+            return other_color_space.to_xyz().inverse()
+        }
+        if other_color_space == &ColorSpaceType::DCI_P3.primaries() {
+            return self.to_xyz()
+        }
         other_color_space.to_xyz().inverse() * self.to_xyz()
     }
 }

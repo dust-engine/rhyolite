@@ -46,10 +46,11 @@ impl Default for ResTrackingInfo {
 
 #[derive(Clone, Debug)]
 pub struct TrackingFeedback {
-    queue_family: u32,
-    queue_index: QueueRef,
-    access: Access,
-    layout: vk::ImageLayout,
+    pub queue_family: u32,
+    pub queue_index: QueueRef,
+    pub access: Access,
+    pub layout: vk::ImageLayout,
+    pub reused: bool
 }
 impl Default for TrackingFeedback {
     fn default() -> Self {
@@ -58,6 +59,7 @@ impl Default for TrackingFeedback {
             queue_index: QueueRef::null(),
             access: Access::default(),
             layout: vk::ImageLayout::UNDEFINED,
+            reused: false,
         }
     }
 }
@@ -107,6 +109,7 @@ impl<T: RenderData> Disposable for RenderRes<T> {
             queue_index: tracking.queue_index,
             access: tracking.current_stage_access.clone(),
             layout: vk::ImageLayout::UNDEFINED,
+            reused: true
         });
     }
     fn dispose(self) {
@@ -153,6 +156,16 @@ impl<T: RenderData> RenderRes<T> {
             tracking_info: self.tracking_info,
             dispose_marker: Dispose::new(),
         }
+    }
+    pub fn take(self) -> (RenderRes<()>, T) {
+        self.dispose_marker.dispose();
+        let item = self.inner;
+        let res = RenderRes {
+            inner: (),
+            tracking_info: self.tracking_info,
+            dispose_marker: Dispose::new(),
+        };
+        (res, item)
     }
     pub fn merge<O: RenderData>(self, other: RenderRes<O>) -> RenderRes<(T, O)> {
         let self_tracking = self.tracking_info.borrow();
@@ -232,6 +245,7 @@ impl<T: RenderData> Disposable for RenderImage<T> {
             queue_index: tracking.queue_index,
             access: tracking.current_stage_access.clone(),
             layout: self.layout.get(),
+            reused: true
         });
     }
     fn dispose(self) {
