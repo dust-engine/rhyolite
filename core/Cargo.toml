@@ -15,11 +15,12 @@ ash-window = "0.12"
 raw-window-handle = "0.5"
 tracing = "0.1"
 rhyolite-macro = { path = "../macro", version = "0.1.0" }
-vma = "0.3"
+vma = { path = "../../vk-mem-rs" }
 blocking = "1.2"
 pin-project = "1.0"
 cstr = "0.2"
 crossbeam-channel = "0.5"
+crossbeam-queue = "0.3"
 event-listener = "2.5.1"
 bytemuck = "1.13"
 glam = "0.24"

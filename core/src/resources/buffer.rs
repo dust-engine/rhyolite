@@ -24,6 +24,8 @@ pub trait BufferLike {
     }
     fn size(&self) -> vk::DeviceSize;
     fn device_address(&self) -> vk::DeviceAddress;
+    /// If the buffer is host visible and mapped, this function returns the host-side address.
+    fn as_mut_ptr(&mut self) -> Option<*mut ()>;
 }
 
 impl<A: BufferLike, B: BufferLike> BufferLike for Either<A, B> {
@@ -53,6 +55,12 @@ impl<A: BufferLike, B: BufferLike> BufferLike for Either<A, B> {
             Either::Right(a) => a.device_address(),
         }
     }
+    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+        match self {
+            Either::Left(a) => a.as_mut_ptr(),
+            Either::Right(a) => a.as_mut_ptr(),
+        }
+    }
 }
 
 impl<T: BufferLike + ?Sized> BufferLike for Box<T> {
@@ -69,6 +77,9 @@ impl<T: BufferLike + ?Sized> BufferLike for Box<T> {
 
     fn device_address(&self) -> vk::DeviceAddress {
         (**self).device_address()
+    }
+    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+        (**self).as_mut_ptr()
     }
 }
 
@@ -96,6 +107,11 @@ impl<T: BufferLike> BufferLike for BufferSlice<T> {
     }
     fn offset(&self) -> vk::DeviceSize {
         self.offset
+    }
+    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+        self.buffer
+            .as_mut_ptr()
+            .map(|a| unsafe { a.add(self.offset as usize) })
     }
 }
 
@@ -387,6 +403,15 @@ impl BufferLike for ResidentBuffer {
                     buffer: self.buffer,
                     ..Default::default()
                 })
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+        let info = self.allocator.inner().get_allocation_info(&self.allocation);
+        if info.mapped_data.is_null() {
+            None
+        } else {
+            Some(info.mapped_data as *mut ())
         }
     }
 }

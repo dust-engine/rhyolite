@@ -50,7 +50,7 @@ pub struct TrackingFeedback {
     pub queue_index: QueueRef,
     pub access: Access,
     pub layout: vk::ImageLayout,
-    pub reused: bool
+    pub reused: bool,
 }
 impl Default for TrackingFeedback {
     fn default() -> Self {
@@ -109,7 +109,7 @@ impl<T: RenderData> Disposable for RenderRes<T> {
             queue_index: tracking.queue_index,
             access: tracking.current_stage_access.clone(),
             layout: vk::ImageLayout::UNDEFINED,
-            reused: true
+            reused: true,
         });
     }
     fn dispose(self) {
@@ -245,7 +245,7 @@ impl<T: RenderData> Disposable for RenderImage<T> {
             queue_index: tracking.queue_index,
             access: tracking.current_stage_access.clone(),
             layout: self.layout.get(),
-            reused: true
+            reused: true,
         });
     }
     fn dispose(self) {
@@ -451,6 +451,9 @@ impl BufferLike for StageContextBuffer {
         self.offset
     }
     fn device_address(&self) -> vk::DeviceAddress {
+        unimplemented!()
+    }
+    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
         unimplemented!()
     }
 }

@@ -10,15 +10,17 @@ struct AllocatorInner {
 }
 
 #[derive(Clone)]
-pub struct Allocator(Arc<AllocatorInner>);
+pub struct Allocator {
+    pub(crate) inner: Arc<vma::Allocator>,
+    device: Arc<Device>,
+}
 
 impl Allocator {
     pub fn inner(&self) -> &vma::Allocator {
-        &self.0.inner
+        &self.inner
     }
     pub fn new(device: Arc<Device>) -> Self {
-        let mut allocator_flags: vma::AllocatorCreateFlags =
-            vma::AllocatorCreateFlags::empty();
+        let mut allocator_flags: vma::AllocatorCreateFlags = vma::AllocatorCreateFlags::empty();
         if device
             .physical_device()
             .features()
@@ -39,15 +41,15 @@ impl Allocator {
             .flags(allocator_flags),
         )
         .unwrap();
-        Self(Arc::new(AllocatorInner {
-            inner: allocator,
+        Self {
+            inner: Arc::new(allocator),
             device,
-        }))
+        }
     }
 }
 
 impl HasDevice for Allocator {
     fn device(&self) -> &Arc<Device> {
-        &self.0.device
+        &self.device
     }
 }

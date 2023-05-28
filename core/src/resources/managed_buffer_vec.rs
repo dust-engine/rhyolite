@@ -121,12 +121,14 @@ impl ManagedBufferVecUnsized {
     ) -> Self {
         use crate::PhysicalDeviceMemoryModel::*;
         match allocator.physical_device().memory_model() {
-            ResizableBar | UMA => Self::DirectWrite(ManagedBufferVecStrategyDirectWriteUnsized::new(
-                allocator,
-                buffer_usage_flags,
-                layout,
-                base_alignment,
-            )),
+            ResizableBar | UMA => {
+                Self::DirectWrite(ManagedBufferVecStrategyDirectWriteUnsized::new(
+                    allocator,
+                    buffer_usage_flags,
+                    layout,
+                    base_alignment,
+                ))
+            }
             Discrete | Bar => Self::StagingBuffer(ManagedBufferVecStrategyStagingUnsized::new(
                 allocator,
                 buffer_usage_flags,

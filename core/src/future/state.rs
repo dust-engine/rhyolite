@@ -52,9 +52,7 @@ impl<T> SharedDeviceStateHostContainer<T> {
 pub struct SharedDeviceState<T>(Arc<SharedDeviceStateInner<T>>);
 impl<T> SharedDeviceState<T> {
     pub fn reused(&self) -> bool {
-        unsafe {
-            (&mut *self.0.tracking_feedback.get()).reused
-        }
+        unsafe { (&mut *self.0.tracking_feedback.get()).reused }
     }
 }
 impl<T> RenderData for SharedDeviceState<T> {
@@ -112,6 +110,12 @@ impl<T: BufferLike> BufferLike for SharedDeviceState<T> {
     }
     fn device_address(&self) -> ash::vk::DeviceAddress {
         self.0.item.device_address()
+    }
+    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+        panic!(
+            "SharedDeviceState<{}> cannot be used on the host!",
+            std::any::type_name::<T>()
+        )
     }
 }
 impl<T: ImageViewLike> ImageViewLike for SharedDeviceState<T> {
@@ -401,6 +405,9 @@ impl<T: BufferLike> BufferLike for PerFrameContainer<T> {
     }
     fn device_address(&self) -> ash::vk::DeviceAddress {
         self.item.as_ref().unwrap().device_address()
+    }
+    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+        self.item.as_mut().unwrap().as_mut_ptr()
     }
 }
 impl<T: ImageViewLike> ImageViewLike for PerFrameContainer<T> {
