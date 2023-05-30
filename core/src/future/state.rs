@@ -112,10 +112,7 @@ impl<T: BufferLike> BufferLike for SharedDeviceState<T> {
         self.0.item.device_address()
     }
     fn as_mut_ptr(&mut self) -> Option<*mut ()> {
-        panic!(
-            "SharedDeviceState<{}> cannot be used on the host!",
-            std::any::type_name::<T>()
-        )
+        None
     }
 }
 impl<T: ImageViewLike> ImageViewLike for SharedDeviceState<T> {

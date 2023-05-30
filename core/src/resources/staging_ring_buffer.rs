@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     copy_buffer,
-    future::{GPUCommandFuture, RenderData, RenderRes},
+    future::{GPUCommandFuture, RenderData, RenderRes, Disposable},
     Allocator, BufferLike, Device, HasDevice, PhysicalDeviceMemoryModel,
 };
 use ash::{prelude::VkResult, vk};
@@ -21,6 +21,9 @@ struct StagingRingBufferBlock {
     memory: vk::DeviceMemory,
     ptr: *mut (),
 }
+
+unsafe impl Send for StagingRingBufferBlock{}
+unsafe impl Sync for StagingRingBufferBlock{}
 impl Drop for StagingRingBufferBlock {
     fn drop(&mut self) {
         if self.buffer != vk::Buffer::null() {
@@ -60,6 +63,8 @@ pub struct StagingRingBufferSlice {
     size: vk::DeviceSize,
     ptr: *mut (),
 }
+unsafe impl Send for StagingRingBufferSlice{}
+unsafe impl Sync for StagingRingBufferSlice{}
 impl Drop for StagingRingBufferSlice {
     fn drop(&mut self) {
         unsafe {
@@ -167,6 +172,7 @@ impl StagingRingBuffer {
             },
             None,
         )?;
+        self.device.bind_buffer_memory(block.buffer, block.memory, 0)?;
         block.ptr = self.device.map_memory(
             block.memory,
             0,
@@ -231,11 +237,11 @@ impl StagingRingBuffer {
     /// Update buffer with host-side data.
     /// If the buffer is host visible and mapped, this function will directly write to it.
     /// Otherwise, we use the staging ring buffer.
-    pub fn update_data<'a>(
+    pub fn update_buffer<'a>(
         self: &'a Arc<Self>,
         buffer: &'a mut RenderRes<impl BufferLike + RenderData>,
         data: &'a [u8],
-    ) -> impl GPUCommandFuture<Output = ()> + 'a {
+    ) -> impl GPUCommandFuture<Output = (), RetainedState: 'static + Disposable, RecycledState: 'static + Default> + 'a {
         commands! {
             if let Some(ptr) = buffer.inner_mut().as_mut_ptr() {
                 // Buffer can be directly written into
@@ -250,6 +256,7 @@ impl StagingRingBuffer {
             }
             let staging_buffer = RenderRes::new(staging_buffer);
             copy_buffer(&staging_buffer, buffer).await;
+            retain!(staging_buffer);
         }
     }
 }

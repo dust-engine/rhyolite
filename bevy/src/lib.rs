@@ -152,6 +152,7 @@ impl Plugin for RenderPlugin {
             .insert_resource(queues)
             .insert_resource(QueuesRouter::new(queues_router))
             .insert_resource(Allocator::new(allocator))
+            .init_resource::<StagingRingBuffer>()
             .insert_non_send_resource(swapchain::NonSendResource::default())
             .add_systems(
                 Update,

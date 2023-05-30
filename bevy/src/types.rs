@@ -1,6 +1,6 @@
 use std::{ops::Deref, sync::Arc};
 
-use bevy_ecs::system::Resource;
+use bevy_ecs::{system::Resource, world::FromWorld};
 
 #[derive(Resource, Clone)]
 pub struct Allocator(rhyolite::Allocator);
@@ -67,5 +67,20 @@ pub struct PipelineCache(Arc<rhyolite::PipelineCache>);
 impl PipelineCache {
     pub fn inner(&self) -> &Arc<rhyolite::PipelineCache> {
         &self.0
+    }
+}
+
+#[derive(Resource, Clone)]
+pub struct StagingRingBuffer(Arc<rhyolite::StagingRingBuffer>);
+impl Deref for StagingRingBuffer {
+    type Target = Arc<rhyolite::StagingRingBuffer>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl FromWorld for StagingRingBuffer {
+    fn from_world(world: &mut bevy_ecs::world::World) -> Self {
+        let device: &Device = world.resource();
+        Self(Arc::new(rhyolite::StagingRingBuffer::new(device.inner().clone()).unwrap()))
     }
 }

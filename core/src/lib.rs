@@ -10,7 +10,7 @@
 #![feature(let_chains)]
 #![feature(int_roundings)]
 #![feature(unsized_locals)]
-#![feature(unsized_fn_params)]
+#![feature(associated_type_bounds)]
 
 pub use bytemuck::offset_of;
 pub use cstr::cstr;
