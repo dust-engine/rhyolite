@@ -1,7 +1,7 @@
 use ash::{prelude::VkResult, vk};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, ffi::c_void};
 
-use crate::{Device, HasDevice, ImageLike, PipelineLayout};
+use crate::{Device, HasDevice, PipelineLayout};
 
 pub struct DescriptorPool {
     device: Arc<Device>,
@@ -49,6 +49,8 @@ impl DescriptorPool {
         let mut desc_types: BTreeMap<vk::DescriptorType, u32> = BTreeMap::new();
         let mut max_sets: u32 = 0;
         let mut device: Option<Arc<Device>> = None;
+
+        let mut inline_uniform_block_create_info = vk::DescriptorPoolInlineUniformBlockCreateInfo::default();
         for pipeline_layout in layouts.into_iter() {
             let pipeline_layout = pipeline_layout.deref();
             max_sets += pipeline_layout.desc_sets().len() as u32;
@@ -61,9 +63,19 @@ impl DescriptorPool {
                 for binding in desc_set_layout.binding_infos.iter() {
                     if binding.immutable_samplers.is_empty() {
                         let count = desc_types.entry(binding.descriptor_type).or_insert(0);
-                        *count += binding.descriptor_count;
+                        if binding.descriptor_type == vk::DescriptorType::INLINE_UNIFORM_BLOCK {
+                            // We take the next multiple of 8 here because on AMD, descriptor pool allocations seem
+                            // to be aligned to the 8 byte boundary. See
+                            // https://gist.github.com/Neo-Zhixing/992a0e789e34b59285026dd8161b9112
+                            *count += binding.descriptor_count.next_multiple_of(8);
+                            inline_uniform_block_create_info.max_inline_uniform_block_bindings += multiplier;
+                        } else {
+                            *count += binding.descriptor_count;
+                        }
                     } else {
                         // Don't need separate descriptor if the sampler was built into the layout.
+                        // TODO: combined image samplers: need to allocate still?
+                        assert_eq!(binding.descriptor_type, vk::DescriptorType::SAMPLER);
                         assert_eq!(
                             binding.immutable_samplers.len() as u32,
                             binding.descriptor_count
@@ -79,12 +91,15 @@ impl DescriptorPool {
                 descriptor_count: descriptor_count * multiplier,
             })
             .collect();
-        let info = vk::DescriptorPoolCreateInfo {
+        let mut info = vk::DescriptorPoolCreateInfo {
             max_sets: max_sets * multiplier,
             p_pool_sizes: pool_sizes.as_ptr(),
             pool_size_count: pool_sizes.len() as u32,
             ..Default::default()
         };
+        if inline_uniform_block_create_info.max_inline_uniform_block_bindings > 0 {
+            info.p_next = &mut inline_uniform_block_create_info as *mut _ as *mut c_void;
+        }
         let device = device.expect("Expects at least one pipeline layout.");
         let pool = unsafe { device.create_descriptor_pool(&info, None)? };
         Ok(Self { device, pool })
