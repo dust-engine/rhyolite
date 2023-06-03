@@ -453,7 +453,7 @@ impl BufferLike for StageContextBuffer {
     fn device_address(&self) -> vk::DeviceAddress {
         unimplemented!()
     }
-    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+    fn as_mut_ptr(&mut self) -> Option<*mut u8> {
         unimplemented!()
     }
 }

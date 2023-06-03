@@ -19,7 +19,7 @@ struct StagingRingBufferBlock {
     block: vma::VirtualBlock,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
-    ptr: *mut (),
+    ptr: *mut u8,
 }
 
 unsafe impl Send for StagingRingBufferBlock{}
@@ -61,7 +61,7 @@ pub struct StagingRingBufferSlice {
     buffer: vk::Buffer,
     offset: vk::DeviceSize,
     size: vk::DeviceSize,
-    ptr: *mut (),
+    ptr: *mut u8,
 }
 unsafe impl Send for StagingRingBufferSlice{}
 unsafe impl Sync for StagingRingBufferSlice{}
@@ -95,7 +95,7 @@ impl BufferLike for StagingRingBufferSlice {
         panic!("StagingRingBufferSlice are not supposed to be directly addressed on the GPU as they do not declare BUFFER_DEVICE_ADDRESS on creation.")
     }
 
-    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+    fn as_mut_ptr(&mut self) -> Option<*mut u8> {
         Some(self.ptr)
     }
 }
@@ -120,14 +120,6 @@ impl StagingRingBuffer {
                         .contains(vk::MemoryPropertyFlags::HOST_CACHED)
             })
         {
-            let pool = vma::VirtualBlock::new(
-                vma::VirtualBlockCreateInfo::new()
-                    .size(Self::BLOCK_SIZE as u64)
-                    .flags(
-                        vma::VirtualBlockCreateFlags::VMA_VIRTUAL_BLOCK_CREATE_LINEAR_ALGORITHM_BIT,
-                    ),
-            )
-            .unwrap();
             return Ok(Self {
                 device,
                 memory_type_index: memory_type_index as u32,
@@ -178,7 +170,7 @@ impl StagingRingBuffer {
             0,
             vk::WHOLE_SIZE,
             vk::MemoryMapFlags::default(),
-        )? as *mut ();
+        )? as *mut u8;
         Ok(StagingRingBufferBlockTeleporter(Some(block)))
     }
 
@@ -243,13 +235,6 @@ impl StagingRingBuffer {
         data: &'a [u8],
     ) -> impl GPUCommandFuture<Output = (), RetainedState: 'static + Disposable, RecycledState: 'static + Default> + 'a {
         commands! {
-            if let Some(ptr) = buffer.inner_mut().as_mut_ptr() {
-                // Buffer can be directly written into
-                unsafe {
-                    std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
-                }
-                return;
-            };
             let mut staging_buffer = self.allocate(buffer.inner().size()).unwrap();
             unsafe {
                 std::ptr::copy_nonoverlapping(data.as_ptr(), staging_buffer.as_mut_ptr().unwrap() as *mut u8, data.len());

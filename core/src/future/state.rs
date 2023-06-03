@@ -111,7 +111,7 @@ impl<T: BufferLike> BufferLike for SharedDeviceState<T> {
     fn device_address(&self) -> ash::vk::DeviceAddress {
         self.0.item.device_address()
     }
-    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+    fn as_mut_ptr(&mut self) -> Option<*mut u8> {
         None
     }
 }
@@ -403,7 +403,7 @@ impl<T: BufferLike> BufferLike for PerFrameContainer<T> {
     fn device_address(&self) -> ash::vk::DeviceAddress {
         self.item.as_ref().unwrap().device_address()
     }
-    fn as_mut_ptr(&mut self) -> Option<*mut ()> {
+    fn as_mut_ptr(&mut self) -> Option<*mut u8> {
         self.item.as_mut().unwrap().as_mut_ptr()
     }
 }
