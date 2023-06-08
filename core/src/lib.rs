@@ -3,7 +3,6 @@
 #![feature(negative_impls)]
 #![feature(const_trait_impl)]
 #![feature(get_mut_unchecked)]
-#![feature(array_zip)]
 #![feature(result_option_inspect)]
 #![feature(alloc_layout_extra)]
 #![feature(type_alias_impl_trait)]

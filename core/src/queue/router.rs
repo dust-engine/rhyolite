@@ -55,7 +55,8 @@ impl QueueType {
 
 pub struct QueuesRouter {
     queue_family_to_types: Vec<QueueTypeMask>,
-    queue_type_to_index: [(QueueRef, u32); 4],
+    queue_type_to_index: [QueueRef; 4],
+    queue_type_to_family: [u32; 4],
 }
 
 const QUEUE_PRIORITY_HIGH: f32 = 0.35;
@@ -64,7 +65,7 @@ const QUEUE_PRIORITY_LOW: f32 = 0.1;
 
 impl QueuesRouter {
     pub fn of_type(&self, ty: QueueType) -> QueueRef {
-        self.queue_type_to_index[ty as usize].0
+        self.queue_type_to_index[ty as usize]
     }
     pub fn priorities(&self, queue_family_index: u32) -> Vec<f32> {
         let types = self.queue_family_to_types[queue_family_index as usize];
@@ -187,11 +188,11 @@ impl QueuesRouter {
         for i in queue_type_to_index.iter() {
             assert_ne!(i.0, u8::MAX, "All queue types should've been assigned")
         }
-        let queue_type_to_index = queue_type_to_index.zip(queue_type_to_family);
 
         Self {
             queue_family_to_types,
             queue_type_to_index,
+            queue_type_to_family
         }
     }
 }
