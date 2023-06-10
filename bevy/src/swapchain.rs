@@ -35,9 +35,16 @@ impl Swapchain {
                     config.srgb_format,
                 )
             } else {
-                vk::SurfaceFormatKHR {
-                    format: vk::Format::B8G8R8A8_SRGB,
-                    color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                if config.srgb_format {
+                    vk::SurfaceFormatKHR {
+                        format: vk::Format::B8G8R8A8_SRGB,
+                        color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                    }
+                } else {
+                    vk::SurfaceFormatKHR {
+                        format: vk::Format::B8G8R8A8_UNORM,
+                        color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                    }
                 }
             }
         });

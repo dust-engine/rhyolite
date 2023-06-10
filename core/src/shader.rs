@@ -153,7 +153,7 @@ impl Drop for ShaderModule {
 }
 
 pub struct ReflectedShaderModule {
-    module: ShaderModule,
+    pub module: ShaderModule,
     pub entry_points: HashMap<String, ShaderModuleEntryPoint>,
 }
 impl ReflectedShaderModule {
@@ -263,6 +263,19 @@ pub struct SpecializedShader<'a, S: Deref<Target = ShaderModule>> {
 impl<'a, S: Deref<Target = ShaderModule>> HasDevice for SpecializedShader<'a, S> {
     fn device(&self) -> &Arc<Device> {
         &self.shader.device
+    }
+}
+
+impl<'b, 'a: 'b> From<SpecializedReflectedShader<'a>> for SpecializedShader<'b, &'a ShaderModule> {
+    fn from(shader: SpecializedReflectedShader<'a>) -> Self {
+        let entrypoint = shader.shader.entry_points.get(shader.entry_point.to_str().unwrap()).expect("Entrypoint not found");
+        SpecializedShader {
+            stage: entrypoint.stage,
+            flags: shader.flags,
+            shader: &shader.shader.module,
+            specialization_info: shader.specialization_info,
+            entry_point: shader.entry_point,
+        }
     }
 }
 

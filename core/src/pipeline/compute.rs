@@ -1,10 +1,10 @@
 use ash::{prelude::VkResult, vk};
 
 use super::PipelineCache;
-use crate::{shader::SpecializedReflectedShader, HasDevice};
+use crate::{shader::{SpecializedReflectedShader, SpecializedShader, ShaderModule}, HasDevice};
 
 use super::PipelineLayout;
-use std::sync::Arc;
+use std::{sync::Arc, ops::Deref};
 
 pub struct ComputePipeline {
     layout: Arc<PipelineLayout>,
@@ -57,12 +57,13 @@ impl ComputePipeline {
             shader.entry_point().clone(),
             info.pipeline_layout_create_flags,
         )?;
-        Self::create_with_reflected_shader_and_layout(shader, info, Arc::new(layout))
+        Self::create_with_shader_and_layout(shader.into(), Arc::new(layout), info.pipeline_create_flags, info.pipeline_cache)
     }
-    pub fn create_with_reflected_shader_and_layout<'a>(
-        shader: SpecializedReflectedShader<'a>,
-        info: ComputePipelineCreateInfo<'a>,
+    pub fn create_with_shader_and_layout<'a, S: Deref<Target = ShaderModule>>(
+        shader: SpecializedShader<'a, S>,
         layout: Arc<PipelineLayout>,
+        pipeline_create_flags: vk::PipelineCreateFlags,
+        pipeline_cache: Option<&'a PipelineCache>,
     ) -> VkResult<Self> {
         let device = shader.device().clone();
         let pipeline = unsafe {
@@ -70,10 +71,10 @@ impl ComputePipeline {
             let specialization_info = shader.specialization_info.raw_info();
             (device.fp_v1_0().create_compute_pipelines)(
                 device.handle(),
-                info.pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
+                pipeline_cache.map(|a| a.raw()).unwrap_or_default(),
                 1,
                 &vk::ComputePipelineCreateInfo {
-                    flags: info.pipeline_create_flags,
+                    flags: pipeline_create_flags,
                     stage: vk::PipelineShaderStageCreateInfo {
                         flags: shader.flags,
                         stage: vk::ShaderStageFlags::COMPUTE,
