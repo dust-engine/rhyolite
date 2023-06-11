@@ -124,6 +124,10 @@ impl<T: RenderData> RenderRes<T> {
             dispose_marker: Dispose::new(),
         }
     }
+    pub fn touched(&self) -> bool {
+        let tracking = self.tracking_info.borrow();
+        tracking.last_accessed_timeline != 0 || tracking.last_accessed_stage_index != 0
+    }
     pub(crate) fn with_feedback(inner: T, feedback: &TrackingFeedback) -> Self {
         let this = Self::new(inner);
         {
@@ -259,6 +263,9 @@ impl<T: RenderData> RenderImage<T> {
             layout: Cell::new(initial_layout),
             old_layout: Cell::new(initial_layout),
         }
+    }
+    pub fn touched(&self) -> bool {
+        self.res.touched()
     }
     pub(crate) fn with_feedback(inner: T, feedback: &TrackingFeedback) -> Self {
         let this = Self::new(inner, feedback.layout);

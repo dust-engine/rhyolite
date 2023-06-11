@@ -1,11 +1,11 @@
-use bevy_reflect::TypeUuid;
+use bevy_reflect::{TypeUuid, TypePath};
 use rhyolite::HasDevice;
 use rhyolite::{
     ash::{prelude::VkResult, vk},
     ImageArraySlicedViews, ImageLike, ResidentImage,
 };
 
-#[derive(TypeUuid)]
+#[derive(TypeUuid, TypePath)]
 #[uuid = "55b9fd4f-bd81-4a49-94ea-21d50236f6b0"]
 pub struct Image(ResidentImage);
 impl Image {
@@ -37,7 +37,7 @@ impl ImageLike for Image {
     }
 }
 
-#[derive(TypeUuid)]
+#[derive(TypeUuid, TypePath)]
 #[uuid = "55b9fd4f-bd81-4a49-94ea-21d50236f6b1"]
 pub struct SlicedImageArray(ImageArraySlicedViews<ResidentImage>);
 impl SlicedImageArray {

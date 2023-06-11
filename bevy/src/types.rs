@@ -63,14 +63,6 @@ impl<'a> From<&'a SharingMode> for rhyolite::SharingMode<'a> {
 }
 
 #[derive(Resource, Clone)]
-pub struct PipelineCache(Arc<rhyolite::PipelineCache>);
-impl PipelineCache {
-    pub fn inner(&self) -> &Arc<rhyolite::PipelineCache> {
-        &self.0
-    }
-}
-
-#[derive(Resource, Clone)]
 pub struct StagingRingBuffer(Arc<rhyolite::StagingRingBuffer>);
 impl Deref for StagingRingBuffer {
     type Target = Arc<rhyolite::StagingRingBuffer>;
