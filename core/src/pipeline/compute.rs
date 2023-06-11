@@ -1,10 +1,13 @@
 use ash::{prelude::VkResult, vk};
 
 use super::PipelineCache;
-use crate::{shader::{SpecializedReflectedShader, SpecializedShader, ShaderModule}, HasDevice};
+use crate::{
+    shader::{ShaderModule, SpecializedReflectedShader, SpecializedShader},
+    HasDevice,
+};
 
 use super::PipelineLayout;
-use std::{sync::Arc, ops::Deref};
+use std::{ops::Deref, sync::Arc};
 
 pub struct ComputePipeline {
     layout: Arc<PipelineLayout>,
@@ -57,7 +60,12 @@ impl ComputePipeline {
             shader.entry_point().clone(),
             info.pipeline_layout_create_flags,
         )?;
-        Self::create_with_shader_and_layout(shader.into(), Arc::new(layout), info.pipeline_create_flags, info.pipeline_cache)
+        Self::create_with_shader_and_layout(
+            shader.into(),
+            Arc::new(layout),
+            info.pipeline_create_flags,
+            info.pipeline_cache,
+        )
     }
     pub fn create_with_shader_and_layout<'a, S: Deref<Target = ShaderModule>>(
         shader: SpecializedShader<'a, S>,

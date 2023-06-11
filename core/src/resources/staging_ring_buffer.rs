@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     copy_buffer,
-    future::{GPUCommandFuture, RenderData, RenderRes, Disposable},
+    future::{Disposable, GPUCommandFuture, RenderData, RenderRes},
     Allocator, BufferLike, Device, HasDevice, PhysicalDeviceMemoryModel,
 };
 use ash::{prelude::VkResult, vk};
@@ -22,8 +22,8 @@ struct StagingRingBufferBlock {
     ptr: *mut u8,
 }
 
-unsafe impl Send for StagingRingBufferBlock{}
-unsafe impl Sync for StagingRingBufferBlock{}
+unsafe impl Send for StagingRingBufferBlock {}
+unsafe impl Sync for StagingRingBufferBlock {}
 impl Drop for StagingRingBufferBlock {
     fn drop(&mut self) {
         if self.buffer != vk::Buffer::null() {
@@ -63,8 +63,8 @@ pub struct StagingRingBufferSlice {
     size: vk::DeviceSize,
     ptr: *mut u8,
 }
-unsafe impl Send for StagingRingBufferSlice{}
-unsafe impl Sync for StagingRingBufferSlice{}
+unsafe impl Send for StagingRingBufferSlice {}
+unsafe impl Sync for StagingRingBufferSlice {}
 impl Drop for StagingRingBufferSlice {
     fn drop(&mut self) {
         unsafe {
@@ -164,7 +164,8 @@ impl StagingRingBuffer {
             },
             None,
         )?;
-        self.device.bind_buffer_memory(block.buffer, block.memory, 0)?;
+        self.device
+            .bind_buffer_memory(block.buffer, block.memory, 0)?;
         block.ptr = self.device.map_memory(
             block.memory,
             0,
@@ -233,7 +234,11 @@ impl StagingRingBuffer {
         self: &'a Arc<Self>,
         buffer: &'a mut RenderRes<impl BufferLike + RenderData>,
         data: &'a [u8],
-    ) -> impl GPUCommandFuture<Output = (), RetainedState: 'static + Disposable, RecycledState: 'static + Default> + 'a {
+    ) -> impl GPUCommandFuture<
+        Output = (),
+        RetainedState: 'static + Disposable,
+        RecycledState: 'static + Default,
+    > + 'a {
         commands! {
             let mut staging_buffer = self.allocate(buffer.inner().size()).unwrap();
             unsafe {

@@ -1,5 +1,5 @@
 use ash::{prelude::VkResult, vk};
-use std::{collections::BTreeMap, sync::Arc, ffi::c_void};
+use std::{collections::BTreeMap, ffi::c_void, sync::Arc};
 
 use crate::{Device, HasDevice, PipelineLayout};
 
@@ -50,7 +50,8 @@ impl DescriptorPool {
         let mut max_sets: u32 = 0;
         let mut device: Option<Arc<Device>> = None;
 
-        let mut inline_uniform_block_create_info = vk::DescriptorPoolInlineUniformBlockCreateInfo::default();
+        let mut inline_uniform_block_create_info =
+            vk::DescriptorPoolInlineUniformBlockCreateInfo::default();
         for pipeline_layout in layouts.into_iter() {
             let pipeline_layout = pipeline_layout.deref();
             max_sets += pipeline_layout.desc_sets().len() as u32;
@@ -68,7 +69,8 @@ impl DescriptorPool {
                             // to be aligned to the 8 byte boundary. See
                             // https://gist.github.com/Neo-Zhixing/992a0e789e34b59285026dd8161b9112
                             *count += binding.descriptor_count.next_multiple_of(8);
-                            inline_uniform_block_create_info.max_inline_uniform_block_bindings += multiplier;
+                            inline_uniform_block_create_info.max_inline_uniform_block_bindings +=
+                                multiplier;
                         } else {
                             *count += binding.descriptor_count;
                         }

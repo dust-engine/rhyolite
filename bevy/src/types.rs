@@ -73,6 +73,8 @@ impl Deref for StagingRingBuffer {
 impl FromWorld for StagingRingBuffer {
     fn from_world(world: &mut bevy_ecs::world::World) -> Self {
         let device: &Device = world.resource();
-        Self(Arc::new(rhyolite::StagingRingBuffer::new(device.inner().clone()).unwrap()))
+        Self(Arc::new(
+            rhyolite::StagingRingBuffer::new(device.inner().clone()).unwrap(),
+        ))
     }
 }

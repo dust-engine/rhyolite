@@ -1,4 +1,4 @@
-use bevy_reflect::{TypeUuid, TypePath};
+use bevy_reflect::{TypePath, TypeUuid};
 use rhyolite::HasDevice;
 use rhyolite::{
     ash::{prelude::VkResult, vk},

@@ -268,7 +268,11 @@ impl<'a, S: Deref<Target = ShaderModule>> HasDevice for SpecializedShader<'a, S>
 
 impl<'b, 'a: 'b> From<SpecializedReflectedShader<'a>> for SpecializedShader<'b, &'a ShaderModule> {
     fn from(shader: SpecializedReflectedShader<'a>) -> Self {
-        let entrypoint = shader.shader.entry_points.get(shader.entry_point.to_str().unwrap()).expect("Entrypoint not found");
+        let entrypoint = shader
+            .shader
+            .entry_points
+            .get(shader.entry_point.to_str().unwrap())
+            .expect("Entrypoint not found");
         SpecializedShader {
             stage: entrypoint.stage,
             flags: shader.flags,

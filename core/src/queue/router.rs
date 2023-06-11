@@ -192,7 +192,7 @@ impl QueuesRouter {
         Self {
             queue_family_to_types,
             queue_type_to_index,
-            queue_type_to_family
+            queue_type_to_family,
         }
     }
 }
