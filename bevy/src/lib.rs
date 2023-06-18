@@ -20,6 +20,7 @@ use rhyolite::{
     ash::{self, vk},
     cstr, Instance, Version,
 };
+use x11::xlib;
 
 pub use self::image::*;
 pub use queue::{AsyncQueues, Frame, Queues, QueuesRouter};
@@ -54,7 +55,16 @@ impl Default for RenderPlugin {
             enabled_instance_layers: vec![],
             enabled_instance_extensions: vec![
                 ash::extensions::khr::Surface::name(),
-                ash::extensions::khr::Win32Surface::name(),
+                if cfg!(target_os = "windows") {
+                    ash::extensions::khr::Win32Surface::name(),
+                } else {
+                    let display = xlib::XOpenDisplay(std::ptr::null());
+                    if !display.is_null() {
+                        ash::extension::khr::XlibSurface::name()
+                    } else {
+                        ash::extension::khr::WaylandSurface::neme()
+                    };
+                };            
             ],
             physical_device_index: 0,
             max_frame_in_flight: 3,
