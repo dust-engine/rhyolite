@@ -196,6 +196,81 @@ pub fn use_shared_image<T>(
     }
 }
 
+
+/// Returns (current, prev)
+pub fn use_shared_image_flipflop<T>(
+    this: &mut Option<(
+        SharedDeviceStateHostContainer<T>,
+        SharedDeviceStateHostContainer<T>,
+        bool
+    )>,
+    create: impl Fn(Option<&T>) -> (T, vk::ImageLayout),
+    should_update: impl FnOnce(&T) -> bool,
+) -> (RenderImage<SharedDeviceState<T>>, RenderImage<SharedDeviceState<T>>) {
+    if let Some((a, b, swapped)) = this {
+        *swapped = !*swapped;
+        let mut current = a;
+        let mut previous = b;
+        if *swapped {
+            std::mem::swap(&mut current, &mut previous);
+        }
+        if should_update(&current.0.item) {
+            let (item, layout) = create(Some(&current.0.item));
+            current.0 = Arc::new(SharedDeviceStateInner {
+                item,
+                tracking_feedback: Default::default(),
+                fetched: AtomicBool::new(true),
+            });
+            previous.0
+            .fetched
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+            let current_img = RenderImage::new(SharedDeviceState(current.0.clone()), layout);
+            let prev_img = RenderImage::with_feedback(
+                SharedDeviceState(previous.0.clone()),
+                previous.0.get_tracking_feedback(),
+            );
+            (current_img, prev_img)
+        } else {
+            current.0
+            .fetched
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+            previous.0
+            .fetched
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+            let mut current_img = RenderImage::with_feedback(
+                SharedDeviceState(current.0.clone()),
+                current.0.get_tracking_feedback(),
+            );
+            let mut prev_img = RenderImage::with_feedback(
+                SharedDeviceState(previous.0.clone()),
+                previous.0.get_tracking_feedback(),
+            );
+            (current_img, prev_img)
+        }
+    } else {
+        let (a, a_layout) = create(None);
+        let a = Arc::new(SharedDeviceStateInner {
+            item: a,
+            tracking_feedback: Default::default(),
+            fetched: AtomicBool::new(true),
+        });
+        let (b, b_layout) = create(None);
+        let b = Arc::new(SharedDeviceStateInner {
+            item: b,
+            tracking_feedback: Default::default(),
+            fetched: AtomicBool::new(true),
+        });
+        *this = Some((SharedDeviceStateHostContainer(a), SharedDeviceStateHostContainer(b), false));
+        // When the flag is false, a is current.
+        
+        let a_img = RenderImage::new(SharedDeviceState(this.as_ref().unwrap().0.0.clone()), a_layout);
+        let b_img = RenderImage::new(SharedDeviceState(this.as_ref().unwrap().1.0.clone()), b_layout);
+        (a_img, b_img)
+    }
+}
+
+
+
 /// Returns (new, old)
 pub fn use_shared_state_with_old<T>(
     this: &mut Option<SharedDeviceStateHostContainer<T>>,

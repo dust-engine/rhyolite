@@ -28,6 +28,21 @@ pub trait BufferLike {
     fn as_mut_ptr(&mut self) -> Option<*mut u8>;
 }
 
+impl BufferLike for vk::Buffer {
+    fn raw_buffer(&self) -> vk::Buffer {
+        *self
+    }
+    fn size(&self) -> vk::DeviceSize {
+        vk::WHOLE_SIZE
+    }
+    fn device_address(&self) -> vk::DeviceAddress {
+        panic!()
+    }
+    fn as_mut_ptr(&mut self) -> Option<*mut u8> {
+        panic!()
+    }
+}
+
 impl<A: BufferLike, B: BufferLike> BufferLike for Either<A, B> {
     fn raw_buffer(&self) -> vk::Buffer {
         match self {
