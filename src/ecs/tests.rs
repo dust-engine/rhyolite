@@ -1,3 +1,5 @@
+use std::arch::x86_64::_rdrand16_step;
+
 use super::*;
 use bevy_app::Update;
 use bevy_ecs::{
@@ -9,8 +11,8 @@ use bevy_ecs::{
 #[derive(Resource)]
 struct Image;
 
-fn system1(_commands: RenderCommands, _render: RenderResMut<Image>) {}
-fn system2(_commands: RenderCommands, _render: RenderRes<Image>) {}
+fn system1(_commands: RenderCommands<'g'>, _render: RenderResMut<Image>) {}
+fn system2(_commands: RenderCommands<'g'>, _render: RenderRes<Image>) {}
 
 #[test]
 #[should_panic(

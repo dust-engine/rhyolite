@@ -9,23 +9,22 @@ pub mod queue_cap {
     impl IsQueueCap<'g'> for () {}
     impl IsQueueCap<'c'> for () {}
     impl IsQueueCap<'t'> for () {}
-    impl IsQueueCap<'x'> for () {}
 
     pub trait IsGraphicsQueueCap<const Q: QueueCap> {}
     impl IsGraphicsQueueCap<'g'> for () {}
-    impl IsGraphicsQueueCap<'x'> for () {}
 
     pub trait IsComputeQueueCap<const Q: QueueCap> {}
     impl IsComputeQueueCap<'c'> for () {}
-    impl IsComputeQueueCap<'x'> for () {}
 }
 use ash::vk;
 use bevy_ecs::{system::SystemParam, world::World};
 use queue_cap::*;
 
+use crate::queue::QueueType;
+
 use super::{QueueAssignment, RenderSystemConfig};
 
-pub struct RenderCommands<const Q: char = 'x'>
+pub struct RenderCommands<const Q: char>
 where
     (): IsQueueCap<Q>, {}
 
@@ -42,10 +41,9 @@ where
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
         let flags = match Q {
-            'g' => vk::QueueFlags::GRAPHICS | vk::QueueFlags::TRANSFER,
-            'c' => vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER,
-            't' => vk::QueueFlags::TRANSFER,
-            'x' => vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER,
+            'g' => QueueType::Graphics,
+            'c' => QueueType::Compute,
+            't' => QueueType::Transfer,
             _ => unreachable!(),
         };
         system_meta.default_config.insert(RenderSystemConfig {
