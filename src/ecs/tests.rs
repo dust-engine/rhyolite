@@ -1,6 +1,4 @@
-use std::arch::x86_64::_rdrand16_step;
-
-use crate::queue::{QueuesRouter, QueueRef};
+use crate::queue::{QueueRef, QueuesRouter};
 
 use super::*;
 use bevy_app::Update;
@@ -34,7 +32,6 @@ fn render_res_panics_on_non_render_system() {
     assert!(schedule.initialize(&mut world).is_err());
 }
 
-
 #[test]
 #[should_panic(
     expected = "RenderResMut<rhyolite::ecs::tests::Image> can only be used in a render system, but rhyolite::ecs::tests::render_res_mut_panics_on_non_render_system::bad_system is not. RenderCommands must be the first parameter of a render system."
@@ -48,8 +45,8 @@ fn render_res_mut_panics_on_non_render_system() {
 }
 
 const ROUTER: QueuesRouter = QueuesRouter {
-    queue_type_to_index: [QueueRef(0),QueueRef(1),QueueRef(2),QueueRef(3)],
-    queue_type_to_family: [0,0,0,0],
+    queue_type_to_index: [QueueRef(0), QueueRef(1), QueueRef(2), QueueRef(3)],
+    queue_type_to_family: [0, 0, 0, 0],
     queue_family_to_types: Vec::new(),
 };
 
@@ -64,8 +61,7 @@ fn test0() {
         system_c1.after(system_g1).after(system_g2),
         system_t1,
         system_g3.after(system_g2).after(system_t1),
-        system_t2.after(system_c1).after(system_g3)
-        
+        system_t2.after(system_c1).after(system_g3),
     ));
 
     let mut world = World::default();

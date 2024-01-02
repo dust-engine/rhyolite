@@ -1,16 +1,18 @@
-use std::collections::BTreeSet;
-
 use bevy_ecs::{
-    component::ComponentId,
-    schedule::{NodeId, ReportCycles, ScheduleBuildPass},
+    schedule::{NodeId, ScheduleBuildPass},
     world::World,
 };
-use bevy_utils::petgraph::{graphmap::NodeTrait, Direction::{Incoming, Outgoing}, visit::{IntoNeighbors, IntoNeighborsDirected, depth_first_search, ControlFlow, Dfs, Walker}};
-use itertools::Itertools;
+use bevy_utils::petgraph::{
+    visit::{Dfs, IntoNeighbors, IntoNeighborsDirected, Walker},
+    Direction::{Incoming, Outgoing},
+};
 
-use crate::{ecs::QueueAssignment, queue::{QueuesRouter, QueueRef}};
+use crate::{
+    ecs::QueueAssignment,
+    queue::{QueueRef, QueuesRouter},
+};
 
-use super::{RenderResRegistry, RenderSystemConfig};
+use super::RenderSystemConfig;
 
 #[derive(Debug)]
 pub struct RenderSystemPass {}
@@ -22,9 +24,9 @@ impl ScheduleBuildPass for RenderSystemPass {
 
     fn add_dependency(
         &mut self,
-        from: bevy_ecs::schedule::NodeId,
-        to: bevy_ecs::schedule::NodeId,
-        options: Option<&Self::EdgeOptions>,
+        _from: bevy_ecs::schedule::NodeId,
+        _to: bevy_ecs::schedule::NodeId,
+        _options: Option<&Self::EdgeOptions>,
     ) {
     }
 
@@ -32,9 +34,9 @@ impl ScheduleBuildPass for RenderSystemPass {
 
     fn collapse_set(
         &mut self,
-        set: bevy_ecs::schedule::NodeId,
-        systems: &[bevy_ecs::schedule::NodeId],
-        dependency_flattened: &bevy_utils::petgraph::prelude::GraphMap<
+        _set: bevy_ecs::schedule::NodeId,
+        _systems: &[bevy_ecs::schedule::NodeId],
+        _dependency_flattened: &bevy_utils::petgraph::prelude::GraphMap<
             bevy_ecs::schedule::NodeId,
             (),
             bevy_utils::petgraph::prelude::Directed,
@@ -54,17 +56,18 @@ impl ScheduleBuildPass for RenderSystemPass {
         >,
     ) -> Result<(), bevy_ecs::schedule::ScheduleBuildError> {
         let mut render_graph = bevy_utils::petgraph::graphmap::DiGraphMap::<usize, ()>::new();
-        
+
         #[derive(Clone)]
         struct RenderGraphNodeMeta {
             config: RenderSystemConfig,
             selected_queue: QueueRef,
             stage_index: u32,
-            ancestor_colors: u8
+            ancestor_colors: u8,
         }
-        let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> = vec![None; graph.systems.len()];
+        let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> =
+            vec![None; graph.systems.len()];
         let queue_router = world.resource::<QueuesRouter>();
-        
+
         // Step 1: Queue coloring.
         // Step 1.1: Generate render graph
         let mut num_queues: u8 = 0;
@@ -73,14 +76,17 @@ impl ScheduleBuildPass for RenderSystemPass {
                 continue;
             };
             let system = graph.get_system_at(node).unwrap();
-            let Some(render_system_config) = system.default_configs().and_then(|map| map.get::<RenderSystemConfig>()) else {
+            let Some(render_system_config) = system
+                .default_configs()
+                .and_then(|map| map.get::<RenderSystemConfig>())
+            else {
                 println!("skipped.");
                 continue; // not a render system
             };
             let selected_queue = match render_system_config.queue {
                 QueueAssignment::MinOverhead(queue) | QueueAssignment::MaxAsync(queue) => {
                     queue_router.of_type(queue)
-                },
+                }
                 QueueAssignment::Manual(queue) => queue,
             };
             num_queues = num_queues.max(selected_queue.0 + 1);
@@ -89,7 +95,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                 config: render_system_config.clone(),
                 selected_queue,
                 stage_index: u32::MAX,
-                ancestor_colors: 0
+                ancestor_colors: 0,
             });
             render_graph.add_node(node_id);
             for neighbor in dependency_flattened.neighbors(node) {
@@ -97,13 +103,17 @@ impl ScheduleBuildPass for RenderSystemPass {
                     continue;
                 };
                 let neighbor_system = graph.get_system_at(neighbor).unwrap();
-                if Some(true) != neighbor_system.default_configs().map(|map| map.has::<RenderSystemConfig>()) {
+                if Some(true)
+                    != neighbor_system
+                        .default_configs()
+                        .map(|map| map.has::<RenderSystemConfig>())
+                {
                     continue; // neighbor not a render system
                 };
                 render_graph.add_edge(node_id, neighbor_node_id, ());
             }
         }
-        
+
         // In Vulkan, cross-queue syncronizations are heavily weight and entails
         // expensive vkQueueSubmit calls. We therefore try to merge queue nodes agressively
         // as much as we could.
@@ -125,15 +135,20 @@ impl ScheduleBuildPass for RenderSystemPass {
 
         // First, find all nodes with no incoming edges
         for node in render_graph.nodes() {
-            if render_graph.neighbors_directed(node, Incoming).next().is_none() {
+            if render_graph
+                .neighbors_directed(node, Incoming)
+                .next()
+                .is_none()
+            {
                 // Has no incoming edges
-                let meta = render_graph_meta[node].as_mut().unwrap();
+                let _meta = render_graph_meta[node].as_mut().unwrap();
                 heap.push(node);
             }
         }
         let mut stage_index = 0;
         // (buffer, stages)
-        let mut colors: Vec<(Vec<usize>, Vec<Vec<usize>>)> = vec![Default::default(); num_queues as usize];
+        let mut colors: Vec<(Vec<usize>, Vec<Vec<usize>>)> =
+            vec![Default::default(); num_queues as usize];
         let mut tiny_graph = bevy_utils::petgraph::graphmap::DiGraphMap::<u8, ()>::new();
         let mut current_graph = render_graph.clone();
         let mut heap_next_stage: Vec<usize> = Vec::new(); // nodes to be deferred to the next stage
@@ -146,7 +161,9 @@ impl ScheduleBuildPass for RenderSystemPass {
                 if parent_meta.selected_queue != node_color {
                     let start = parent_meta.selected_queue.0;
                     let end = node_color.0;
-                    let has_path = Dfs::new(&tiny_graph, end).iter(&tiny_graph).any(|x| x == start);
+                    let has_path = Dfs::new(&tiny_graph, end)
+                        .iter(&tiny_graph)
+                        .any(|x| x == start);
                     if has_path {
                         // There is already a path from end to start, so adding a node from start to end causes a cycle.
                         should_defer = true;
@@ -173,7 +190,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                 }
 
                 for child in current_graph.neighbors_directed(node, Outgoing) {
-                    let mut  other_parents = current_graph.neighbors_directed(child, Incoming);
+                    let mut other_parents = current_graph.neighbors_directed(child, Incoming);
                     other_parents.next().unwrap();
                     if other_parents.next().is_some() {
                         // other edges exist
@@ -199,15 +216,15 @@ impl ScheduleBuildPass for RenderSystemPass {
                 std::mem::swap(&mut heap, &mut heap_next_stage);
             }
         }
-        
 
         // Step 1.3: Build queue graph
         #[derive(Hash, PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Debug)]
         struct QueueGraphNode {
             stage_index: u32,
-            queue: QueueRef
+            queue: QueueRef,
         }
-        let mut queue_graph = bevy_utils::petgraph::graphmap::DiGraphMap::<QueueGraphNode, ()>::new();
+        let mut queue_graph =
+            bevy_utils::petgraph::graphmap::DiGraphMap::<QueueGraphNode, ()>::new();
         // Flush all colors
         for (queue_node_buffer, stages) in colors.iter_mut() {
             if !queue_node_buffer.is_empty() {
@@ -219,16 +236,17 @@ impl ScheduleBuildPass for RenderSystemPass {
                     let meta = render_graph_meta[*node].as_ref().unwrap();
                     let queue_graph_node = QueueGraphNode {
                         stage_index: meta.stage_index,
-                        queue: meta.selected_queue
+                        queue: meta.selected_queue,
                     };
                     queue_graph.add_node(queue_graph_node);
                     for neighbor in render_graph.neighbors(*node) {
                         let neighbor_meta = render_graph_meta[neighbor].as_ref().unwrap();
                         let neighbor_queue_graph_node = QueueGraphNode {
                             stage_index: neighbor_meta.stage_index,
-                            queue: neighbor_meta.selected_queue
+                            queue: neighbor_meta.selected_queue,
                         };
-                        if queue_graph_node != neighbor_queue_graph_node { // avoid self edges
+                        if queue_graph_node != neighbor_queue_graph_node {
+                            // avoid self edges
                             queue_graph.add_edge(queue_graph_node, neighbor_queue_graph_node, ());
                         }
                     }
@@ -236,7 +254,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             }
         }
         println!("{:#?}", queue_graph);
-
 
         // Step 2: inside each queue, insert pipeline barriers.
 

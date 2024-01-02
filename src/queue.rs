@@ -1,7 +1,6 @@
 use ash::vk;
 use bevy_ecs::system::Resource;
 
-
 /// Index of a created queue
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct QueueRef(pub u8);
@@ -18,7 +17,6 @@ impl Default for QueueRef {
         Self::null()
     }
 }
-
 
 #[derive(Clone, Copy, Debug)]
 pub enum QueueType {
@@ -134,7 +132,8 @@ impl QueuesRouter {
 
         let mut queue_family_to_types: Vec<vk::QueueFlags> =
             vec![vk::QueueFlags::empty(); available_queue_family.len()];
-        queue_family_to_types[sparse_binding_queue_family as usize] |= vk::QueueFlags::SPARSE_BINDING;
+        queue_family_to_types[sparse_binding_queue_family as usize] |=
+            vk::QueueFlags::SPARSE_BINDING;
         queue_family_to_types[transfer_queue_family as usize] |= vk::QueueFlags::TRANSFER;
         queue_family_to_types[compute_queue_family as usize] |= vk::QueueFlags::COMPUTE;
         queue_family_to_types[graphics_queue_family as usize] |= vk::QueueFlags::GRAPHICS;
@@ -194,7 +193,10 @@ mod tests {
         };
         let router = QueuesRouter::find_with_queue_family_properties(&[
             vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
+                queue_flags: vk::QueueFlags::GRAPHICS
+                    | vk::QueueFlags::COMPUTE
+                    | vk::QueueFlags::TRANSFER
+                    | vk::QueueFlags::SPARSE_BINDING,
                 queue_count: 16,
                 ..default
             },
@@ -204,36 +206,37 @@ mod tests {
                 ..default
             },
             vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::TRANSFER | vk::QueueFlags::COMPUTE | vk::QueueFlags::SPARSE_BINDING,
+                queue_flags: vk::QueueFlags::TRANSFER
+                    | vk::QueueFlags::COMPUTE
+                    | vk::QueueFlags::SPARSE_BINDING,
                 queue_count: 8,
                 ..default
             },
             vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::TRANSFER | vk::QueueFlags::VIDEO_DECODE_KHR | vk::QueueFlags::SPARSE_BINDING,
+                queue_flags: vk::QueueFlags::TRANSFER
+                    | vk::QueueFlags::VIDEO_DECODE_KHR
+                    | vk::QueueFlags::SPARSE_BINDING,
                 queue_count: 8,
                 timestamp_valid_bits: 32,
                 ..default
             },
         ]);
-        assert_eq!(router.queue_family_to_types, vec![
-            vk::QueueFlags::GRAPHICS,
-            vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
-            vk::QueueFlags::COMPUTE,
-            vk::QueueFlags::empty(),
-        ]);
-        assert_eq!(router.queue_type_to_index, [
-            QueueRef(0),
-            QueueRef(2),
-            QueueRef(1),
-            QueueRef(1),
-        ]);
-        assert_eq!(router.queue_type_to_family, [
-            0,
-            2,
-            1,
-            1,
-        ]);
-    }#[test]
+        assert_eq!(
+            router.queue_family_to_types,
+            vec![
+                vk::QueueFlags::GRAPHICS,
+                vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
+                vk::QueueFlags::COMPUTE,
+                vk::QueueFlags::empty(),
+            ]
+        );
+        assert_eq!(
+            router.queue_type_to_index,
+            [QueueRef(0), QueueRef(2), QueueRef(1), QueueRef(1),]
+        );
+        assert_eq!(router.queue_type_to_family, [0, 2, 1, 1,]);
+    }
+    #[test]
     fn test_intel_windows() {
         let default = vk::QueueFamilyProperties {
             queue_flags: vk::QueueFlags::empty(),
@@ -247,7 +250,10 @@ mod tests {
         };
         let router = QueuesRouter::find_with_queue_family_properties(&[
             vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
+                queue_flags: vk::QueueFlags::GRAPHICS
+                    | vk::QueueFlags::COMPUTE
+                    | vk::QueueFlags::TRANSFER
+                    | vk::QueueFlags::SPARSE_BINDING,
                 queue_count: 1,
                 ..default
             },
@@ -257,24 +263,23 @@ mod tests {
                 ..default
             },
         ]);
-        assert_eq!(router.queue_family_to_types, vec![
-            vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::SPARSE_BINDING | vk::QueueFlags::TRANSFER,
-            vk::QueueFlags::empty(),
-        ]);
-        assert_eq!(router.queue_type_to_index, [
-            QueueRef(0),
-            QueueRef(0),
-            QueueRef(0),
-            QueueRef(0),
-        ]);
-        assert_eq!(router.queue_type_to_family, [
-            0,
-            0,
-            0,
-            0,
-        ]);
+        assert_eq!(
+            router.queue_family_to_types,
+            vec![
+                vk::QueueFlags::GRAPHICS
+                    | vk::QueueFlags::COMPUTE
+                    | vk::QueueFlags::SPARSE_BINDING
+                    | vk::QueueFlags::TRANSFER,
+                vk::QueueFlags::empty(),
+            ]
+        );
+        assert_eq!(
+            router.queue_type_to_index,
+            [QueueRef(0), QueueRef(0), QueueRef(0), QueueRef(0),]
+        );
+        assert_eq!(router.queue_type_to_family, [0, 0, 0, 0,]);
     }
-    
+
     #[test]
     fn test_single_queue_no_transfer_bit() {
         let default = vk::QueueFamilyProperties {
@@ -287,27 +292,27 @@ mod tests {
                 depth: 1,
             },
         };
-        let router = QueuesRouter::find_with_queue_family_properties(&[
-            vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::SPARSE_BINDING,
+        let router =
+            QueuesRouter::find_with_queue_family_properties(&[vk::QueueFamilyProperties {
+                queue_flags: vk::QueueFlags::GRAPHICS
+                    | vk::QueueFlags::COMPUTE
+                    | vk::QueueFlags::SPARSE_BINDING,
                 queue_count: 3,
                 ..default
-            },
-        ]);
-        assert_eq!(router.queue_family_to_types, vec![
-            vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::SPARSE_BINDING | vk::QueueFlags::TRANSFER,
-        ]);
-        assert_eq!(router.queue_type_to_index, [
-            QueueRef(0),
-            QueueRef(0),
-            QueueRef(0),
-            QueueRef(0),
-        ]);
-        assert_eq!(router.queue_type_to_family, [
-            0,
-            0,
-            0,
-            0,
-        ]);
+            }]);
+        assert_eq!(
+            router.queue_family_to_types,
+            vec![
+                vk::QueueFlags::GRAPHICS
+                    | vk::QueueFlags::COMPUTE
+                    | vk::QueueFlags::SPARSE_BINDING
+                    | vk::QueueFlags::TRANSFER,
+            ]
+        );
+        assert_eq!(
+            router.queue_type_to_index,
+            [QueueRef(0), QueueRef(0), QueueRef(0), QueueRef(0),]
+        );
+        assert_eq!(router.queue_type_to_family, [0, 0, 0, 0,]);
     }
 }

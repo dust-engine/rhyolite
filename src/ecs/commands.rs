@@ -16,7 +16,7 @@ pub mod queue_cap {
     pub trait IsComputeQueueCap<const Q: QueueCap> {}
     impl IsComputeQueueCap<'c'> for () {}
 }
-use ash::vk;
+
 use bevy_ecs::{system::SystemParam, world::World};
 use queue_cap::*;
 
@@ -37,7 +37,7 @@ where
     type Item<'world, 'state> = RenderCommands<Q>;
 
     fn init_state(
-        world: &mut World,
+        _world: &mut World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
         let flags = match Q {
@@ -52,10 +52,10 @@ where
     }
 
     unsafe fn get_param<'world, 'state>(
-        state: &'state mut Self::State,
-        system_meta: &bevy_ecs::system::SystemMeta,
-        world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        change_tick: bevy_ecs::component::Tick,
+        _state: &'state mut Self::State,
+        _system_meta: &bevy_ecs::system::SystemMeta,
+        _world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        _change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         RenderCommands {}
     }
