@@ -3,7 +3,7 @@ use bevy_ecs::system::Resource;
 
 
 /// Index of a created queue
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct QueueRef(pub u8);
 impl QueueRef {
     pub fn null() -> Self {
@@ -39,11 +39,11 @@ impl QueueType {
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Debug)]
 pub struct QueuesRouter {
-    queue_family_to_types: Vec<vk::QueueFlags>,
-    queue_type_to_index: [QueueRef; 4],
-    queue_type_to_family: [u32; 4],
+    pub(crate) queue_family_to_types: Vec<vk::QueueFlags>,
+    pub(crate) queue_type_to_index: [QueueRef; 4],
+    pub(crate) queue_type_to_family: [u32; 4],
 }
 
 impl QueuesRouter {
@@ -149,6 +149,7 @@ impl QueuesRouter {
         let mut queue_type_to_index: [QueueRef; 4] = [QueueRef(u8::MAX); 4];
         for (i, ty) in queue_family_to_types
             .iter()
+            .filter(|x| !x.is_empty())
             .enumerate()
         {
             if ty.contains(vk::QueueFlags::GRAPHICS) {
@@ -173,5 +174,140 @@ impl QueuesRouter {
             queue_type_to_index,
             queue_type_to_family,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_nvidia_windows() {
+        let default = vk::QueueFamilyProperties {
+            queue_flags: vk::QueueFlags::empty(),
+            queue_count: 16,
+            timestamp_valid_bits: 64,
+            min_image_transfer_granularity: vk::Extent3D {
+                width: 1,
+                height: 1,
+                depth: 1,
+            },
+        };
+        let router = QueuesRouter::find_with_queue_family_properties(&[
+            vk::QueueFamilyProperties {
+                queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
+                queue_count: 16,
+                ..default
+            },
+            vk::QueueFamilyProperties {
+                queue_flags: vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
+                queue_count: 2,
+                ..default
+            },
+            vk::QueueFamilyProperties {
+                queue_flags: vk::QueueFlags::TRANSFER | vk::QueueFlags::COMPUTE | vk::QueueFlags::SPARSE_BINDING,
+                queue_count: 8,
+                ..default
+            },
+            vk::QueueFamilyProperties {
+                queue_flags: vk::QueueFlags::TRANSFER | vk::QueueFlags::VIDEO_DECODE_KHR | vk::QueueFlags::SPARSE_BINDING,
+                queue_count: 8,
+                timestamp_valid_bits: 32,
+                ..default
+            },
+        ]);
+        assert_eq!(router.queue_family_to_types, vec![
+            vk::QueueFlags::GRAPHICS,
+            vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
+            vk::QueueFlags::COMPUTE,
+            vk::QueueFlags::empty(),
+        ]);
+        assert_eq!(router.queue_type_to_index, [
+            QueueRef(0),
+            QueueRef(2),
+            QueueRef(1),
+            QueueRef(1),
+        ]);
+        assert_eq!(router.queue_type_to_family, [
+            0,
+            2,
+            1,
+            1,
+        ]);
+    }#[test]
+    fn test_intel_windows() {
+        let default = vk::QueueFamilyProperties {
+            queue_flags: vk::QueueFlags::empty(),
+            queue_count: 16,
+            timestamp_valid_bits: 36,
+            min_image_transfer_granularity: vk::Extent3D {
+                width: 1,
+                height: 1,
+                depth: 1,
+            },
+        };
+        let router = QueuesRouter::find_with_queue_family_properties(&[
+            vk::QueueFamilyProperties {
+                queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
+                queue_count: 1,
+                ..default
+            },
+            vk::QueueFamilyProperties {
+                queue_flags: vk::QueueFlags::VIDEO_DECODE_KHR,
+                queue_count: 2,
+                ..default
+            },
+        ]);
+        assert_eq!(router.queue_family_to_types, vec![
+            vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::SPARSE_BINDING | vk::QueueFlags::TRANSFER,
+            vk::QueueFlags::empty(),
+        ]);
+        assert_eq!(router.queue_type_to_index, [
+            QueueRef(0),
+            QueueRef(0),
+            QueueRef(0),
+            QueueRef(0),
+        ]);
+        assert_eq!(router.queue_type_to_family, [
+            0,
+            0,
+            0,
+            0,
+        ]);
+    }
+    
+    #[test]
+    fn test_single_queue_no_transfer_bit() {
+        let default = vk::QueueFamilyProperties {
+            queue_flags: vk::QueueFlags::empty(),
+            queue_count: 3,
+            timestamp_valid_bits: 48,
+            min_image_transfer_granularity: vk::Extent3D {
+                width: 1,
+                height: 1,
+                depth: 1,
+            },
+        };
+        let router = QueuesRouter::find_with_queue_family_properties(&[
+            vk::QueueFamilyProperties {
+                queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::SPARSE_BINDING,
+                queue_count: 3,
+                ..default
+            },
+        ]);
+        assert_eq!(router.queue_family_to_types, vec![
+            vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE | vk::QueueFlags::SPARSE_BINDING | vk::QueueFlags::TRANSFER,
+        ]);
+        assert_eq!(router.queue_type_to_index, [
+            QueueRef(0),
+            QueueRef(0),
+            QueueRef(0),
+            QueueRef(0),
+        ]);
+        assert_eq!(router.queue_type_to_family, [
+            0,
+            0,
+            0,
+            0,
+        ]);
     }
 }

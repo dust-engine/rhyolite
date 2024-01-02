@@ -1,5 +1,7 @@
 use std::arch::x86_64::_rdrand16_step;
 
+use crate::queue::{QueuesRouter, QueueRef};
+
 use super::*;
 use bevy_app::Update;
 use bevy_ecs::{
@@ -11,8 +13,14 @@ use bevy_ecs::{
 #[derive(Resource)]
 struct Image;
 
-fn system1(_commands: RenderCommands<'g'>, _render: RenderResMut<Image>) {}
-fn system2(_commands: RenderCommands<'g'>, _render: RenderRes<Image>) {}
+fn system_g1(_commands: RenderCommands<'g'>, _render: RenderResMut<Image>) {}
+fn system_g2(_commands: RenderCommands<'g'>, _render: RenderRes<Image>) {}
+fn system_g3(_commands: RenderCommands<'g'>, _render: RenderRes<Image>) {}
+fn system_c1(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
+fn system_c2(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
+fn system_c3(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
+fn system_t1(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
+fn system_t2(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
 
 #[test]
 #[should_panic(
@@ -39,14 +47,28 @@ fn render_res_mut_panics_on_non_render_system() {
     assert!(schedule.initialize(&mut world).is_err());
 }
 
+const ROUTER: QueuesRouter = QueuesRouter {
+    queue_type_to_index: [QueueRef(0),QueueRef(1),QueueRef(2),QueueRef(3)],
+    queue_type_to_family: [0,0,0,0],
+    queue_family_to_types: Vec::new(),
+};
+
 #[test]
-fn my_test() {
+fn test0() {
     let mut schedule = Schedule::new(Update);
     schedule.add_build_pass(RenderSystemPass {});
 
-    schedule.add_systems((system1, system2.before(system1)));
+    schedule.add_systems((
+        system_g1,
+        system_g2,
+        system_c1.after(system_g1).after(system_g2),
+        system_t1,
+        system_g3.after(system_g2).after(system_t1),
+        system_t2.after(system_c1).after(system_g3)
+        
+    ));
 
     let mut world = World::default();
+    world.insert_resource(ROUTER);
     schedule.initialize(&mut world).unwrap();
-    println!("Done");
 }
