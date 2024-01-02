@@ -5,7 +5,8 @@ use bevy_ecs::{
     schedule::{NodeId, ReportCycles, ScheduleBuildPass},
     world::World,
 };
-use bevy_utils::petgraph::{graphmap::NodeTrait, Direction::Incoming};
+use bevy_utils::petgraph::{graphmap::NodeTrait, Direction::{Incoming, Outgoing}, visit::{IntoNeighbors, IntoNeighborsDirected, depth_first_search, ControlFlow, Dfs, Walker}};
+use itertools::Itertools;
 
 use crate::{ecs::QueueAssignment, queue::{QueuesRouter, QueueRef}};
 
@@ -111,43 +112,94 @@ impl ScheduleBuildPass for RenderSystemPass {
         // This is unfortunately not exposed in Vulkan, so we're stuck agressively merging nodes.
         // https://github.com/KhronosGroup/Vulkan-Docs/issues/771
 
+        // The algorithm tries to find a topological sorting for each queue while minimizing the number
+        // of semaphore syncronizations. On each iteration, we produce 0 or 1 "stage" for each queue.
+        // We does this by popping nodes with no incoming edges as much as possible, as long as doing so
+        // will not cause a cycle between queue nodes in the current stage. We do this by maintaining a
+        // tiny graph with up to X nodes, where X = the total number of queues. Every time we pop a node,
+        // we ensure that doing so will not cause a cycle in this tiny graph. Otherwise, we defer
+        // this node to the next stage.
+
         // Step 1.2: Agressively merge nodes
-        // (queue_node_buffer, mask of dependent colors of this queue node, current stage index, stages)
-        // indexed by color
-        let mut queue_nodes: Vec<(Vec<usize>, u32, Vec<Vec<usize>>)> = vec![
-            (Vec::new(), 0, Vec::new());
-            num_queues as usize
-        ];
-        let topo = bevy_utils::petgraph::algo::toposort(&render_graph, None).unwrap(); // TODO: better to be bredth first
-        for node in topo {
-            let meta = render_graph_meta[node].as_ref().unwrap();
+        let mut heap: Vec<usize> = Vec::new();
 
-            let (queue_node_buffer, current_stage_index, stages) = &mut queue_nodes[meta.selected_queue.0 as usize];
-
-            let mut ancestor_mask: u8 = 0;
-            let mut parent_mask: u8 = 0;
-            for parent_node in render_graph.neighbors_directed(node, Incoming) {
-                let parent_meta = render_graph_meta[parent_node].as_ref().unwrap();
-                ancestor_mask |= parent_meta.ancestor_colors;
-                parent_mask |= 1 << parent_meta.selected_queue.0;
+        // First, find all nodes with no incoming edges
+        for node in render_graph.nodes() {
+            if render_graph.neighbors_directed(node, Incoming).next().is_none() {
+                // Has no incoming edges
+                let meta = render_graph_meta[node].as_mut().unwrap();
+                heap.push(node);
             }
+        }
+        let mut stage_index = 0;
+        // (buffer, stages)
+        let mut colors: Vec<(Vec<usize>, Vec<Vec<usize>>)> = vec![Default::default(); num_queues as usize];
+        let mut tiny_graph = bevy_utils::petgraph::graphmap::DiGraphMap::<u8, ()>::new();
+        let mut current_graph = render_graph.clone();
+        let mut heap_next_stage: Vec<usize> = Vec::new(); // nodes to be deferred to the next stage
+        while let Some(node) = heap.pop() {
             let meta = render_graph_meta[node].as_mut().unwrap();
-            meta.ancestor_colors = ancestor_mask | parent_mask;
-            if parent_mask & (1 << meta.selected_queue.0) == 0 {
-                // has no parent with same color
-                if ancestor_mask & (1 << meta.selected_queue.0) != 0 {
-                    // ancestor has same color
-                    // flush node
-                    let queue_node = std::mem::take(queue_node_buffer);
-                    stages.push(queue_node);
-                    *current_stage_index += 1;
-                    println!("will have cycle");
-                    meta.ancestor_colors = 0;
+            let node_color = meta.selected_queue;
+            let mut should_defer = false;
+            for parent in render_graph.neighbors_directed(node, Incoming) {
+                let parent_meta = render_graph_meta[parent].as_mut().unwrap();
+                if parent_meta.selected_queue != node_color {
+                    let start = parent_meta.selected_queue.0;
+                    let end = node_color.0;
+                    let has_path = Dfs::new(&tiny_graph, end).iter(&tiny_graph).any(|x| x == start);
+                    if has_path {
+                        // There is already a path from end to start, so adding a node from start to end causes a cycle.
+                        should_defer = true;
+                        break;
+                    }
                 }
             }
-            meta.stage_index = *current_stage_index;
-            queue_node_buffer.push(node);
+            if should_defer {
+                // Adding this node causes a cycle in the tiny graph.
+                heap_next_stage.push(node);
+            } else {
+                let meta = render_graph_meta[node].as_mut().unwrap();
+                meta.stage_index = stage_index;
+                colors[meta.selected_queue.0 as usize].0.push(node);
+
+                for parent in render_graph.neighbors_directed(node, Incoming) {
+                    // Update the tiny graph.
+                    let parent_meta = render_graph_meta[parent].as_mut().unwrap();
+                    if parent_meta.selected_queue != node_color {
+                        let start = parent_meta.selected_queue.0;
+                        let end = node_color.0;
+                        tiny_graph.add_edge(start, end, ());
+                    }
+                }
+
+                for child in current_graph.neighbors_directed(node, Outgoing) {
+                    let mut  other_parents = current_graph.neighbors_directed(child, Incoming);
+                    other_parents.next().unwrap();
+                    if other_parents.next().is_some() {
+                        // other edges exist
+                        continue;
+                    }
+                    // no other edges
+                    heap.push(child);
+                }
+                current_graph.remove_node(node);
+            }
+
+            if heap.is_empty() {
+                // Flush all colors
+                for (queue_node_buffer, stages) in colors.iter_mut() {
+                    if !queue_node_buffer.is_empty() {
+                        // Flush remaining nodes
+                        stages.push(std::mem::take(queue_node_buffer));
+                    }
+                }
+                // Start a new stage
+                stage_index += 1;
+                tiny_graph.clear(); // Clear the tiny graph because we've flipped to a new stage.
+                std::mem::swap(&mut heap, &mut heap_next_stage);
+            }
         }
+        
 
         // Step 1.3: Build queue graph
         #[derive(Hash, PartialEq, Eq, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -157,7 +209,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         let mut queue_graph = bevy_utils::petgraph::graphmap::DiGraphMap::<QueueGraphNode, ()>::new();
         // Flush all colors
-        for (queue_node_buffer, _current_stage_index, stages) in queue_nodes.iter_mut() {
+        for (queue_node_buffer, stages) in colors.iter_mut() {
             if !queue_node_buffer.is_empty() {
                 // Flush remaining nodes
                 stages.push(std::mem::take(queue_node_buffer));
@@ -176,7 +228,9 @@ impl ScheduleBuildPass for RenderSystemPass {
                             stage_index: neighbor_meta.stage_index,
                             queue: neighbor_meta.selected_queue
                         };
-                        queue_graph.add_edge(queue_graph_node, neighbor_queue_graph_node, ());
+                        if queue_graph_node != neighbor_queue_graph_node { // avoid self edges
+                            queue_graph.add_edge(queue_graph_node, neighbor_queue_graph_node, ());
+                        }
                     }
                 }
             }

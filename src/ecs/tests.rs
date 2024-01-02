@@ -19,8 +19,8 @@ fn system_g3(_commands: RenderCommands<'g'>, _render: RenderRes<Image>) {}
 fn system_c1(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
 fn system_c2(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
 fn system_c3(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
-fn system_t1(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
-fn system_t2(_commands: RenderCommands<'c'>, _render: RenderRes<Image>) {}
+fn system_t1(_commands: RenderCommands<'t'>, _render: RenderRes<Image>) {}
+fn system_t2(_commands: RenderCommands<'t'>, _render: RenderRes<Image>) {}
 
 #[test]
 #[should_panic(
