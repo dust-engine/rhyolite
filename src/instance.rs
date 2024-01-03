@@ -14,7 +14,7 @@ pub struct Instance {
 }
 
 #[derive(Clone, Copy)]
-pub struct Version(pub(crate) u32);
+pub struct Version(pub u32);
 impl Version {
     pub fn new(variant: u32, major: u32, minor: u32, patch: u32) -> Self {
         let num = vk::make_api_version(variant, major, minor, patch);
@@ -74,12 +74,12 @@ pub(crate) struct InstanceCreateInfo<'a> {
     pub engine_name: &'a CStr,
     pub engine_version: Version,
     pub api_version: Version,
-    pub enabled_layer_names: &'a [&'a CStr],
-    pub enabled_extension_names: &'a [&'a CStr],
+    pub enabled_layer_names: &'a [*const c_char],
+    pub enabled_extension_names: &'a [*const c_char],
 }
 
-const DEFAULT_INSTANCE_EXTENSIONS: &[&'static CStr] =
-    &[ash::extensions::ext::DebugUtils::name()];
+const DEFAULT_INSTANCE_EXTENSIONS: &[*const c_char] =
+    &[ash::extensions::ext::DebugUtils::name().as_ptr()];
 impl<'a> Default for InstanceCreateInfo<'a> {
     fn default() -> Self {
         Self {
@@ -96,16 +96,6 @@ impl<'a> Default for InstanceCreateInfo<'a> {
 
 impl Instance {
     pub fn create(entry: Arc<ash::Entry>, info: &InstanceCreateInfo) -> VkResult<Self> {
-        let enabled_instance_extensions: Vec<*const c_char> = info
-        .enabled_layer_names
-        .iter()
-        .map(|a| a.as_ptr())
-        .collect();
-        let enabled_instance_layers: Vec<*const c_char> = info
-            .enabled_layer_names
-            .iter()
-            .map(|a| a.as_ptr())
-            .collect();
         let info = vk::InstanceCreateInfo {
             p_application_info: &vk::ApplicationInfo {
                 p_application_name: info.application_name.as_ptr(),
@@ -115,10 +105,10 @@ impl Instance {
                 api_version: info.api_version.0,
                 ..Default::default()
             },
-            enabled_layer_count: enabled_instance_layers.len() as u32,
-            pp_enabled_layer_names: enabled_instance_layers.as_ptr(),
-            enabled_extension_count: enabled_instance_extensions.len() as u32,
-            pp_enabled_extension_names: enabled_instance_extensions.as_ptr(),
+            enabled_layer_count: info.enabled_layer_names.len() as u32,
+            pp_enabled_layer_names: info.enabled_layer_names.as_ptr(),
+            enabled_extension_count: info.enabled_extension_names.len() as u32,
+            pp_enabled_extension_names: info.enabled_extension_names.as_ptr(),
             ..Default::default()
         };
         // Safety: No Host Syncronization rules for vkCreateInstance.
