@@ -1,3 +1,4 @@
+use ash::vk;
 use bevy_ecs::{
     schedule::{NodeId, ScheduleBuildPass},
     world::World,
@@ -62,7 +63,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             config: RenderSystemConfig,
             selected_queue: QueueRef,
             stage_index: u32,
-            ancestor_colors: u8,
         }
         let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> =
             vec![None; graph.systems.len()];
@@ -95,7 +95,6 @@ impl ScheduleBuildPass for RenderSystemPass {
                 config: render_system_config.clone(),
                 selected_queue,
                 stage_index: u32::MAX,
-                ancestor_colors: 0,
             });
             render_graph.add_node(node_id);
             for neighbor in dependency_flattened.neighbors(node) {
@@ -254,6 +253,9 @@ impl ScheduleBuildPass for RenderSystemPass {
             }
         }
         println!("{:#?}", queue_graph);
+
+        // Step 1.4: Insert systems to flush command buffers.
+        // TODO: create one timeline semaphore for each queue.
 
         // Step 2: inside each queue, insert pipeline barriers.
 
