@@ -1,5 +1,6 @@
 use crate::cstr;
 use ash::{prelude::VkResult, vk};
+use bevy_ecs::system::Resource;
 use std::{
     collections::BTreeSet,
     ffi::{c_char, CStr},
@@ -8,9 +9,10 @@ use std::{
     sync::Arc,
 };
 
+#[derive(Clone, Resource)]
 pub struct Instance {
     entry: Arc<ash::Entry>,
-    instance: ash::Instance,
+    instance: Arc<ash::Instance>,
 }
 
 #[derive(Clone, Copy)]
@@ -115,7 +117,7 @@ impl Instance {
         let instance = unsafe { entry.create_instance(&info, None)? };
         Ok(Instance {
             entry,
-            instance,
+            instance: Arc::new(instance),
         })
     }
     pub fn entry(&self) -> &Arc<ash::Entry> {

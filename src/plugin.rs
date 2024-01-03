@@ -1,13 +1,15 @@
-use std::{
-    ffi::{c_char, CStr, CString},
-    sync::Arc, collections::{BTreeMap, BTreeSet}, fmt::Display,
-};
-use thiserror::Error;
-use ash::{vk, prelude::VkResult};
+use ash::{prelude::VkResult, vk};
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::{c_char, CStr, CString},
+    fmt::Display,
+    sync::Arc,
+};
+use thiserror::Error;
 
-use crate::{Version, Instance, Device};
+use crate::{Device, Instance, Version};
 use cstr::cstr;
 
 pub struct LayerProperties {
@@ -26,35 +28,67 @@ pub struct RhyolitePlugin {
     pub physical_device_index: usize,
 
     enabled_instance_extensions: Vec<*const c_char>,
-    enabled_instance_layers: Vec<*const CStr>,
+    enabled_instance_layers: Vec<*const c_char>,
 
     entry: Arc<ash::Entry>,
-    available_layers: BTreeMap<String, LayerProperties>,
-    available_extensions: BTreeMap<String, Version>,
+    available_layers: BTreeMap<CString, LayerProperties>,
+    available_extensions: BTreeMap<CString, Version>,
 }
-unsafe impl Send for RhyolitePlugin{}
-unsafe impl Sync for RhyolitePlugin{}
+unsafe impl Send for RhyolitePlugin {}
+unsafe impl Sync for RhyolitePlugin {}
 impl RhyolitePlugin {
-    pub fn with_instance_extension(&mut self, extension: &CStr) {
-        self.enabled_instance_extensions.push(extension.as_ptr());
+    pub fn with_instance_extension(&mut self, extension: &'static CStr) -> Option<Version> {
+        if let Some(v) = self.available_extensions.get(extension) {
+            self.enabled_instance_extensions.push(extension.as_ptr());
+            Some(*v)
+        } else {
+            None
+        }
     }
-    pub fn with_instance_layer(&mut self, layer: &CStr) -> Option<Version> {
-        self.enabled_instance_layers.push(layer);
+    pub fn with_instance_extension_for_layer(
+        &mut self,
+        extension: &'static CStr,
+        layer: &'static CStr,
+    ) -> Option<Version> {
+        let all_extensions = self
+            .entry
+            .enumerate_instance_extension_properties(Some(layer))
+            .unwrap();
+        let ext = all_extensions.into_iter().find(|ext| unsafe {
+            let ext_name = CStr::from_bytes_until_nul(std::slice::from_raw_parts(
+                ext.extension_name.as_ptr() as *const u8,
+                ext.extension_name.len(),
+            ))
+            .unwrap();
+            ext_name == extension
+        });
+        if let Some(ext) = ext {
+            self.enabled_instance_extensions.push(extension.as_ptr());
+            Some(Version(ext.spec_version))
+        } else {
+            None
+        }
+    }
+    pub fn with_instance_layer(&mut self, layer: &'static CStr) -> Option<&LayerProperties> {
+        if let Some(layer_properties) = self.available_layers.get(layer) {
+            self.enabled_instance_layers.push(layer.as_ptr());
+            Some(layer_properties)
+        } else {
+            None
+        }
     }
 }
-
 
 #[derive(Error, Debug)]
 pub enum RhyoliltePluginInitError {
     #[error("Ash loading failed")]
     LoadingError(#[from] ash::LoadingError),
-    
     #[error("Vulkan Implementation error: Invalid C String")]
     ImplementationError(#[from] std::ffi::FromBytesUntilNulError),
-
-    
     #[error("Vulkan Implementation error: Invalid UTF-8 String")]
-    ImplementationErrorUtf8(#[from] std::str::Utf8Error)
+    ImplementationErrorUtf8(#[from] std::str::Utf8Error),
+    #[error("Vulkan error: {0}")]
+    VulkanError(#[from] vk::Result),
 }
 
 impl RhyolitePlugin {
@@ -62,35 +96,50 @@ impl RhyolitePlugin {
         let entry = unsafe { ash::Entry::load().unwrap() };
         let entry = Arc::new(entry);
         let available_layers = entry
-            .enumerate_instance_layer_properties()
-            .unwrap()
+            .enumerate_instance_layer_properties()?
             .into_iter()
-            .map(|layer| -> Result<_, RhyoliltePluginInitError> {
-                let str = CStr::from_bytes_until_nul(unsafe {
-                    std::slice::from_raw_parts(layer.layer_name.as_ptr() as *const u8, layer.layer_name.len())
-                })?;
-                let str = str.to_str()?.to_string();
-                Ok((str, LayerProperties {
-                    implementation_version: Version(layer.implementation_version),
-                    spec_version: Version(layer.spec_version),
-                    description: CStr::from_bytes_until_nul(unsafe {
-                        std::slice::from_raw_parts(layer.description.as_ptr() as *const u8, layer.description.len())
-                    })?
-                        .to_str()?
-                        .to_string(),
-                }))
-            })
-            .collect::<Vec<_>>();
+            .map(
+                |layer| -> Result<(CString, LayerProperties), RhyoliltePluginInitError> {
+                    let str = CStr::from_bytes_until_nul(unsafe {
+                        std::slice::from_raw_parts(
+                            layer.layer_name.as_ptr() as *const u8,
+                            layer.layer_name.len(),
+                        )
+                    })?;
+                    Ok((
+                        str.to_owned(),
+                        LayerProperties {
+                            implementation_version: Version(layer.implementation_version),
+                            spec_version: Version(layer.spec_version),
+                            description: CStr::from_bytes_until_nul(unsafe {
+                                std::slice::from_raw_parts(
+                                    layer.description.as_ptr() as *const u8,
+                                    layer.description.len(),
+                                )
+                            })?
+                            .to_str()?
+                            .to_string(),
+                        },
+                    ))
+                },
+            )
+            .collect::<Result<BTreeMap<CString, LayerProperties>, RhyoliltePluginInitError>>()?;
 
         let available_extensions = entry
             .enumerate_instance_extension_properties(None)?
             .into_iter()
-            .map(|ext| {
-                let str = CStr::from_bytes_until_nul(&ext.extension_name)?;
-                let str = str.to_str()?.to_string();
-                (str, ext.spec_version.into())
-            })
-            .collect::<BTreeMap<_, _>>();
+            .map(
+                |ext| -> Result<(CString, Version), RhyoliltePluginInitError> {
+                    let str = CStr::from_bytes_until_nul(unsafe {
+                        std::slice::from_raw_parts(
+                            ext.extension_name.as_ptr() as *const u8,
+                            ext.extension_name.len(),
+                        )
+                    })?;
+                    Ok((str.to_owned(), Version(ext.spec_version)))
+                },
+            )
+            .collect::<Result<BTreeMap<CString, Version>, RhyoliltePluginInitError>>()?;
         Ok(Self {
             application_name: cstr!(b"Unnamed Application").to_owned(),
             application_version: Default::default(),
@@ -102,46 +151,43 @@ impl RhyolitePlugin {
             enabled_instance_layers: Vec::new(),
             entry,
             available_layers,
-            available_extensions
+            available_extensions,
         })
     }
 }
 
 #[derive(Default, Resource)]
 struct ExtensionSettings {
-    pub instance_extensions: Vec<*const c_char>,
-    pub instance_layers: Vec<*const CStr>,
-    pub device_extensions: Vec<*const CStr>,
+    available_extensions: BTreeMap<CString, Version>,
+    device_extensions: Vec<*const c_char>,
 }
-unsafe impl Send for ExtensionSettings{}
-unsafe impl Sync for ExtensionSettings{}
-
+unsafe impl Send for ExtensionSettings {}
+unsafe impl Sync for ExtensionSettings {}
 
 impl Plugin for RhyolitePlugin {
     fn build(&self, app: &mut App) {
+        let settings = ExtensionSettings::default();
+        let instance = Instance::create(
+            self.entry.clone(),
+            &crate::InstanceCreateInfo {
+                enabled_extension_names: &self.enabled_instance_extensions,
+                enabled_layer_names: &self.enabled_instance_layers,
+                api_version: self.api_version.clone(),
+                engine_name: self.engine_name.as_c_str(),
+                engine_version: self.engine_version,
+                application_name: self.application_name.as_c_str(),
+                application_version: self.application_version,
+            },
+        )
+        .unwrap();
+
+        app.insert_resource(settings).insert_resource(instance);
     }
     fn cleanup(&self, app: &mut App) {
         app.world.remove_resource::<ExtensionSettings>();
     }
     fn finish(&self, app: &mut App) {
-        let entry = unsafe { ash::Entry::load().unwrap() };
-        let instance = {
-            Arc::new(
-                Instance::create(
-                    Arc::new(entry),
-                    &crate::InstanceCreateInfo {
-                        enabled_extension_names: &self.enabled_instance_extensions,
-                        enabled_layer_names: &self.enabled_instance_layers,
-                        api_version: self.api_version.clone(),
-                        engine_name: self.engine_name.as_c_str(),
-                        engine_version: self.engine_version,
-                        application_name: self.application_name.as_c_str(),
-                        application_version: self.application_version,
-                    },
-                )
-                .unwrap(),
-            )
-        };
+        let instance: &Instance = app.world.resource();
         let physical_device = crate::PhysicalDevice::enumerate(&instance)
             .unwrap()
             .into_iter()
@@ -155,22 +201,34 @@ impl Plugin for RhyolitePlugin {
             physical_device.memory_model()
         );
 
+        let extension_settings: &ExtensionSettings = app.world.resource();
         let device = Device::create(
-            instance,
+            instance.clone(),
             physical_device,
             &[],
-            &self.enabled_device_extensions,
-        ).unwrap();
+            &extension_settings.device_extensions,
+        )
+        .unwrap();
 
         app.insert_resource(device);
     }
 }
 
 pub trait RhyoliteApp {
-    fn add_device_extension(&mut self) -> Option<()>;
-    fn add_instance_extension(&mut self) -> Option<()>;
-    fn add_layer(&mut self) -> Option<()>;
+    fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version>;
 }
 
 impl RhyoliteApp for App {
+    fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version> {
+        let mut extension_settings = self.world.resource_mut::<ExtensionSettings>();
+        if let Some(v) = extension_settings.available_extensions.get(extension) {
+            let v = *v;
+            extension_settings
+                .device_extensions
+                .push(extension.as_ptr());
+            Some(v)
+        } else {
+            None
+        }
+    }
 }

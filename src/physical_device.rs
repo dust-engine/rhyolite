@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 pub struct PhysicalDevice {
-    instance: Arc<Instance>,
+    instance: Instance,
     physical_device: vk::PhysicalDevice,
     properties: Box<PhysicalDeviceProperties>,
     memory_properties: Box<vk::PhysicalDeviceMemoryProperties>,
@@ -35,13 +35,13 @@ pub enum PhysicalDeviceMemoryModel {
 }
 
 impl PhysicalDevice {
-    pub fn instance(&self) -> &Arc<Instance> {
+    pub fn instance(&self) -> &Instance {
         &self.instance
     }
     pub fn raw(&self) -> vk::PhysicalDevice {
         self.physical_device
     }
-    pub fn enumerate(instance: &Arc<Instance>) -> VkResult<Vec<Self>> {
+    pub fn enumerate(instance: &Instance) -> VkResult<Vec<Self>> {
         // Safety: No Host Syncronization rules for vkEnumeratePhysicalDevices.
         // It should be OK to call this method and obtain multiple copies of VkPhysicalDevice,
         // because nothing except vkDestroyInstance require exclusive access to VkPhysicalDevice.

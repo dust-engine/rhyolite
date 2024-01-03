@@ -5,16 +5,17 @@ use bevy_ecs::system::Resource;
 use crate::Instance;
 use crate::PhysicalDevice;
 
+use std::ffi::c_char;
 use std::ffi::CStr;
 use std::ops::Deref;
 use std::sync::Arc;
 
 pub trait HasDevice {
-    fn device(&self) -> &Arc<Device>;
+    fn device(&self) -> &Device;
     fn physical_device(&self) -> &PhysicalDevice {
         &self.device().physical_device()
     }
-    fn instance(&self) -> &Arc<Instance> {
+    fn instance(&self) -> &Instance {
         self.device().physical_device().instance()
     }
 }
@@ -23,22 +24,18 @@ pub trait HasDevice {
 pub struct Device(Arc<DeviceInner>);
 
 pub struct DeviceInner {
-    instance: Arc<Instance>,
+    instance: Instance,
     physical_device: PhysicalDevice,
     device: ash::Device,
 }
 
 impl Device {
     pub fn create(
-        instance: Arc<Instance>,
+        instance: Instance,
         physical_device: PhysicalDevice,
         queues: &[vk::DeviceQueueCreateInfo],
-        extensions: &[&CStr],
+        extensions: &[*const c_char],
     ) -> VkResult<Self> {
-        let extensions = extensions
-            .iter()
-            .map(|&ext| ext.as_ptr())
-            .collect::<Vec<_>>();
         let create_info = vk::DeviceCreateInfo {
             queue_create_info_count: queues.len() as u32,
             p_queue_create_infos: queues.as_ptr(),
@@ -54,7 +51,7 @@ impl Device {
             device,
         })))
     }
-    pub fn instance(&self) -> &Arc<Instance> {
+    pub fn instance(&self) -> &Instance {
         self.0.physical_device.instance()
     }
     pub fn physical_device(&self) -> &PhysicalDevice {
