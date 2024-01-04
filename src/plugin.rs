@@ -92,7 +92,7 @@ pub enum RhyoliltePluginInitError {
 }
 
 impl RhyolitePlugin {
-    fn new() -> Result<Self, RhyoliltePluginInitError> {
+    pub fn new() -> Result<Self, RhyoliltePluginInitError> {
         let entry = unsafe { ash::Entry::load().unwrap() };
         let entry = Arc::new(entry);
         let available_layers = entry
