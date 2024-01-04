@@ -6,13 +6,11 @@ use core::ffi::{c_char, c_void};
 use std::{
     ffi::CStr,
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{Arc, RwLock, RwLockReadGuard}, collections::BTreeMap, any::{TypeId, Any}, ptr::NonNull,
 };
 pub struct PhysicalDevice {
     instance: Instance,
     physical_device: vk::PhysicalDevice,
-    properties: Box<PhysicalDeviceProperties>,
-    memory_properties: Box<vk::PhysicalDeviceMemoryProperties>,
     memory_model: PhysicalDeviceMemoryModel,
 }
 
@@ -111,17 +109,8 @@ impl PhysicalDevice {
             .collect();
         Ok(results)
     }
-    pub fn properties(&self) -> &PhysicalDeviceProperties {
-        &self.properties
-    }
     pub fn memory_model(&self) -> PhysicalDeviceMemoryModel {
         self.memory_model
-    }
-    pub fn memory_types(&self) -> &[vk::MemoryType] {
-        &self.memory_properties.memory_types[0..self.memory_properties.memory_type_count as usize]
-    }
-    pub fn memory_heaps(&self) -> &[vk::MemoryHeap] {
-        &self.memory_properties.memory_heaps[0..self.memory_properties.memory_heap_count as usize]
     }
     pub fn image_format_properties(
         &self,
@@ -148,64 +137,88 @@ impl PhysicalDevice {
     }
 }
 
+
+pub unsafe trait PhysicalDeviceProperty: Sized + Default + 'static {
+    fn get_new(this: &PhysicalDeviceProperties) -> Self {
+        let mut wrapper = vk::PhysicalDeviceProperties2::default();
+        let mut item = Self::default();
+        unsafe {
+            wrapper.p_next = &mut item as *mut Self as *mut c_void;
+            this.pdevice.instance().get_physical_device_properties2(this.pdevice.raw(), &mut wrapper);
+        }
+        item
+    }
+    fn get(this: &PhysicalDeviceProperties) -> &Self {
+        let properties = this.properties.read().unwrap();
+        if let Some(entry) = properties.get(&TypeId::of::<Self>()) {
+            let item = entry.deref().downcast_ref::<Self>().unwrap();
+            let item: NonNull<Self> = item.into();
+            unsafe {
+                // This is ok because entry is boxed and never removed as long as self is still alive.
+                return item.as_ref();
+            }
+        }
+        drop(properties);
+        let item = Self::get_new(this);
+        let item: Box<dyn Any> = Box::new(item);
+        let item_ptr = item.downcast_ref::<Self>().unwrap();
+        let item_ptr: NonNull<Self> = item_ptr.into();
+
+        let mut properties = this.properties.write().unwrap();
+        properties.insert(TypeId::of::<Self>(), item);
+        drop(properties);
+
+        unsafe {
+            // This is ok because entry is boxed and never removed as long as self is still alive.
+            return item_ptr.as_ref();
+        }
+    }
+}
+
 pub struct PhysicalDeviceProperties {
-    pub inner: vk::PhysicalDeviceProperties2,
-    pub v11: vk::PhysicalDeviceVulkan11Properties,
-    pub v12: vk::PhysicalDeviceVulkan12Properties,
-    pub v13: vk::PhysicalDeviceVulkan13Properties,
-    pub acceleration_structure: vk::PhysicalDeviceAccelerationStructurePropertiesKHR,
-    pub ray_tracing: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR,
+    pdevice: PhysicalDevice,
+    inner: vk::PhysicalDeviceProperties,
+    memory_properties: vk::PhysicalDeviceMemoryProperties,
+    properties: RwLock<BTreeMap<TypeId, Box<dyn Any>>>,
 }
 unsafe impl Send for PhysicalDeviceProperties {}
 unsafe impl Sync for PhysicalDeviceProperties {}
 impl PhysicalDeviceProperties {
-    fn new(
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
-    ) -> Box<PhysicalDeviceProperties> {
-        let mut this = Box::pin(Self {
-            inner: vk::PhysicalDeviceProperties2::default(),
-            v11: vk::PhysicalDeviceVulkan11Properties::default(),
-            v12: vk::PhysicalDeviceVulkan12Properties::default(),
-            v13: vk::PhysicalDeviceVulkan13Properties::default(),
-            acceleration_structure: vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default(),
-            ray_tracing: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default(),
-        });
-        this.inner.p_next = &mut this.v11 as *mut _ as *mut c_void;
-        this.v11.p_next = &mut this.v12 as *mut _ as *mut c_void;
-        this.v12.p_next = &mut this.v13 as *mut _ as *mut c_void;
-        this.v13.p_next = &mut this.acceleration_structure as *mut _ as *mut c_void;
-        this.acceleration_structure.p_next = &mut this.ray_tracing as *mut _ as *mut c_void;
-        unsafe {
-            instance.get_physical_device_properties2(physical_device, &mut this.inner);
-        }
-        std::pin::Pin::into_inner(this)
+    pub fn properties<T: PhysicalDeviceProperty + Default + 'static>(&self) -> &T {
+        T::get(self)
     }
     pub fn device_name(&self) -> &CStr {
         unsafe {
             CStr::from_bytes_until_nul(std::slice::from_raw_parts(
-                self.inner.properties.device_name.as_ptr() as *const _,
-                self.inner.properties.device_name.len(),
+                self.inner.device_name.as_ptr() as *const _,
+                self.inner.device_name.len(),
             ))
             .unwrap()
         }
     }
     pub fn api_version(&self) -> Version {
-        Version(self.inner.properties.api_version)
+        Version(self.inner.api_version)
     }
     pub fn driver_version(&self) -> Version {
-        Version(self.inner.properties.driver_version)
+        Version(self.inner.driver_version)
+    }
+    pub fn memory_types(&self) -> &[vk::MemoryType] {
+        &self.memory_properties.memory_types[0..self.memory_properties.memory_type_count as usize]
+    }
+    pub fn memory_heaps(&self) -> &[vk::MemoryHeap] {
+        &self.memory_properties.memory_heaps[0..self.memory_properties.memory_heap_count as usize]
     }
 }
 impl Deref for PhysicalDeviceProperties {
     type Target = vk::PhysicalDeviceProperties;
     fn deref(&self) -> &Self::Target {
-        &self.inner.properties
+        &self.inner
     }
 }
-impl DerefMut for PhysicalDeviceProperties {
-    fn deref_mut(&mut self) -> &mut vk::PhysicalDeviceProperties {
-        &mut self.inner.properties
+
+unsafe impl PhysicalDeviceProperty for vk::PhysicalDeviceProperties {
+    fn get(this: &PhysicalDeviceProperties) -> &Self {
+        &this.inner
     }
 }
 
