@@ -1,4 +1,4 @@
-use ash::{prelude::VkResult, vk};
+use ash::{prelude::VkResult, vk::{self}};
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use std::{
@@ -9,7 +9,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{Device, Instance, PhysicalDevice, PhysicalDeviceProperties, Version};
+use crate::{Device, Instance, PhysicalDevice, PhysicalDeviceProperties, Version, PhysicalDeviceFeatures, Feature};
 use cstr::cstr;
 
 pub struct LayerProperties {
@@ -156,17 +156,39 @@ impl RhyolitePlugin {
     }
 }
 
-#[derive(Default, Resource)]
+#[derive(Resource)]
 struct ExtensionSettings {
     available_extensions: BTreeMap<CString, Version>,
     device_extensions: Vec<*const c_char>,
+}
+impl ExtensionSettings {
+    fn new(pdevice: &PhysicalDevice) -> VkResult<Self> {
+        let extension_names = unsafe {
+            pdevice.instance().enumerate_device_extension_properties(pdevice.raw())?
+        };
+        let extension_names = extension_names
+            .into_iter()
+            .map(|ext| {
+                let str = CStr::from_bytes_until_nul(unsafe {
+                    std::slice::from_raw_parts(
+                        ext.extension_name.as_ptr() as *const u8,
+                        ext.extension_name.len(),
+                    )
+                }).unwrap();
+                (str.to_owned(), Version(ext.spec_version))
+            })
+            .collect::<BTreeMap<CString, Version>>();
+        Ok(Self {
+            available_extensions: extension_names,
+            device_extensions: Vec::new(),
+        })
+    }
 }
 unsafe impl Send for ExtensionSettings {}
 unsafe impl Sync for ExtensionSettings {}
 
 impl Plugin for RhyolitePlugin {
     fn build(&self, app: &mut App) {
-        let settings = ExtensionSettings::default();
         let instance = Instance::create(
             self.entry.clone(),
             &crate::InstanceCreateInfo {
@@ -193,21 +215,32 @@ impl Plugin for RhyolitePlugin {
             properties.device_name(),
             properties.memory_model
         );
-        app.insert_resource(settings)
+        let features = PhysicalDeviceFeatures::new(physical_device.clone());
+        let extensions = ExtensionSettings::new(&physical_device).unwrap();
+        app.insert_resource(extensions)
             .insert_resource(instance)
             .insert_resource(physical_device)
-            .insert_resource(properties);
+            .insert_resource(properties)
+            .insert_resource(features);
     }
     fn cleanup(&self, app: &mut App) {
-        app.world.remove_resource::<ExtensionSettings>();
     }
     fn finish(&self, app: &mut App) {
+        let extension_settings: ExtensionSettings = app.world.remove_resource::<ExtensionSettings>().unwrap();
+        app.world.resource_mut::<PhysicalDeviceFeatures>().finalize();
         let physical_device: &PhysicalDevice = app.world.resource();
-        let extension_settings: &ExtensionSettings = app.world.resource();
+        let features = app.world.resource::<PhysicalDeviceFeatures>();
+        let array = [1.0_f32];
         let device = Device::create(
             physical_device.clone(),
-            &[],
+            &[vk::DeviceQueueCreateInfo {
+                queue_family_index: 0,
+                queue_count: 1,
+                p_queue_priorities: array.as_ptr(),
+                ..Default::default()
+            }],
             &extension_settings.device_extensions,
+            features.pdevice_features2(),
         )
         .unwrap();
 
@@ -217,6 +250,7 @@ impl Plugin for RhyolitePlugin {
 
 pub trait RhyoliteApp {
     fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version>;
+    fn enable_feature<T: Feature + Default>(&mut self, selector: impl FnMut(&mut T) -> &mut vk::Bool32)-> Option<()>;
 }
 
 impl RhyoliteApp for App {
@@ -231,5 +265,9 @@ impl RhyoliteApp for App {
         } else {
             None
         }
+    }
+    fn enable_feature<T: Feature + Default>(&mut self, selector: impl FnMut(&mut T) -> &mut vk::Bool32) -> Option<()> {
+        let mut features = self.world.resource_mut::<PhysicalDeviceFeatures>();
+        features.enable_feature::<T>(selector)
     }
 }

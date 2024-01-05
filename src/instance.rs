@@ -10,9 +10,11 @@ use std::{
 };
 
 #[derive(Clone, Resource)]
-pub struct Instance {
+pub struct Instance(Arc<InstanceInner>);
+
+struct InstanceInner {
     entry: Arc<ash::Entry>,
-    instance: Arc<ash::Instance>,
+    instance: ash::Instance,
 }
 
 #[derive(Clone, Copy)]
@@ -70,7 +72,7 @@ impl From<Version> for String {
     }
 }
 
-pub(crate) struct InstanceCreateInfo<'a> {
+pub struct InstanceCreateInfo<'a> {
     pub application_name: &'a CStr,
     pub application_version: Version,
     pub engine_name: &'a CStr,
@@ -98,15 +100,16 @@ impl<'a> Default for InstanceCreateInfo<'a> {
 
 impl Instance {
     pub fn create(entry: Arc<ash::Entry>, info: &InstanceCreateInfo) -> VkResult<Self> {
+        let application_info = vk::ApplicationInfo {
+            p_application_name: info.application_name.as_ptr(),
+            application_version: info.application_version.0,
+            p_engine_name: info.engine_name.as_ptr(),
+            engine_version: info.engine_version.0,
+            api_version: info.api_version.0,
+            ..Default::default()
+        };
         let info = vk::InstanceCreateInfo {
-            p_application_info: &vk::ApplicationInfo {
-                p_application_name: info.application_name.as_ptr(),
-                application_version: info.application_version.0,
-                p_engine_name: info.engine_name.as_ptr(),
-                engine_version: info.engine_version.0,
-                api_version: info.api_version.0,
-                ..Default::default()
-            },
+            p_application_info: &application_info,
             enabled_layer_count: info.enabled_layer_names.len() as u32,
             pp_enabled_layer_names: info.enabled_layer_names.as_ptr(),
             enabled_extension_count: info.enabled_extension_names.len() as u32,
@@ -115,13 +118,13 @@ impl Instance {
         };
         // Safety: No Host Syncronization rules for vkCreateInstance.
         let instance = unsafe { entry.create_instance(&info, None)? };
-        Ok(Instance {
+        Ok(Instance(Arc::new(InstanceInner {
             entry,
-            instance: Arc::new(instance),
-        })
+            instance,
+        })))
     }
     pub fn entry(&self) -> &Arc<ash::Entry> {
-        &self.entry
+        &self.0.entry
     }
 }
 
@@ -129,11 +132,11 @@ impl Deref for Instance {
     type Target = ash::Instance;
 
     fn deref(&self) -> &Self::Target {
-        &self.instance
+        &self.0.instance
     }
 }
 
-impl Drop for Instance {
+impl Drop for InstanceInner {
     fn drop(&mut self) {
         tracing::info!(instance = ?self.instance.handle(), "drop instance");
         // Safety: Host Syncronization rule for vkDestroyInstance:

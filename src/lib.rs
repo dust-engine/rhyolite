@@ -1,7 +1,6 @@
 mod command_pool;
 mod device;
 pub mod ecs;
-mod features;
 mod instance;
 mod physical_device;
 mod plugin;

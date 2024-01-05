@@ -4,6 +4,7 @@ use bevy_ecs::system::Resource;
 
 use crate::Instance;
 use crate::PhysicalDevice;
+use crate::PhysicalDeviceFeatures;
 
 use std::ffi::c_char;
 use std::ffi::CStr;
@@ -33,13 +34,14 @@ impl Device {
         physical_device: PhysicalDevice,
         queues: &[vk::DeviceQueueCreateInfo],
         extensions: &[*const c_char],
+        features: &vk::PhysicalDeviceFeatures2,
     ) -> VkResult<Self> {
         let create_info = vk::DeviceCreateInfo {
+            p_next: features as *const vk::PhysicalDeviceFeatures2 as *const _,
             queue_create_info_count: queues.len() as u32,
             p_queue_create_infos: queues.as_ptr(),
             enabled_extension_count: extensions.len() as u32,
             pp_enabled_extension_names: extensions.as_ptr(),
-            p_enabled_features: todo!(),
             ..Default::default()
         };
         let device = unsafe {
@@ -68,9 +70,9 @@ impl Deref for Device {
     }
 }
 
-impl Drop for Device {
+impl Drop for DeviceInner {
     fn drop(&mut self) {
-        tracing::info!(device = ?self.handle(), "drop device");
+        tracing::info!(device = ?self.device.handle(), "drop device");
         // Safety: Host Syncronization rule for vkDestroyDevice:
         // - Host access to device must be externally synchronized.
         // - Host access to all VkQueue objects created from device must be externally synchronized
@@ -78,7 +80,7 @@ impl Drop for Device {
         // VkQueue objects may not exist at this point, because Queue retains an Arc to Device.
         // If there still exist a Queue, the Device wouldn't be dropped.
         unsafe {
-            self.destroy_device(None);
+            self.device.destroy_device(None);
         }
     }
 }
