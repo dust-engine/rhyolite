@@ -1,16 +1,16 @@
 use crate::Version;
 
-use super::{Device, Instance};
+use super::Instance;
 use ash::{prelude::VkResult, vk};
 use bevy_ecs::system::Resource;
-use core::ffi::{c_char, c_void};
+use core::ffi::c_void;
 use std::{
     any::{Any, TypeId},
     collections::BTreeMap,
     ffi::CStr,
     ops::{Deref, DerefMut},
     ptr::NonNull,
-    sync::{Arc, RwLock, RwLockReadGuard},
+    sync::RwLock,
 };
 
 #[derive(Clone, Resource)]
@@ -245,8 +245,6 @@ pub struct MemoryHeap {
     pub usage: vk::DeviceSize,
 }
 
-
-
 #[derive(Default)]
 struct FeatureMap {
     physical_device_features: vk::PhysicalDeviceFeatures,
@@ -256,7 +254,9 @@ unsafe impl Send for FeatureMap {}
 unsafe impl Sync for FeatureMap {}
 
 #[derive(Resource)]
-pub enum PhysicalDeviceFeatures {
+pub struct PhysicalDeviceFeatures(PhysicalDeviceFeaturesInner);
+
+enum PhysicalDeviceFeaturesInner {
     Setup {
         physical_device: PhysicalDevice,
         available_features: FeatureMap,
@@ -267,9 +267,8 @@ pub enum PhysicalDeviceFeatures {
         enabled_features: BTreeMap<TypeId, Box<dyn Feature>>,
     },
 }
-unsafe impl Send for PhysicalDeviceFeatures {}
-unsafe impl Sync for PhysicalDeviceFeatures {}
-
+unsafe impl Send for PhysicalDeviceFeaturesInner {}
+unsafe impl Sync for PhysicalDeviceFeaturesInner {}
 
 pub unsafe trait Feature: 'static {
     fn as_any(&self) -> &dyn Any;
@@ -282,11 +281,11 @@ impl PhysicalDeviceFeatures {
         &mut self,
         mut selector: impl FnMut(&mut T) -> &mut vk::Bool32,
     ) -> Option<()> {
-        let PhysicalDeviceFeatures::Setup {
+        let PhysicalDeviceFeaturesInner::Setup {
             physical_device,
             available_features,
             enabled_features,
-        } = self
+        } = &mut self.0
         else {
             panic!("Cannot enable features outside plugin build phase");
         };
@@ -304,7 +303,11 @@ impl PhysicalDeviceFeatures {
                 };
                 Box::new(feature)
             });
-        let feature = feature.deref_mut().as_any_mut().downcast_mut::<T>().unwrap();
+        let feature = feature
+            .deref_mut()
+            .as_any_mut()
+            .downcast_mut::<T>()
+            .unwrap();
         let feature_available: vk::Bool32 = *selector(feature);
         if feature_available == vk::FALSE {
             // feature unavailable
@@ -315,46 +318,59 @@ impl PhysicalDeviceFeatures {
             .features
             .entry(TypeId::of::<T>())
             .or_insert_with(|| Box::new(T::default()));
-        let enabled_features = enabled_features.deref_mut().as_any_mut().downcast_mut::<T>().unwrap();
+        let enabled_features = enabled_features
+            .deref_mut()
+            .as_any_mut()
+            .downcast_mut::<T>()
+            .unwrap();
         let feature_to_enable = selector(enabled_features);
         *feature_to_enable = vk::TRUE;
         Some(())
     }
 
     pub fn enabled_features<T: Feature + Default + 'static>(&self) -> Option<&T> {
-        let enabled_features = match self {
-            Self::Setup {
+        let enabled_features = match &self.0 {
+            PhysicalDeviceFeaturesInner::Setup {
                 enabled_features, ..
             } => &enabled_features.features,
-            Self::Finalized {
+            PhysicalDeviceFeaturesInner::Finalized {
                 enabled_features, ..
             } => enabled_features,
         };
         let enabled_features = enabled_features.get(&TypeId::of::<T>())?;
-        let enabled_features = enabled_features.deref().as_any().downcast_ref::<T>().unwrap();
+        let enabled_features = enabled_features
+            .deref()
+            .as_any()
+            .downcast_ref::<T>()
+            .unwrap();
         Some(enabled_features)
     }
 
     pub(crate) fn new(pdevice: PhysicalDevice) -> Self {
         let available_features = FeatureMap {
             physical_device_features: unsafe {
-                pdevice.instance().get_physical_device_features(pdevice.raw())
+                pdevice
+                    .instance()
+                    .get_physical_device_features(pdevice.raw())
             },
             features: Default::default(),
         };
-        Self::Setup {
+        Self(PhysicalDeviceFeaturesInner::Setup {
             physical_device: pdevice,
             available_features,
             enabled_features: Default::default(),
-        }
+        })
     }
 
     pub(crate) fn finalize(&mut self) {
-        if let Self::Setup {
+        if let PhysicalDeviceFeaturesInner::Setup {
             enabled_features, ..
-        } = self
+        } = &mut self.0
         {
-            let FeatureMap{ physical_device_features, mut features } = std::mem::take(enabled_features);
+            let FeatureMap {
+                physical_device_features,
+                mut features,
+            } = std::mem::take(enabled_features);
             let mut physical_device_features = vk::PhysicalDeviceFeatures2 {
                 features: physical_device_features,
                 ..Default::default()
@@ -367,15 +383,19 @@ impl PhysicalDeviceFeatures {
                     last = f.p_next();
                 }
             }
-            *self = Self::Finalized { enabled_features: features, physical_device_features }
+            *self = Self(PhysicalDeviceFeaturesInner::Finalized {
+                enabled_features: features,
+                physical_device_features,
+            })
         }
     }
 
     /// Returns a valid [`vk::PhysicalDeviceFeatures2`] for use in the p_next chain of [`vk::DeviceCreateInfo`].
     pub(crate) fn pdevice_features2(&self) -> &vk::PhysicalDeviceFeatures2 {
-        if let Self::Finalized {
-            physical_device_features, ..
-        } = self
+        if let PhysicalDeviceFeaturesInner::Finalized {
+            physical_device_features,
+            ..
+        } = &self.0
         {
             physical_device_features
         } else {

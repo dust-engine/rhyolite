@@ -1,15 +1,20 @@
-use ash::{prelude::VkResult, vk::{self}};
+use ash::{
+    prelude::VkResult,
+    vk::{self},
+};
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     ffi::{c_char, CStr, CString},
-    fmt::Display,
     sync::Arc,
 };
 use thiserror::Error;
 
-use crate::{Device, Instance, PhysicalDevice, PhysicalDeviceProperties, Version, PhysicalDeviceFeatures, Feature};
+use crate::{
+    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
+    Version,
+};
 use cstr::cstr;
 
 pub struct LayerProperties {
@@ -164,7 +169,9 @@ struct ExtensionSettings {
 impl ExtensionSettings {
     fn new(pdevice: &PhysicalDevice) -> VkResult<Self> {
         let extension_names = unsafe {
-            pdevice.instance().enumerate_device_extension_properties(pdevice.raw())?
+            pdevice
+                .instance()
+                .enumerate_device_extension_properties(pdevice.raw())?
         };
         let extension_names = extension_names
             .into_iter()
@@ -174,7 +181,8 @@ impl ExtensionSettings {
                         ext.extension_name.as_ptr() as *const u8,
                         ext.extension_name.len(),
                     )
-                }).unwrap();
+                })
+                .unwrap();
                 (str.to_owned(), Version(ext.spec_version))
             })
             .collect::<BTreeMap<CString, Version>>();
@@ -223,11 +231,12 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(properties)
             .insert_resource(features);
     }
-    fn cleanup(&self, app: &mut App) {
-    }
     fn finish(&self, app: &mut App) {
-        let extension_settings: ExtensionSettings = app.world.remove_resource::<ExtensionSettings>().unwrap();
-        app.world.resource_mut::<PhysicalDeviceFeatures>().finalize();
+        let extension_settings: ExtensionSettings =
+            app.world.remove_resource::<ExtensionSettings>().unwrap();
+        app.world
+            .resource_mut::<PhysicalDeviceFeatures>()
+            .finalize();
         let physical_device: &PhysicalDevice = app.world.resource();
         let features = app.world.resource::<PhysicalDeviceFeatures>();
         let array = [1.0_f32];
@@ -250,7 +259,10 @@ impl Plugin for RhyolitePlugin {
 
 pub trait RhyoliteApp {
     fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version>;
-    fn enable_feature<T: Feature + Default>(&mut self, selector: impl FnMut(&mut T) -> &mut vk::Bool32)-> Option<()>;
+    fn enable_feature<T: Feature + Default>(
+        &mut self,
+        selector: impl FnMut(&mut T) -> &mut vk::Bool32,
+    ) -> Option<()>;
 }
 
 impl RhyoliteApp for App {
@@ -266,7 +278,10 @@ impl RhyoliteApp for App {
             None
         }
     }
-    fn enable_feature<T: Feature + Default>(&mut self, selector: impl FnMut(&mut T) -> &mut vk::Bool32) -> Option<()> {
+    fn enable_feature<T: Feature + Default>(
+        &mut self,
+        selector: impl FnMut(&mut T) -> &mut vk::Bool32,
+    ) -> Option<()> {
         let mut features = self.world.resource_mut::<PhysicalDeviceFeatures>();
         features.enable_feature::<T>(selector)
     }

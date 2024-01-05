@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use ash::{prelude::VkResult, vk};
 use bevy_ecs::system::Resource;
 use thread_local::ThreadLocal;

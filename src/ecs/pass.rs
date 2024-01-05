@@ -1,10 +1,9 @@
-use ash::vk;
 use bevy_ecs::{
     schedule::{NodeId, ScheduleBuildPass},
     world::World,
 };
 use bevy_utils::petgraph::{
-    visit::{Dfs, IntoNeighbors, IntoNeighborsDirected, Walker},
+    visit::{Dfs, Walker},
     Direction::{Incoming, Outgoing},
 };
 

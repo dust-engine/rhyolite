@@ -4,10 +4,8 @@ use bevy_ecs::system::Resource;
 
 use crate::Instance;
 use crate::PhysicalDevice;
-use crate::PhysicalDeviceFeatures;
 
 use std::ffi::c_char;
-use std::ffi::CStr;
 use std::ops::Deref;
 use std::sync::Arc;
 

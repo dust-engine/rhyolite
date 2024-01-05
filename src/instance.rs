@@ -2,7 +2,6 @@ use crate::cstr;
 use ash::{prelude::VkResult, vk};
 use bevy_ecs::system::Resource;
 use std::{
-    collections::BTreeSet,
     ffi::{c_char, CStr},
     fmt::Debug,
     ops::Deref,
@@ -118,10 +117,7 @@ impl Instance {
         };
         // Safety: No Host Syncronization rules for vkCreateInstance.
         let instance = unsafe { entry.create_instance(&info, None)? };
-        Ok(Instance(Arc::new(InstanceInner {
-            entry,
-            instance,
-        })))
+        Ok(Instance(Arc::new(InstanceInner { entry, instance })))
     }
     pub fn entry(&self) -> &Arc<ash::Entry> {
         &self.0.entry
