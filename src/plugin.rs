@@ -24,6 +24,9 @@ pub struct LayerProperties {
     pub description: String,
 }
 
+/// This is the point where the Vulkan instance and device are created.
+/// All instance plugins must be added before RhyolitePlugin.
+/// All device plugins must be added after RhyolitePlugin.
 pub struct RhyolitePlugin {
     pub application_name: CString,
     pub application_version: Version,
@@ -253,9 +256,23 @@ impl Plugin for RhyolitePlugin {
 }
 
 pub trait RhyoliteApp {
+    /// Called in the [Plugin::build] phase of device plugins.
+    /// Device plugins must be added after [RhyolitePlugin].
     fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version>;
+
+    
+    /// Called in the [Plugin::build] phase of instance plugins.
+    /// Instance plugins must be added after [RhyolitePlugin].
     fn add_instance_extension(&mut self, extension: &'static CStr) -> Option<Version>;
+
+    
+    /// Called in the [Plugin::build] phase of instance plugins.
+    /// Instance plugins must be added after [RhyolitePlugin].
     fn add_instance_layer(&mut self, layer: &'static CStr) -> Option<LayerProperties>;
+
+    
+    /// Called in the [Plugin::build] phase of device plugins.
+    /// Device plugins must be added after [RhyolitePlugin].
     fn enable_feature<T: Feature + Default>(
         &mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bevy_app::{App, Plugin};
 use bevy_ecs::system::Resource;
 
-use crate::{plugin::RhyoliteApp, Device, Instance};
+use crate::{plugin::RhyoliteApp, Instance};
 
 pub struct SurfacePlugin {}
 
