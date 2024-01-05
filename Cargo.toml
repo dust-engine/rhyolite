@@ -6,10 +6,18 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bevy_a11y = { path = "../bevy/crates/bevy_a11y" }
+bevy_window = { path = "../bevy/crates/bevy_window" }
 bevy_ecs = { path = "../bevy/crates/bevy_ecs" }
 bevy_utils = { path = "../bevy/crates/bevy_utils" }
+bevy_winit = { path = "../bevy/crates/bevy_winit" }
+bevy_input = { path = "../bevy/crates/bevy_input" }
 bevy_app = { path = "../bevy/crates/bevy_app" }
 ash = "0.37"
+ash-window = "0.12"
 tracing = "0.1"
 cstr = "0.2"
 thread_local = "1"
+winit = { version = "0.29", default-features = false, features = ["rwh_05"] }
+raw-window-handle = "0.5"
+
