@@ -130,7 +130,6 @@ impl Surface {
 }
 pub(super) fn extract_surfaces(
     mut commands: Commands,
-    device: Res<Device>,
     loader: Res<SurfaceLoader>,
     mut window_created_events: EventReader<bevy_window::WindowCreated>,
     query: Query<(&RawHandleWrapper, Option<&Surface>), With<Window>>,
