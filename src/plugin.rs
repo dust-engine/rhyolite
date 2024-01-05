@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use crate::{
     Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
-    Version,
+    Version, QueuesRouter,
 };
 use cstr::cstr;
 
@@ -225,11 +225,14 @@ impl Plugin for RhyolitePlugin {
         );
         let features = PhysicalDeviceFeatures::new(physical_device.clone());
         let extensions = ExtensionSettings::new(&physical_device).unwrap();
+
+        let queue_router = QueuesRouter::find_with_queue_family_properties(&physical_device.get_queue_family_properties());
         app.insert_resource(extensions)
             .insert_resource(instance)
             .insert_resource(physical_device)
             .insert_resource(properties)
-            .insert_resource(features);
+            .insert_resource(features)
+            .insert_resource(queue_router);
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: ExtensionSettings =
@@ -239,15 +242,10 @@ impl Plugin for RhyolitePlugin {
             .finalize();
         let physical_device: &PhysicalDevice = app.world.resource();
         let features = app.world.resource::<PhysicalDeviceFeatures>();
-        let array = [1.0_f32];
+        let queues_router = app.world.resource::<QueuesRouter>();
         let device = Device::create(
             physical_device.clone(),
-            &[vk::DeviceQueueCreateInfo {
-                queue_family_index: 0,
-                queue_count: 1,
-                p_queue_priorities: array.as_ptr(),
-                ..Default::default()
-            }],
+            &queues_router.create_infos(),
             &extension_settings.device_extensions,
             features.pdevice_features2(),
         )

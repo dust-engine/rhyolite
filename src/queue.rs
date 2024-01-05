@@ -48,7 +48,7 @@ impl QueuesRouter {
     pub fn of_type(&self, ty: QueueType) -> QueueRef {
         self.queue_type_to_index[ty as usize]
     }
-    fn find_with_queue_family_properties(
+    pub(crate) fn find_with_queue_family_properties(
         available_queue_family: &[vk::QueueFamilyProperties],
     ) -> Self {
         // Must include GRAPHICS. Prefer not COMPUTE or SPARSE_BINDING.
@@ -174,7 +174,34 @@ impl QueuesRouter {
             queue_type_to_family,
         }
     }
+
+    pub(crate) fn create_infos(&self) -> Vec<vk::DeviceQueueCreateInfo> {
+        let mut infos: Vec<vk::DeviceQueueCreateInfo> = Vec::with_capacity(self.queue_family_to_types.len());
+        for (family, flags) in self.queue_family_to_types.iter().enumerate() {
+            if flags.is_empty() {
+                continue;
+            }
+            let priority: &'static f32 = if flags.contains(vk::QueueFlags::GRAPHICS) {
+                &PRIORITY_HIGH
+            } else if flags.contains(vk::QueueFlags::COMPUTE) {
+                &PRIORITY_MEDIUM
+            } else {
+                &PRIORITY_LOW
+            };
+            infos.push(vk::DeviceQueueCreateInfo {
+                queue_family_index: family as u32,
+                queue_count: 1,
+                p_queue_priorities: priority,
+                ..Default::default()
+            });
+        }
+        infos
+    }
 }
+
+const PRIORITY_HIGH: f32 = 1.0;
+const PRIORITY_MEDIUM: f32 = 0.5;
+const PRIORITY_LOW: f32 = 0.0;
 
 #[cfg(test)]
 mod tests {
