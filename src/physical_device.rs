@@ -2,16 +2,21 @@ use crate::Version;
 
 use super::{Device, Instance};
 use ash::{prelude::VkResult, vk};
+use bevy_ecs::system::Resource;
 use core::ffi::{c_char, c_void};
 use std::{
+    any::{Any, TypeId},
+    collections::BTreeMap,
     ffi::CStr,
     ops::{Deref, DerefMut},
-    sync::{Arc, RwLock, RwLockReadGuard}, collections::BTreeMap, any::{TypeId, Any}, ptr::NonNull,
+    ptr::NonNull,
+    sync::{Arc, RwLock, RwLockReadGuard},
 };
+
+#[derive(Clone, Resource)]
 pub struct PhysicalDevice {
     instance: Instance,
     physical_device: vk::PhysicalDevice,
-    memory_model: PhysicalDeviceMemoryModel,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -32,85 +37,24 @@ pub enum PhysicalDeviceMemoryModel {
     BiasedUnified,
 }
 
+impl Instance {
+    pub fn enumerate_physical_devices<'a>(
+        &'a self,
+    ) -> VkResult<impl ExactSizeIterator<Item = PhysicalDevice> + 'a> {
+        let pdevices = unsafe { self.deref().enumerate_physical_devices().unwrap() };
+        Ok(pdevices.into_iter().map(|pdevice| PhysicalDevice {
+            instance: self.clone(),
+            physical_device: pdevice,
+        }))
+    }
+}
+
 impl PhysicalDevice {
     pub fn instance(&self) -> &Instance {
         &self.instance
     }
     pub fn raw(&self) -> vk::PhysicalDevice {
         self.physical_device
-    }
-    pub fn enumerate(instance: &Instance) -> VkResult<Vec<Self>> {
-        // Safety: No Host Syncronization rules for vkEnumeratePhysicalDevices.
-        // It should be OK to call this method and obtain multiple copies of VkPhysicalDevice,
-        // because nothing except vkDestroyInstance require exclusive access to VkPhysicalDevice.
-        let physical_devices = unsafe { instance.enumerate_physical_devices()? };
-        let results = physical_devices
-            .into_iter()
-            .map(|pdevice| {
-                let properties = PhysicalDeviceProperties::new(instance, pdevice);
-                let memory_properties =
-                    unsafe { instance.get_physical_device_memory_properties(pdevice) };
-                let types = &memory_properties.memory_types
-                    [0..memory_properties.memory_type_count as usize];
-                let heaps = &memory_properties.memory_heaps
-                    [0..memory_properties.memory_heap_count as usize];
-
-                let bar_heap = types
-                    .iter()
-                    .find(|ty| {
-                        ty.property_flags.contains(
-                            vk::MemoryPropertyFlags::DEVICE_LOCAL
-                                | vk::MemoryPropertyFlags::HOST_VISIBLE,
-                        ) && heaps[ty.heap_index as usize]
-                            .flags
-                            .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
-                    })
-                    .map(|a| &heaps[a.heap_index as usize]);
-                let memory_model =
-                    if properties.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU {
-                        if let Some(bar_heap) = bar_heap {
-                            if bar_heap.size <= 256 * 1024 * 1024 {
-                                // regular 256MB bar
-                                PhysicalDeviceMemoryModel::BiasedUnified
-                            } else {
-                                PhysicalDeviceMemoryModel::Unified
-                            }
-                        } else {
-                            // Can't find a BAR heap
-                            // Note: this case doesn't exist in real life.
-                            // We select BiasedUnified based on the assumption that when requesting
-                            // DEVICE_LOCAL | HOST_VISIBLE memory, the allocator will fallback to
-                            // non-device-local memory.
-                            PhysicalDeviceMemoryModel::BiasedUnified
-                        }
-                    } else {
-                        if let Some(bar_heap) = bar_heap {
-                            if bar_heap.size <= 256 * 1024 * 1024 {
-                                // regular 256MB bar
-                                PhysicalDeviceMemoryModel::Bar
-                            } else {
-                                PhysicalDeviceMemoryModel::ReBar
-                            }
-                        } else {
-                            // Can't find a BAR heap
-                            PhysicalDeviceMemoryModel::Discrete
-                        }
-                    };
-                PhysicalDevice {
-                    instance: instance.clone(), // Retain reference to Instance here
-                    physical_device: pdevice,   // Borrow VkPhysicalDevice from Instance
-                    // Borrow is safe because we retain a reference to Instance here,
-                    // ensuring that Instance wouldn't be dropped as long as the borrow is still there.
-                    properties,
-                    memory_model,
-                    memory_properties: Box::new(memory_properties),
-                }
-            })
-            .collect();
-        Ok(results)
-    }
-    pub fn memory_model(&self) -> PhysicalDeviceMemoryModel {
-        self.memory_model
     }
     pub fn image_format_properties(
         &self,
@@ -137,14 +81,15 @@ impl PhysicalDevice {
     }
 }
 
-
 pub unsafe trait PhysicalDeviceProperty: Sized + Default + 'static {
     fn get_new(this: &PhysicalDeviceProperties) -> Self {
         let mut wrapper = vk::PhysicalDeviceProperties2::default();
         let mut item = Self::default();
         unsafe {
             wrapper.p_next = &mut item as *mut Self as *mut c_void;
-            this.pdevice.instance().get_physical_device_properties2(this.pdevice.raw(), &mut wrapper);
+            this.pdevice
+                .instance()
+                .get_physical_device_properties2(this.pdevice.raw(), &mut wrapper);
         }
         item
     }
@@ -175,15 +120,81 @@ pub unsafe trait PhysicalDeviceProperty: Sized + Default + 'static {
     }
 }
 
+#[derive(Resource)]
 pub struct PhysicalDeviceProperties {
     pdevice: PhysicalDevice,
     inner: vk::PhysicalDeviceProperties,
     memory_properties: vk::PhysicalDeviceMemoryProperties,
+    pub memory_model: PhysicalDeviceMemoryModel,
     properties: RwLock<BTreeMap<TypeId, Box<dyn Any>>>,
 }
 unsafe impl Send for PhysicalDeviceProperties {}
 unsafe impl Sync for PhysicalDeviceProperties {}
 impl PhysicalDeviceProperties {
+    pub fn new(pdevice: PhysicalDevice) -> Self {
+        let memory_properties = unsafe {
+            pdevice
+                .instance()
+                .get_physical_device_memory_properties(pdevice.raw())
+        };
+        let pdevice_properties = unsafe {
+            pdevice
+                .instance()
+                .get_physical_device_properties(pdevice.raw())
+        };
+        let types =
+            &memory_properties.memory_types[0..memory_properties.memory_type_count as usize];
+        let heaps =
+            &memory_properties.memory_heaps[0..memory_properties.memory_heap_count as usize];
+
+        let bar_heap = types
+            .iter()
+            .find(|ty| {
+                ty.property_flags.contains(
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE,
+                ) && heaps[ty.heap_index as usize]
+                    .flags
+                    .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+            })
+            .map(|a| &heaps[a.heap_index as usize]);
+        let memory_model =
+            if pdevice_properties.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU {
+                if let Some(bar_heap) = bar_heap {
+                    if bar_heap.size <= 256 * 1024 * 1024 {
+                        // regular 256MB bar
+                        PhysicalDeviceMemoryModel::BiasedUnified
+                    } else {
+                        PhysicalDeviceMemoryModel::Unified
+                    }
+                } else {
+                    // Can't find a BAR heap
+                    // Note: this case doesn't exist in real life.
+                    // We select BiasedUnified based on the assumption that when requesting
+                    // DEVICE_LOCAL | HOST_VISIBLE memory, the allocator will fallback to
+                    // non-device-local memory.
+                    PhysicalDeviceMemoryModel::BiasedUnified
+                }
+            } else {
+                if let Some(bar_heap) = bar_heap {
+                    if bar_heap.size <= 256 * 1024 * 1024 {
+                        // regular 256MB bar
+                        PhysicalDeviceMemoryModel::Bar
+                    } else {
+                        PhysicalDeviceMemoryModel::ReBar
+                    }
+                } else {
+                    // Can't find a BAR heap
+                    PhysicalDeviceMemoryModel::Discrete
+                }
+            };
+        Self {
+            pdevice,
+            properties: Default::default(),
+            memory_model,
+            memory_properties,
+            inner: pdevice_properties,
+        }
+    }
     pub fn properties<T: PhysicalDeviceProperty + Default + 'static>(&self) -> &T {
         T::get(self)
     }

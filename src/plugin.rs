@@ -9,7 +9,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{Device, Instance, Version};
+use crate::{Device, Instance, PhysicalDevice, PhysicalDeviceProperties, Version};
 use cstr::cstr;
 
 pub struct LayerProperties {
@@ -180,31 +180,32 @@ impl Plugin for RhyolitePlugin {
             },
         )
         .unwrap();
-
-        app.insert_resource(settings).insert_resource(instance);
+        let physical_device = instance
+            .enumerate_physical_devices()
+            .unwrap()
+            .skip(self.physical_device_index)
+            .next()
+            .unwrap();
+        let properties = PhysicalDeviceProperties::new(physical_device.clone());
+        tracing::info!(
+            "Using {:?} {:?} with memory model {:?}",
+            properties.device_type,
+            properties.device_name(),
+            properties.memory_model
+        );
+        app.insert_resource(settings)
+            .insert_resource(instance)
+            .insert_resource(physical_device)
+            .insert_resource(properties);
     }
     fn cleanup(&self, app: &mut App) {
         app.world.remove_resource::<ExtensionSettings>();
     }
     fn finish(&self, app: &mut App) {
-        let instance: &Instance = app.world.resource();
-        let physical_device = crate::PhysicalDevice::enumerate(&instance)
-            .unwrap()
-            .into_iter()
-            .skip(self.physical_device_index)
-            .next()
-            .unwrap();
-        tracing::info!(
-            "Using {:?} {:?} with memory model {:?}",
-            physical_device.properties().inner.properties.device_type,
-            physical_device.properties().device_name(),
-            physical_device.memory_model()
-        );
-
+        let physical_device: &PhysicalDevice = app.world.resource();
         let extension_settings: &ExtensionSettings = app.world.resource();
         let device = Device::create(
-            instance.clone(),
-            physical_device,
+            physical_device.clone(),
             &[],
             &extension_settings.device_extensions,
         )

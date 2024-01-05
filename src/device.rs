@@ -24,14 +24,12 @@ pub trait HasDevice {
 pub struct Device(Arc<DeviceInner>);
 
 pub struct DeviceInner {
-    instance: Instance,
     physical_device: PhysicalDevice,
     device: ash::Device,
 }
 
 impl Device {
     pub fn create(
-        instance: Instance,
         physical_device: PhysicalDevice,
         queues: &[vk::DeviceQueueCreateInfo],
         extensions: &[*const c_char],
@@ -44,9 +42,12 @@ impl Device {
             p_enabled_features: todo!(),
             ..Default::default()
         };
-        let device = unsafe { instance.create_device(physical_device.raw(), &create_info, None) }?;
+        let device = unsafe {
+            physical_device
+                .instance()
+                .create_device(physical_device.raw(), &create_info, None)
+        }?;
         Ok(Self(Arc::new(DeviceInner {
-            instance,
             physical_device,
             device,
         })))

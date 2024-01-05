@@ -1,3 +1,4 @@
+mod command_pool;
 mod device;
 pub mod ecs;
 mod features;
@@ -5,7 +6,6 @@ mod instance;
 mod physical_device;
 mod plugin;
 mod queue;
-mod command_pool;
 
 pub use cstr::cstr;
 pub use device::*;
