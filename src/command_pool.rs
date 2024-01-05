@@ -52,15 +52,3 @@ impl CommandPool {
 pub struct CommandPools {
     pools: ThreadLocal<CommandPool>,
 }
-
-// Command buffer strategies:
-// - Primary command buffers
-//   - Each stage can have a number of single threaded systems and multi threaded systems.
-//     If prev stage and next stage are both single threaded, prev commands, pipeline barrier, and next commands are recorded to the same buffer.
-//     If prev stage is multi threaded but next stage is single threaded, on prev stage end, collect all buffers. Pipeline barrier recorded to
-//     last buffer in this. next stage commands recorded to this last buffer.
-//     If prev stage is single threaded but next stage is multi threaded, on prev stage end, record pipeliene barrier to prev stage buffer.
-//     One next stage system gets this command buffer. Others have to allocate new.
-// - Secondary command buffers
-//   - Parallel recording
-//   - Single-threaded recording

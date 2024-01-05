@@ -7,16 +7,17 @@ use bevy_ecs::prelude::*;
 use std::{
     collections::BTreeMap,
     ffi::{c_char, CStr, CString},
+    ops::Deref,
     sync::Arc,
 };
-use thiserror::Error;
 
 use crate::{
     Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
-    Version, QueuesRouter,
+    QueuesRouter, Version,
 };
 use cstr::cstr;
 
+#[derive(Clone)]
 pub struct LayerProperties {
     pub spec_version: Version,
     pub implementation_version: Version,
@@ -31,142 +32,41 @@ pub struct RhyolitePlugin {
     pub api_version: Version,
 
     pub physical_device_index: usize,
-
-    enabled_instance_extensions: Vec<*const c_char>,
-    enabled_instance_layers: Vec<*const c_char>,
-
-    entry: Arc<ash::Entry>,
-    available_layers: BTreeMap<CString, LayerProperties>,
-    available_extensions: BTreeMap<CString, Version>,
 }
 unsafe impl Send for RhyolitePlugin {}
 unsafe impl Sync for RhyolitePlugin {}
-impl RhyolitePlugin {
-    pub fn with_instance_extension(&mut self, extension: &'static CStr) -> Option<Version> {
-        if let Some(v) = self.available_extensions.get(extension) {
-            self.enabled_instance_extensions.push(extension.as_ptr());
-            Some(*v)
-        } else {
-            None
-        }
-    }
-    pub fn with_instance_extension_for_layer(
-        &mut self,
-        extension: &'static CStr,
-        layer: &'static CStr,
-    ) -> Option<Version> {
-        let all_extensions = self
-            .entry
-            .enumerate_instance_extension_properties(Some(layer))
-            .unwrap();
-        let ext = all_extensions.into_iter().find(|ext| unsafe {
-            let ext_name = CStr::from_bytes_until_nul(std::slice::from_raw_parts(
-                ext.extension_name.as_ptr() as *const u8,
-                ext.extension_name.len(),
-            ))
-            .unwrap();
-            ext_name == extension
-        });
-        if let Some(ext) = ext {
-            self.enabled_instance_extensions.push(extension.as_ptr());
-            Some(Version(ext.spec_version))
-        } else {
-            None
-        }
-    }
-    pub fn with_instance_layer(&mut self, layer: &'static CStr) -> Option<&LayerProperties> {
-        if let Some(layer_properties) = self.available_layers.get(layer) {
-            self.enabled_instance_layers.push(layer.as_ptr());
-            Some(layer_properties)
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum RhyoliltePluginInitError {
-    #[error("Ash loading failed")]
-    LoadingError(#[from] ash::LoadingError),
-    #[error("Vulkan Implementation error: Invalid C String")]
-    ImplementationError(#[from] std::ffi::FromBytesUntilNulError),
-    #[error("Vulkan Implementation error: Invalid UTF-8 String")]
-    ImplementationErrorUtf8(#[from] std::str::Utf8Error),
-    #[error("Vulkan error: {0}")]
-    VulkanError(#[from] vk::Result),
-}
-
-impl RhyolitePlugin {
-    pub fn new() -> Result<Self, RhyoliltePluginInitError> {
-        let entry = unsafe { ash::Entry::load().unwrap() };
-        let entry = Arc::new(entry);
-        let available_layers = entry
-            .enumerate_instance_layer_properties()?
-            .into_iter()
-            .map(
-                |layer| -> Result<(CString, LayerProperties), RhyoliltePluginInitError> {
-                    let str = CStr::from_bytes_until_nul(unsafe {
-                        std::slice::from_raw_parts(
-                            layer.layer_name.as_ptr() as *const u8,
-                            layer.layer_name.len(),
-                        )
-                    })?;
-                    Ok((
-                        str.to_owned(),
-                        LayerProperties {
-                            implementation_version: Version(layer.implementation_version),
-                            spec_version: Version(layer.spec_version),
-                            description: CStr::from_bytes_until_nul(unsafe {
-                                std::slice::from_raw_parts(
-                                    layer.description.as_ptr() as *const u8,
-                                    layer.description.len(),
-                                )
-                            })?
-                            .to_str()?
-                            .to_string(),
-                        },
-                    ))
-                },
-            )
-            .collect::<Result<BTreeMap<CString, LayerProperties>, RhyoliltePluginInitError>>()?;
-
-        let available_extensions = entry
-            .enumerate_instance_extension_properties(None)?
-            .into_iter()
-            .map(
-                |ext| -> Result<(CString, Version), RhyoliltePluginInitError> {
-                    let str = CStr::from_bytes_until_nul(unsafe {
-                        std::slice::from_raw_parts(
-                            ext.extension_name.as_ptr() as *const u8,
-                            ext.extension_name.len(),
-                        )
-                    })?;
-                    Ok((str.to_owned(), Version(ext.spec_version)))
-                },
-            )
-            .collect::<Result<BTreeMap<CString, Version>, RhyoliltePluginInitError>>()?;
-        Ok(Self {
+impl Default for RhyolitePlugin {
+    fn default() -> Self {
+        Self {
             application_name: cstr!(b"Unnamed Application").to_owned(),
             application_version: Default::default(),
             engine_name: cstr!(b"Unnamed Engine").to_owned(),
             engine_version: Default::default(),
             api_version: Version::new(0, 1, 3, 0),
             physical_device_index: 0,
-            enabled_instance_extensions: Vec::new(),
-            enabled_instance_layers: Vec::new(),
-            entry,
-            available_layers,
-            available_extensions,
-        })
+        }
+    }
+}
+#[derive(Resource, Clone)]
+pub struct VulkanEntry(Arc<ash::Entry>);
+impl Deref for VulkanEntry {
+    type Target = ash::Entry;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Default for VulkanEntry {
+    fn default() -> Self {
+        Self(Arc::new(unsafe { ash::Entry::load().unwrap() }))
     }
 }
 
 #[derive(Resource)]
-struct ExtensionSettings {
+struct DeviceExtensions {
     available_extensions: BTreeMap<CString, Version>,
-    device_extensions: Vec<*const c_char>,
+    enabled_extensions: Vec<*const c_char>,
 }
-impl ExtensionSettings {
+impl DeviceExtensions {
     fn new(pdevice: &PhysicalDevice) -> VkResult<Self> {
         let extension_names = unsafe {
             pdevice
@@ -188,20 +88,115 @@ impl ExtensionSettings {
             .collect::<BTreeMap<CString, Version>>();
         Ok(Self {
             available_extensions: extension_names,
-            device_extensions: Vec::new(),
+            enabled_extensions: Vec::new(),
         })
     }
 }
-unsafe impl Send for ExtensionSettings {}
-unsafe impl Sync for ExtensionSettings {}
+unsafe impl Send for DeviceExtensions {}
+unsafe impl Sync for DeviceExtensions {}
+
+#[derive(Resource)]
+struct InstanceExtensions {
+    available_extensions: BTreeMap<CString, Version>,
+    enabled_extensions: Vec<*const c_char>,
+}
+impl FromWorld for InstanceExtensions {
+    fn from_world(world: &mut World) -> Self {
+        if world.contains_resource::<Instance>() {
+            panic!("Instance extensions may only be added before the instance was created");
+        }
+        let entry = world.get_resource_or_insert_with::<VulkanEntry>(VulkanEntry::default);
+        let available_extensions = entry
+            .enumerate_instance_extension_properties(None)
+            .unwrap()
+            .into_iter()
+            .map(|ext| {
+                let str = CStr::from_bytes_until_nul(unsafe {
+                    std::slice::from_raw_parts(
+                        ext.extension_name.as_ptr() as *const u8,
+                        ext.extension_name.len(),
+                    )
+                })
+                .unwrap();
+                (str.to_owned(), Version(ext.spec_version))
+            })
+            .collect::<BTreeMap<CString, Version>>();
+        Self {
+            available_extensions,
+            enabled_extensions: Vec::new(),
+        }
+    }
+}
+unsafe impl Send for InstanceExtensions {}
+unsafe impl Sync for InstanceExtensions {}
+
+#[derive(Resource)]
+struct InstanceLayers {
+    available_layers: BTreeMap<CString, LayerProperties>,
+    enabled_layers: Vec<*const c_char>,
+}
+impl FromWorld for InstanceLayers {
+    fn from_world(world: &mut World) -> Self {
+        if world.contains_resource::<Instance>() {
+            panic!("Instance layers may only be added before the instance was created");
+        }
+        let entry = world.get_resource_or_insert_with::<VulkanEntry>(VulkanEntry::default);
+        let available_layers = entry
+            .enumerate_instance_layer_properties()
+            .unwrap()
+            .into_iter()
+            .map(|layer| {
+                let str = CStr::from_bytes_until_nul(unsafe {
+                    std::slice::from_raw_parts(
+                        layer.layer_name.as_ptr() as *const u8,
+                        layer.layer_name.len(),
+                    )
+                })
+                .unwrap();
+                (
+                    str.to_owned(),
+                    LayerProperties {
+                        implementation_version: Version(layer.implementation_version),
+                        spec_version: Version(layer.spec_version),
+                        description: CStr::from_bytes_until_nul(unsafe {
+                            std::slice::from_raw_parts(
+                                layer.description.as_ptr() as *const u8,
+                                layer.description.len(),
+                            )
+                        })
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_string(),
+                    },
+                )
+            })
+            .collect::<BTreeMap<CString, LayerProperties>>();
+        Self {
+            available_layers,
+            enabled_layers: Vec::new(),
+        }
+    }
+}
+unsafe impl Send for InstanceLayers {}
+unsafe impl Sync for InstanceLayers {}
 
 impl Plugin for RhyolitePlugin {
     fn build(&self, app: &mut App) {
+        let instance_extensions = app.world.remove_resource::<InstanceExtensions>();
+        let instance_layers = app.world.remove_resource::<InstanceLayers>();
+        let entry: &VulkanEntry = &app.world.get_resource_or_insert_with(VulkanEntry::default);
         let instance = Instance::create(
-            self.entry.clone(),
+            entry.0.clone(),
             &crate::InstanceCreateInfo {
-                enabled_extension_names: &self.enabled_instance_extensions,
-                enabled_layer_names: &self.enabled_instance_layers,
+                enabled_extension_names: instance_extensions
+                    .as_ref()
+                    .map(|f| f.enabled_extensions.as_slice())
+                    .unwrap_or(&[]),
+                enabled_layer_names: instance_layers
+                    .as_ref()
+                    .map(|f| f.enabled_layers.as_slice())
+                    .unwrap_or(&[]),
                 api_version: self.api_version.clone(),
                 engine_name: self.engine_name.as_c_str(),
                 engine_version: self.engine_version,
@@ -224,9 +219,11 @@ impl Plugin for RhyolitePlugin {
             properties.memory_model
         );
         let features = PhysicalDeviceFeatures::new(physical_device.clone());
-        let extensions = ExtensionSettings::new(&physical_device).unwrap();
+        let extensions = DeviceExtensions::new(&physical_device).unwrap();
 
-        let queue_router = QueuesRouter::find_with_queue_family_properties(&physical_device.get_queue_family_properties());
+        let queue_router = QueuesRouter::find_with_queue_family_properties(
+            &physical_device.get_queue_family_properties(),
+        );
         app.insert_resource(extensions)
             .insert_resource(instance)
             .insert_resource(physical_device)
@@ -235,8 +232,8 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(queue_router);
     }
     fn finish(&self, app: &mut App) {
-        let extension_settings: ExtensionSettings =
-            app.world.remove_resource::<ExtensionSettings>().unwrap();
+        let extension_settings: DeviceExtensions =
+            app.world.remove_resource::<DeviceExtensions>().unwrap();
         app.world
             .resource_mut::<PhysicalDeviceFeatures>()
             .finalize();
@@ -246,7 +243,7 @@ impl Plugin for RhyolitePlugin {
         let device = Device::create(
             physical_device.clone(),
             &queues_router.create_infos(),
-            &extension_settings.device_extensions,
+            &extension_settings.enabled_extensions,
             features.pdevice_features2(),
         )
         .unwrap();
@@ -257,6 +254,8 @@ impl Plugin for RhyolitePlugin {
 
 pub trait RhyoliteApp {
     fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version>;
+    fn add_instance_extension(&mut self, extension: &'static CStr) -> Option<Version>;
+    fn add_instance_layer(&mut self, layer: &'static CStr) -> Option<LayerProperties>;
     fn enable_feature<T: Feature + Default>(
         &mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,
@@ -265,12 +264,81 @@ pub trait RhyoliteApp {
 
 impl RhyoliteApp for App {
     fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version> {
-        let mut extension_settings = self.world.resource_mut::<ExtensionSettings>();
+        let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
+            panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
+        };
         if let Some(v) = extension_settings.available_extensions.get(extension) {
             let v = *v;
             extension_settings
-                .device_extensions
+                .enabled_extensions
                 .push(extension.as_ptr());
+            Some(v)
+        } else {
+            None
+        }
+    }
+    fn add_instance_extension(&mut self, extension: &'static CStr) -> Option<Version> {
+        let extension_settings = self.world.get_resource_mut::<InstanceExtensions>();
+        let mut extension_settings = match extension_settings {
+            Some(extension_settings) => extension_settings,
+            None => {
+                let extension_settings = InstanceExtensions::from_world(&mut self.world);
+                self.world.insert_resource(extension_settings);
+                self.world.resource_mut::<InstanceExtensions>()
+            }
+        };
+        if let Some(v) = extension_settings.available_extensions.get(extension) {
+            let v = *v;
+            extension_settings
+                .enabled_extensions
+                .push(extension.as_ptr());
+            Some(v)
+        } else {
+            None
+        }
+    }
+    fn add_instance_layer(&mut self, layer: &'static CStr) -> Option<LayerProperties> {
+        let layers = self.world.get_resource_mut::<InstanceLayers>();
+        let mut layers = match layers {
+            Some(layers) => layers,
+            None => {
+                let extension_settings = InstanceLayers::from_world(&mut self.world);
+                self.world.insert_resource(extension_settings);
+                self.world.resource_mut::<InstanceLayers>()
+            }
+        };
+        if let Some(v) = layers.available_layers.get(layer) {
+            let v = v.clone();
+            layers.enabled_layers.push(layer.as_ptr());
+
+            let vulkan_entry = self.world.resource::<VulkanEntry>();
+            let additional_instance_extensions = vulkan_entry
+                .enumerate_instance_extension_properties(Some(layer))
+                .unwrap();
+
+            let instance_extensions = self.world.get_resource_mut::<InstanceExtensions>();
+            let mut instance_extensions = match instance_extensions {
+                Some(instance_extensions) => instance_extensions,
+                None => {
+                    let instance_extensions = InstanceExtensions::from_world(&mut self.world);
+                    self.world.insert_resource(instance_extensions);
+                    self.world.resource_mut::<InstanceExtensions>()
+                }
+            };
+            instance_extensions.available_extensions.extend(
+                additional_instance_extensions.into_iter().map(|a| {
+                    let name = unsafe {
+                        CStr::from_bytes_until_nul(std::slice::from_raw_parts(
+                            a.extension_name.as_ptr() as *const u8,
+                            a.extension_name.len(),
+                        ))
+                    }
+                    .unwrap();
+                    let name = name.to_owned();
+                    (name, Version(a.spec_version))
+                }),
+            );
+
             Some(v)
         } else {
             None

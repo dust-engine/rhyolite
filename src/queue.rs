@@ -176,7 +176,8 @@ impl QueuesRouter {
     }
 
     pub(crate) fn create_infos(&self) -> Vec<vk::DeviceQueueCreateInfo> {
-        let mut infos: Vec<vk::DeviceQueueCreateInfo> = Vec::with_capacity(self.queue_family_to_types.len());
+        let mut infos: Vec<vk::DeviceQueueCreateInfo> =
+            Vec::with_capacity(self.queue_family_to_types.len());
         for (family, flags) in self.queue_family_to_types.iter().enumerate() {
             if flags.is_empty() {
                 continue;

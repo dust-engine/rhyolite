@@ -464,7 +464,6 @@ dependencies = [
  "bevy_ecs",
  "bevy_utils",
  "cstr",
- "thiserror",
  "thread_local",
  "tracing",
 ]

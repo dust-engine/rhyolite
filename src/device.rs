@@ -48,9 +48,13 @@ impl Device {
                 .instance()
                 .create_device(physical_device.raw(), &create_info, None)
         }?;
-        let queues_created = queues.iter().flat_map(|queue_info| unsafe {
-            (0..queue_info.queue_count).map(|i| device.get_device_queue(queue_info.queue_family_index, i))
-        }).collect::<Vec<_>>();
+        let queues_created = queues
+            .iter()
+            .flat_map(|queue_info| unsafe {
+                (0..queue_info.queue_count)
+                    .map(|i| device.get_device_queue(queue_info.queue_family_index, i))
+            })
+            .collect::<Vec<_>>();
         Ok(Self(Arc::new(DeviceInner {
             physical_device,
             queues: queues_created,
