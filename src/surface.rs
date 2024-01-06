@@ -6,7 +6,7 @@ use bevy_ecs::prelude::*;
 use bevy_window::{RawHandleWrapper, Window};
 use raw_window_handle::{HasRawDisplayHandle, RawDisplayHandle};
 
-use crate::{plugin::RhyoliteApp, Device, Instance, HasDevice};
+use crate::{plugin::RhyoliteApp, HasDevice, Instance, PhysicalDevice};
 
 pub struct SurfacePlugin {}
 
@@ -95,12 +95,13 @@ impl Deref for SurfaceLoader {
     }
 }
 
-#[derive(Component)]
-pub struct Surface {
+#[derive(Component, Clone)]
+pub struct Surface(Arc<SurfaceInner>);
+struct SurfaceInner {
     loader: SurfaceLoader,
     inner: vk::SurfaceKHR,
 }
-impl Drop for Surface {
+impl Drop for SurfaceInner {
     fn drop(&mut self) {
         unsafe {
             self.loader.destroy_surface(self.inner, None);
@@ -122,15 +123,58 @@ impl Surface {
                 None,
             )?
         };
-        Ok(Surface {
+        Ok(Surface(Arc::new(SurfaceInner {
             loader,
             inner: surface,
-        })
+        })))
     }
     pub fn raw(&self) -> vk::SurfaceKHR {
-        self.inner
+        self.0.inner
     }
 }
+
+impl PhysicalDevice {
+    pub fn get_surface_capabilities(
+        &self,
+        surface: &Surface,
+    ) -> VkResult<vk::SurfaceCapabilitiesKHR> {
+        unsafe {
+            surface
+                .0
+                .loader
+                .get_physical_device_surface_capabilities(self.raw(), surface.0.inner)
+        }
+    }
+    pub fn get_surface_formats(&self, surface: &Surface) -> VkResult<Vec<vk::SurfaceFormatKHR>> {
+        unsafe {
+            surface
+                .0
+                .loader
+                .get_physical_device_surface_formats(self.raw(), surface.0.inner)
+        }
+    }
+    pub fn get_surface_present_modes(
+        &self,
+        surface: &Surface,
+    ) -> VkResult<Vec<vk::PresentModeKHR>> {
+        unsafe {
+            surface
+                .0
+                .loader
+                .get_physical_device_surface_present_modes(self.raw(), surface.0.inner)
+        }
+    }
+    pub fn supports_surface(&self, surface: &Surface, queue_family_index: u32) -> VkResult<bool> {
+        unsafe {
+            surface.0.loader.get_physical_device_surface_support(
+                self.raw(),
+                queue_family_index,
+                surface.0.inner,
+            )
+        }
+    }
+}
+
 pub(super) fn extract_surfaces(
     mut commands: Commands,
     loader: Res<SurfaceLoader>,

@@ -1,11 +1,14 @@
-use std::{sync::Arc, ops::Deref};
+use std::{ops::Deref, sync::Arc};
 
-use ash::{vk, prelude::VkResult};
-use bevy_app::{App, Plugin};
+use ash::{prelude::VkResult, vk};
+use bevy_app::{App, Plugin, Update};
 use bevy_ecs::prelude::*;
-use bevy_window::{RawHandleWrapper, Window};
+use bevy_window::Window;
 
-use crate::{plugin::RhyoliteApp, Device, utils::SharingMode, utils::ColorSpace, Surface, surface};
+use crate::{
+    plugin::RhyoliteApp, utils::ColorSpace, utils::SharingMode, Device, HasDevice, PhysicalDevice,
+    Surface,
+};
 
 pub struct SwapchainPlugin {
     num_frame_in_flight: u32,
@@ -23,13 +26,18 @@ impl Plugin for SwapchainPlugin {
     fn build(&self, app: &mut App) {
         app.add_device_extension(ash::extensions::khr::Swapchain::name())
             .unwrap();
+
+        app.add_systems(
+            Update,
+            extract_swapchains.after(crate::surface::extract_surfaces),
+        );
     }
     fn finish(&self, app: &mut App) {
         let device: &Device = app.world.resource();
         let swapchain_loader = ash::extensions::khr::Swapchain::new(device.instance(), device);
-        app.insert_resource(SwapchainLoader(Arc::new(SwapchainLoaderInner{
+        app.insert_resource(SwapchainLoader(Arc::new(SwapchainLoaderInner {
             device: device.clone(),
-            loader: Arc::new(swapchain_loader),
+            loader: swapchain_loader,
         })));
     }
 }
@@ -46,22 +54,28 @@ impl Deref for SwapchainLoader {
         &self.0.loader
     }
 }
+impl HasDevice for SwapchainLoader {
+    fn device(&self) -> &Device {
+        &self.0.device
+    }
+}
 
-#[derive(Component)]
-pub struct Swapchain {
+#[derive(Component, Clone)]
+pub struct Swapchain(Arc<SwapchainInner>);
+struct SwapchainInner {
     loader: SwapchainLoader,
+    surface: Surface,
     inner: vk::SwapchainKHR,
-
     images: Vec<(vk::Image, vk::ImageView)>,
     format: vk::Format,
     generation: u64,
 
-    surface: Arc<Surface>,
     color_space: ColorSpace,
     extent: vk::Extent2D,
     layer_count: u32,
 }
-impl Drop for Swapchain {
+
+impl Drop for SwapchainInner {
     fn drop(&mut self) {
         unsafe {
             self.loader.destroy_swapchain(self.inner, None);
@@ -84,15 +98,15 @@ pub struct SwapchainCreateInfo<'a> {
     pub clipped: bool,
 }
 
-
 /// Unsafe APIs for Swapchain
 impl Swapchain {
     /// # Safety
     /// <https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkCreateSwapchainKHR.html>
     pub fn create(
-        surface: &Surface,
-        device: &Device,
-        info: SwapchainCreateInfo,
+        swapchain_loader: SwapchainLoader,
+        surface: Surface,
+        _device: &Device,
+        info: &SwapchainCreateInfo,
     ) -> VkResult<Self> {
         tracing::info!(
             width = %info.image_extent.width,
@@ -127,14 +141,12 @@ impl Swapchain {
                     create_info.p_queue_family_indices = queue_family_indices.as_ptr();
                 }
             }
-            let swapchain = device
-                .swapchain_loader()
-                .create_swapchain(&create_info, None)?;
-            let images = get_swapchain_images(&device, swapchain, info.image_format)?;
-            let inner = SwapchainInner {
-                device,
+            let swapchain = swapchain_loader.create_swapchain(&create_info, None)?;
+            let images = get_swapchain_images(&swapchain_loader, swapchain, info.image_format)?;
+            let swapchain = SwapchainInner {
+                loader: swapchain_loader,
                 surface,
-                swapchain,
+                inner: swapchain,
                 images,
                 generation: 0,
                 extent: info.image_extent,
@@ -142,13 +154,11 @@ impl Swapchain {
                 format: info.image_format,
                 color_space: info.image_color_space.into(),
             };
-            Ok(Self {
-                inner: Arc::new(inner),
-            })
+            Ok(Swapchain(Arc::new(swapchain)))
         }
     }
 
-    pub fn recreate(&mut self, info: SwapchainCreateInfo) -> VkResult<()> {
+    pub fn recreate(&mut self, info: &SwapchainCreateInfo) -> VkResult<()> {
         tracing::info!(
             width = %info.image_extent.width,
             height = %info.image_extent.height,
@@ -159,7 +169,7 @@ impl Swapchain {
         unsafe {
             let mut create_info = vk::SwapchainCreateInfoKHR {
                 flags: info.flags,
-                surface: self.inner.surface.surface,
+                surface: self.0.surface.raw(),
                 min_image_count: info.min_image_count,
                 image_format: info.image_format,
                 image_color_space: info.image_color_space,
@@ -171,7 +181,7 @@ impl Swapchain {
                 composite_alpha: info.composite_alpha,
                 present_mode: info.present_mode,
                 clipped: info.clipped.into(),
-                old_swapchain: self.inner.swapchain,
+                old_swapchain: self.0.inner,
                 ..Default::default()
             };
             match &info.image_sharing_mode {
@@ -183,43 +193,29 @@ impl Swapchain {
                     create_info.p_queue_family_indices = queue_family_indices.as_ptr();
                 }
             }
-            let swapchain = self
-                .inner
-                .device
-                .swapchain_loader()
-                .create_swapchain(&create_info, None)?;
+            let new_swapchain = self.0.loader.create_swapchain(&create_info, None)?;
 
-            let images = get_swapchain_images(self.device(), swapchain, info.image_format)?;
+            let images = get_swapchain_images(&self.0.loader, new_swapchain, info.image_format)?;
+
             let inner = SwapchainInner {
-                device: self.inner.device.clone(),
-                surface: self.inner.surface.clone(),
-                swapchain,
+                loader: self.0.loader.clone(),
+                surface: self.0.surface.clone(),
+                inner: new_swapchain,
                 images,
-                generation: self.inner.generation.wrapping_add(1),
+                generation: self.0.generation.wrapping_add(1),
                 extent: info.image_extent,
                 layer_count: info.image_array_layers,
                 format: info.image_format,
                 color_space: info.image_color_space.into(),
             };
-            self.inner = Arc::new(inner);
+            self.0 = Arc::new(inner);
         }
         Ok(())
     }
-    pub fn image_format(&self) -> vk::Format {
-        self.inner.format
-    }
-    pub fn image_color_space(&self) -> ColorSpace {
-        self.inner.color_space.clone()
-    }
-    pub fn image_extent(&self) -> vk::Extent2D {
-        self.inner.extent
-    }
 }
 
-
-
 #[derive(Component)]
-pub struct SwapchainConfigExt {
+pub struct SwapchainConfig {
     pub flags: vk::SwapchainCreateFlagsKHR,
     pub min_image_count: u32,
     /// If set to None, the implementation will select the best available color space.
@@ -227,7 +223,7 @@ pub struct SwapchainConfigExt {
     pub image_array_layers: u32,
     pub image_usage: vk::ImageUsageFlags,
     pub required_feature_flags: vk::FormatFeatureFlags,
-    pub sharing_mode: SharingMode,
+    pub sharing_mode: SharingMode<Vec<u32>>,
     pub pre_transform: vk::SurfaceTransformFlagsKHR,
     pub clipped: bool,
 
@@ -247,53 +243,75 @@ pub struct SwapchainConfigExt {
     /// the sRGB gamma correction will be applied automatically.
     pub srgb_format: bool,
 }
+impl Default for SwapchainConfig {
+    fn default() -> Self {
+        Self {
+            flags: vk::SwapchainCreateFlagsKHR::empty(),
+            min_image_count: 3,
+            image_format: None,
+            image_array_layers: 1,
+            image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            required_feature_flags: vk::FormatFeatureFlags::empty(),
+            sharing_mode: SharingMode::Exclusive,
+            pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
+            clipped: true,
+            hdr: false,
+            srgb_format: false,
+        }
+    }
+}
 
 pub(super) fn extract_swapchains(
     mut commands: Commands,
     device: Res<Device>,
+    swapchain_loader: Res<SwapchainLoader>,
     mut window_created_events: EventReader<bevy_window::WindowCreated>,
     mut window_resized_events: EventReader<bevy_window::WindowResized>,
     mut query: Query<(
         &Window,
-        &RawHandleWrapper,
-        Option<&SwapchainConfigExt>,
+        Option<&SwapchainConfig>,
         Option<&mut Swapchain>,
         &Surface,
     )>,
 ) {
     for resize_event in window_resized_events.read() {
-        let (window, _, config, swapchain, surface) = query.get_mut(resize_event.window).unwrap();
+        let (window, config, swapchain, surface) = query.get_mut(resize_event.window).unwrap();
         if let Some(mut swapchain) = swapchain {
-            let default_config = SwapchainConfigExt::default();
-            let swapchain_config = config.unwrap_or(&default_config);
-            swapchain.recreate(window, swapchain_config);
+            let default_config = SwapchainConfig::default();
+            let config = config.unwrap_or(&default_config);
+            let create_info = get_create_info(surface, device.physical_device(), window, config);
+            swapchain.recreate(&create_info).unwrap();
+            println!("recreated");
         }
     }
     for create_event in window_created_events.read() {
-        let (window, raw_handle, config, swapchain, surface) = query.get(create_event.window).unwrap();
-        let raw_handle = unsafe { raw_handle.get_handle() };
+        let (window, config, swapchain, surface) = query.get(create_event.window).unwrap();
         assert!(swapchain.is_none());
-        let default_config = SwapchainConfigExt::default();
+        let default_config = SwapchainConfig::default();
         let swapchain_config = config.unwrap_or(&default_config);
+        let create_info =
+            get_create_info(surface, device.physical_device(), window, swapchain_config);
         let new_swapchain = Swapchain::create(
-            device.inner().clone(),
-            new_surface,
-            window,
-            swapchain_config,
-        );
+            swapchain_loader.clone(),
+            surface.clone(),
+            device.deref(),
+            &create_info,
+        )
+        .unwrap();
         commands.entity(create_event.window).insert(new_swapchain);
+        println!("Added");
     }
 }
 
 unsafe fn get_swapchain_images(
-    device: &Device,
+    loader: &SwapchainLoader,
     swapchain: vk::SwapchainKHR,
     format: vk::Format,
 ) -> VkResult<Vec<(vk::Image, vk::ImageView)>> {
-    let images = device.swapchain_loader().get_swapchain_images(swapchain)?;
+    let images = loader.get_swapchain_images(swapchain)?;
     let mut image_views: Vec<(vk::Image, vk::ImageView)> = Vec::with_capacity(images.len());
     for image in images.into_iter() {
-        let view = device.create_image_view(
+        let view = loader.device().create_image_view(
             &vk::ImageViewCreateInfo {
                 image,
                 view_type: vk::ImageViewType::TYPE_2D,
@@ -320,7 +338,7 @@ unsafe fn get_swapchain_images(
             Err(err) => {
                 // Destroy existing
                 for (_image, view) in image_views.into_iter() {
-                    device.destroy_image_view(view, None);
+                    loader.device().destroy_image_view(view, None);
                 }
                 return Err(err);
             }
@@ -329,3 +347,179 @@ unsafe fn get_swapchain_images(
     Ok(image_views)
 }
 
+fn get_create_info<'a>(
+    surface: &'_ Surface,
+    pdevice: &'_ PhysicalDevice,
+    window: &'_ Window,
+    config: &'a SwapchainConfig,
+) -> SwapchainCreateInfo<'a> {
+    let surface_capabilities = pdevice.get_surface_capabilities(surface).unwrap();
+    let supported_present_modes = pdevice.get_surface_present_modes(surface).unwrap();
+    let image_format = config.image_format.unwrap_or_else(|| {
+        if config.hdr {
+            get_surface_preferred_format(
+                surface,
+                pdevice,
+                config.required_feature_flags,
+                config.srgb_format,
+            )
+        } else {
+            if config.srgb_format {
+                vk::SurfaceFormatKHR {
+                    format: vk::Format::B8G8R8A8_SRGB,
+                    color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                }
+            } else {
+                vk::SurfaceFormatKHR {
+                    format: vk::Format::B8G8R8A8_UNORM,
+                    color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                }
+            }
+        }
+    });
+    SwapchainCreateInfo {
+        flags: config.flags,
+        min_image_count: config.min_image_count,
+        image_format: image_format.format,
+        image_color_space: image_format.color_space,
+        image_extent: vk::Extent2D {
+            width: window.resolution.physical_width(),
+            height: window.resolution.physical_height(),
+        },
+        image_array_layers: config.image_array_layers,
+        image_usage: config.image_usage,
+        image_sharing_mode: match &config.sharing_mode {
+            SharingMode::Exclusive => SharingMode::Exclusive,
+            SharingMode::Concurrent {
+                queue_family_indices,
+            } => SharingMode::Concurrent {
+                queue_family_indices: &queue_family_indices,
+            },
+        },
+        pre_transform: config.pre_transform,
+        composite_alpha: match window.composite_alpha_mode {
+            bevy_window::CompositeAlphaMode::Auto => {
+                if surface_capabilities
+                    .supported_composite_alpha
+                    .contains(vk::CompositeAlphaFlagsKHR::OPAQUE)
+                {
+                    vk::CompositeAlphaFlagsKHR::OPAQUE
+                } else {
+                    vk::CompositeAlphaFlagsKHR::INHERIT
+                }
+            }
+            bevy_window::CompositeAlphaMode::Opaque => vk::CompositeAlphaFlagsKHR::OPAQUE,
+            bevy_window::CompositeAlphaMode::PreMultiplied => {
+                vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED
+            }
+            bevy_window::CompositeAlphaMode::PostMultiplied => {
+                vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED
+            }
+            bevy_window::CompositeAlphaMode::Inherit => vk::CompositeAlphaFlagsKHR::INHERIT,
+        },
+        present_mode: match window.present_mode {
+            bevy_window::PresentMode::AutoVsync => {
+                if supported_present_modes.contains(&vk::PresentModeKHR::FIFO_RELAXED) {
+                    vk::PresentModeKHR::FIFO_RELAXED
+                } else {
+                    vk::PresentModeKHR::FIFO
+                }
+            }
+            bevy_window::PresentMode::AutoNoVsync => {
+                if supported_present_modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+                    vk::PresentModeKHR::IMMEDIATE
+                } else if supported_present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+                    vk::PresentModeKHR::MAILBOX
+                } else {
+                    vk::PresentModeKHR::FIFO
+                }
+            }
+            bevy_window::PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
+            bevy_window::PresentMode::Mailbox => vk::PresentModeKHR::MAILBOX,
+            bevy_window::PresentMode::Fifo => vk::PresentModeKHR::FIFO,
+            bevy_window::PresentMode::FifoRelaxed => vk::PresentModeKHR::FIFO_RELAXED,
+        },
+        clipped: config.clipped,
+    }
+}
+
+fn get_surface_preferred_format(
+    surface: &Surface,
+    physical_device: &PhysicalDevice,
+    required_feature_flags: vk::FormatFeatureFlags,
+    use_srgb_format: bool,
+) -> vk::SurfaceFormatKHR {
+    use crate::utils::{ColorSpacePrimaries, ColorSpaceTransferFunction, Format, FormatType};
+    let supported_formats = physical_device.get_surface_formats(surface).unwrap();
+
+    supported_formats
+        .iter()
+        .filter(|&surface_format| {
+            let format_properties = unsafe {
+                physical_device
+                    .instance()
+                    .get_physical_device_format_properties(
+                        physical_device.raw(),
+                        surface_format.format,
+                    )
+            };
+            format_properties
+                .optimal_tiling_features
+                .contains(required_feature_flags)
+                | format_properties
+                    .linear_tiling_features
+                    .contains(required_feature_flags)
+        })
+        .max_by_key(|&surface_format| {
+            // Select color spaces based on the following criteria:
+            // Prefer larger color spaces. For extended srgb, consider it the same as Rec2020 but after all other Rec2020 color spaces.
+            // Prefer formats with larger color depth.
+            // If small swapchain format, prefer non-linear. Otherwise, prefer linear.
+            let format: Format = surface_format.format.into();
+            let format_priority = format.r + format.g + format.b;
+
+            let color_space: ColorSpace = surface_format.color_space.into();
+
+            let color_space_priority = if matches!(
+                color_space.transfer_function,
+                ColorSpaceTransferFunction::scRGB
+            ) {
+                // Special case for extended srgb
+                (ColorSpacePrimaries::BT2020.area_size() * 4096.0) as u32 - 1
+            } else {
+                (color_space.primaries.area_size() * 4096.0) as u32
+            };
+            let linearity_priority: u8 = if format_priority <= 30 {
+                // <= 10 bit color. Prefer non-linear color space
+                if color_space.transfer_function.is_linear() {
+                    0
+                } else {
+                    1
+                }
+            } else {
+                // > 10 bit color, for example 10 bit color and above. Prefer linear color space
+                if color_space.transfer_function.is_linear() {
+                    1
+                } else {
+                    0
+                }
+            };
+
+            let srgb_priority = if (format.ty == FormatType::sRGB) ^ use_srgb_format {
+                0_u8
+            } else {
+                1_u8
+            };
+            (
+                color_space_priority,
+                format_priority,
+                linearity_priority,
+                srgb_priority,
+            )
+        })
+        .cloned()
+        .unwrap_or(vk::SurfaceFormatKHR {
+            format: vk::Format::B8G8R8A8_SRGB,
+            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        })
+}

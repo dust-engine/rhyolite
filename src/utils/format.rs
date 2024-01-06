@@ -1,9 +1,8 @@
 use ash::vk;
 use glam::Vec2;
-use serde::{Deserialize, Serialize};
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FormatType {
     /// Value will be converted to a float in the range of [0, 1]
     UNorm,
@@ -36,7 +35,7 @@ pub struct Format {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Serialize, Deserialize, Copy)]
+#[derive(Clone, Debug, Copy)]
 pub enum Permutation {
     R,
     G,
