@@ -1317,6 +1317,7 @@ dependencies = [
  "bevy_window",
  "bevy_winit",
  "cstr",
+ "glam",
  "raw-window-handle",
  "thread_local",
  "tracing",

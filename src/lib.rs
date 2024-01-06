@@ -7,9 +7,8 @@ mod plugin;
 mod queue;
 mod surface;
 mod swapchain;
-mod types;
+pub mod utils;
 
-pub use types::*;
 pub use cstr::cstr;
 pub use device::*;
 pub use instance::*;

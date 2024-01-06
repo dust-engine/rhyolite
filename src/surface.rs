@@ -6,7 +6,7 @@ use bevy_ecs::prelude::*;
 use bevy_window::{RawHandleWrapper, Window};
 use raw_window_handle::{HasRawDisplayHandle, RawDisplayHandle};
 
-use crate::{plugin::RhyoliteApp, Device, Instance};
+use crate::{plugin::RhyoliteApp, Device, Instance, HasDevice};
 
 pub struct SurfacePlugin {}
 
@@ -126,6 +126,9 @@ impl Surface {
             loader,
             inner: surface,
         })
+    }
+    pub fn raw(&self) -> vk::SurfaceKHR {
+        self.inner
     }
 }
 pub(super) fn extract_surfaces(

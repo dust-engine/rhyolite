@@ -20,4 +20,4 @@ cstr = "0.2"
 thread_local = "1"
 winit = { version = "0.29", default-features = false, features = ["rwh_05"] }
 raw-window-handle = "0.5"
-
+glam = "0.24"
