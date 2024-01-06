@@ -3,7 +3,7 @@ use bevy_ecs::system::Resource;
 
 /// Index of a created queue
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-pub struct QueueRef(pub u8);
+pub struct QueueRef(pub(crate) u8);
 impl QueueRef {
     pub fn null() -> Self {
         QueueRef(u8::MAX)

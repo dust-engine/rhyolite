@@ -4,6 +4,7 @@ use bevy_ecs::system::Resource;
 
 use crate::Instance;
 use crate::PhysicalDevice;
+use crate::QueueRef;
 
 use std::ffi::c_char;
 use std::ops::Deref;
@@ -29,6 +30,9 @@ pub struct DeviceInner {
 }
 
 impl Device {
+    pub(crate) fn get_raw_queue(&self, queue: QueueRef) -> vk::Queue {
+        self.0.queues[queue.0 as usize]
+    }
     pub fn create(
         physical_device: PhysicalDevice,
         queues: &[vk::DeviceQueueCreateInfo],

@@ -1,4 +1,4 @@
-use std::{ops::Deref, sync::Arc};
+use std::{borrow::BorrowMut, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
 use bevy_app::{App, Plugin, Update};
@@ -7,7 +7,7 @@ use bevy_window::Window;
 
 use crate::{
     plugin::RhyoliteApp, utils::ColorSpace, utils::SharingMode, Device, HasDevice, PhysicalDevice,
-    Surface,
+    QueueType, QueuesRouter, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -29,7 +29,11 @@ impl Plugin for SwapchainPlugin {
 
         app.add_systems(
             Update,
-            extract_swapchains.after(crate::surface::extract_surfaces),
+            (
+                extract_swapchains.after(crate::surface::extract_surfaces),
+                acquire_swapchain_image.after(extract_swapchains),
+                present.after(acquire_swapchain_image),
+            ),
         );
     }
     fn finish(&self, app: &mut App) {
@@ -281,7 +285,6 @@ pub(super) fn extract_swapchains(
             let config = config.unwrap_or(&default_config);
             let create_info = get_create_info(surface, device.physical_device(), window, config);
             swapchain.recreate(&create_info).unwrap();
-            println!("recreated");
         }
     }
     for create_event in window_created_events.read() {
@@ -298,8 +301,14 @@ pub(super) fn extract_swapchains(
             &create_info,
         )
         .unwrap();
-        commands.entity(create_event.window).insert(new_swapchain);
-        println!("Added");
+        commands
+            .entity(create_event.window)
+            .insert(new_swapchain)
+            .insert(SwapchainImage {
+                image: vk::Image::null(),
+                full_image_view: vk::ImageView::null(),
+                indice: u32::MAX,
+            });
     }
 }
 
@@ -522,4 +531,77 @@ fn get_surface_preferred_format(
             format: vk::Format::B8G8R8A8_SRGB,
             color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
         })
+}
+
+#[derive(Component)]
+pub struct SwapchainImage {
+    image: vk::Image,
+    full_image_view: vk::ImageView,
+    indice: u32,
+}
+
+pub fn acquire_swapchain_image(
+    mut query: Query<(
+        &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
+        &mut SwapchainImage,
+    )>,
+) {
+    for (mut swapchain, mut swapchain_image) in query.iter_mut() {
+        let (indice, suboptimal) = unsafe {
+            let swapchain = swapchain.borrow_mut();
+            swapchain.0.loader.acquire_next_image(
+                swapchain.0.inner,
+                !0,
+                vk::Semaphore::null(),
+                vk::Fence::null(),
+            )
+        }
+        .unwrap();
+        if suboptimal {
+            tracing::warn!("Suboptimal swapchain");
+        }
+        let (image, image_view) = swapchain.0.images[indice as usize];
+        *swapchain_image = SwapchainImage {
+            image,
+            full_image_view: image_view,
+            indice,
+        };
+    }
+}
+
+pub fn present(
+    swapchain_loader: Res<SwapchainLoader>,
+    device: Res<Device>,
+    queues_router: Res<QueuesRouter>,
+    mut query: Query<(&mut Swapchain, &SwapchainImage)>,
+) {
+    let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
+    let mut swapchain_image_indices: Vec<u32> = Vec::new();
+    for (swapchain, swapchain_image) in query.iter_mut() {
+        swapchains.push(swapchain.0.inner);
+        swapchain_image_indices.push(swapchain_image.indice);
+    }
+    if swapchains.is_empty() {
+        tracing::warn!("Nothing to present!");
+        return;
+    }
+
+    // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
+    // select the best one.
+    let present_queue = queues_router.of_type(QueueType::Graphics);
+    let queue = device.get_raw_queue(present_queue);
+
+    unsafe {
+        swapchain_loader
+            .queue_present(
+                queue,
+                &vk::PresentInfoKHR {
+                    swapchain_count: swapchains.len() as u32,
+                    p_swapchains: swapchains.as_ptr(),
+                    p_image_indices: swapchain_image_indices.as_ptr(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
 }
