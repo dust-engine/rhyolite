@@ -9,12 +9,14 @@ pub struct RenderSystemConfig {
     /// The render system must be assigned onto a queue supporting these feature flags.
     pub queue: QueueAssignment,
     pub force_binary_semaphore: bool,
+    pub is_queue_op: bool,
 }
 impl Default for RenderSystemConfig {
     fn default() -> Self {
         Self {
             queue: QueueAssignment::MinOverhead(QueueType::Graphics),
             force_binary_semaphore: false,
+            is_queue_op: false,
         }
     }
 }
