@@ -22,7 +22,7 @@ fn system_t2(_commands: RenderCommands<'t'>, _render: RenderRes<Image>) {}
 
 #[test]
 #[should_panic(
-    expected = "RenderRes<rhyolite::ecs::tests::Image> can only be used in a render system, but rhyolite::ecs::tests::render_res_panics_on_non_render_system::bad_system is not. RenderCommands must be the first parameter of a render system."
+    expected = "RenderRes<rhyolite::ecs::tests::Image> can only be used in a render system. RenderCommands must be the first parameter of a render system."
 )]
 fn render_res_panics_on_non_render_system() {
     fn bad_system(_res: RenderRes<Image>) {}
@@ -34,7 +34,7 @@ fn render_res_panics_on_non_render_system() {
 
 #[test]
 #[should_panic(
-    expected = "RenderResMut<rhyolite::ecs::tests::Image> can only be used in a render system, but rhyolite::ecs::tests::render_res_mut_panics_on_non_render_system::bad_system is not. RenderCommands must be the first parameter of a render system."
+    expected = "RenderResMut<rhyolite::ecs::tests::Image> can only be used in a render system. RenderCommands must be the first parameter of a render system."
 )]
 fn render_res_mut_panics_on_non_render_system() {
     fn bad_system(_res: RenderResMut<Image>) {}

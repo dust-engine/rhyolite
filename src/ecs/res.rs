@@ -4,6 +4,7 @@ use bevy_ecs::{
     component::ComponentId,
     system::{Res, ResMut, Resource, SystemParam},
 };
+use bevy_utils::ConfigMap;
 
 use super::{RenderResAccess, RenderSystemConfig};
 
@@ -38,15 +39,18 @@ unsafe impl<'a, T: Resource> SystemParam for RenderRes<'a, T> {
         world: &mut bevy_ecs::world::World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
-        if !system_meta.default_config.has::<RenderSystemConfig>() {
-            panic!("RenderRes<{}> can only be used in a render system, but {} is not. RenderCommands must be the first parameter of a render system.", std::any::type_name::<T>(), system_meta.name());
-        }
         let component_id = Res::<'a, RenderResInner<T>>::init_state(world, system_meta);
         world
             .get_resource_or_insert_with(RenderResRegistry::default)
             .component_ids
             .insert(component_id);
         component_id
+    }
+
+    fn default_configs(config: &mut ConfigMap) {
+        if !config.has::<RenderSystemConfig>() {
+            panic!("RenderRes<{}> can only be used in a render system. RenderCommands must be the first parameter of a render system.", std::any::type_name::<T>());
+        }
     }
 
     unsafe fn get_param<'world, 'state>(
@@ -83,15 +87,18 @@ unsafe impl<'a, T: Resource> SystemParam for RenderResMut<'a, T> {
         world: &mut bevy_ecs::world::World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
-        if !system_meta.default_config.has::<RenderSystemConfig>() {
-            panic!("RenderResMut<{}> can only be used in a render system, but {} is not. RenderCommands must be the first parameter of a render system.", std::any::type_name::<T>(), system_meta.name());
-        }
         let component_id = ResMut::<'a, RenderResInner<T>>::init_state(world, system_meta);
         world
             .get_resource_or_insert_with(RenderResRegistry::default)
             .component_ids
             .insert(component_id);
         component_id
+    }
+
+    fn default_configs(config: &mut ConfigMap) {
+        if !config.has::<RenderSystemConfig>() {
+            panic!("RenderResMut<{}> can only be used in a render system. RenderCommands must be the first parameter of a render system.", std::any::type_name::<T>());
+        }
     }
 
     unsafe fn get_param<'world, 'state>(

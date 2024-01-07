@@ -76,10 +76,8 @@ impl ScheduleBuildPass for RenderSystemPass {
             let NodeId::System(node_id) = node else {
                 continue;
             };
-            let system = graph.get_system_at(node).unwrap();
-            let Some(render_system_config) = system
-                .default_configs()
-                .and_then(|map| map.get::<RenderSystemConfig>())
+            let config = &graph.systems[node_id].config;
+            let Some(render_system_config) = config.get::<RenderSystemConfig>()
             else {
                 println!("skipped.");
                 continue; // not a render system
@@ -102,12 +100,8 @@ impl ScheduleBuildPass for RenderSystemPass {
                 let NodeId::System(neighbor_node_id) = neighbor else {
                     continue;
                 };
-                let neighbor_system = graph.get_system_at(neighbor).unwrap();
-                if Some(true)
-                    != neighbor_system
-                        .default_configs()
-                        .map(|map| map.has::<RenderSystemConfig>())
-                {
+                let neighbor_config = &graph.systems[neighbor_node_id].config;
+                if !neighbor_config.has::<RenderSystemConfig>() {
                     continue; // neighbor not a render system
                 };
                 render_graph.add_edge(node_id, neighbor_node_id, ());

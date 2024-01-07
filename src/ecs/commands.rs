@@ -40,16 +40,17 @@ where
         _world: &mut World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
+    }
+
+    fn default_configs(config: &mut bevy_utils::ConfigMap) {
         let flags = match Q {
             'g' => QueueType::Graphics,
             'c' => QueueType::Compute,
             't' => QueueType::Transfer,
             _ => unreachable!(),
         };
-        system_meta.default_config.insert(RenderSystemConfig {
-            queue: QueueAssignment::MinOverhead(flags),
-            force_binary_semaphore: false,
-        });
+        let config = config.entry::<RenderSystemConfig>().or_default();
+        config.queue = QueueAssignment::MinOverhead(flags);
     }
 
     unsafe fn get_param<'world, 'state>(
