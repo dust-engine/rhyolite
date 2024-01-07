@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use bevy_ecs::{
     schedule::{NodeId, ScheduleBuildPass},
     world::World,
@@ -221,22 +223,37 @@ impl ScheduleBuildPass for RenderSystemPass {
             stage_index: u32,
             queue: QueueRef,
         }
+        
+        #[derive(Clone)]
+        struct QueueGraphNodeMeta {
+            force_binary_semaphore: bool,
+            nodes: Vec<usize>
+        }
         let mut queue_graph =
             bevy_utils::petgraph::graphmap::DiGraphMap::<QueueGraphNode, ()>::new();
+        let mut queue_graph_nodes = BTreeMap::<QueueGraphNode, QueueGraphNodeMeta>::new();
         // Flush all colors
         for (queue_node_buffer, stages) in colors.iter_mut() {
             if !queue_node_buffer.is_empty() {
                 // Flush remaining nodes
                 stages.push(std::mem::take(queue_node_buffer));
             }
-            for stage in stages.iter() {
+            for stage in stages.iter_mut() {
+                let mut queue_graph_node: Option<QueueGraphNode> = None;
+                let mut force_binary_semaphore = false;
                 for node in stage.iter() {
                     let meta = render_graph_meta[*node].as_ref().unwrap();
-                    let queue_graph_node = QueueGraphNode {
+                    if let Some(queue_graph_node) = &queue_graph_node {
+                        // All nodes in here shall have the same stage index and selected queue
+                        assert_eq!(queue_graph_node.stage_index, meta.stage_index);
+                        assert_eq!(queue_graph_node.queue, meta.selected_queue);
+                    }
+                    let queue_graph_node = queue_graph_node.get_or_insert(QueueGraphNode {
                         stage_index: meta.stage_index,
                         queue: meta.selected_queue,
-                    };
+                    }).clone();
                     queue_graph.add_node(queue_graph_node);
+                    force_binary_semaphore = meta.config.force_binary_semaphore;
                     for neighbor in render_graph.neighbors(*node) {
                         let neighbor_meta = render_graph_meta[neighbor].as_ref().unwrap();
                         let neighbor_queue_graph_node = QueueGraphNode {
@@ -248,6 +265,15 @@ impl ScheduleBuildPass for RenderSystemPass {
                             queue_graph.add_edge(queue_graph_node, neighbor_queue_graph_node, ());
                         }
                     }
+                }
+                if let Some(queue_graph_node) = queue_graph_node {
+                    queue_graph_nodes.insert(
+                        queue_graph_node,
+                        QueueGraphNodeMeta {
+                            force_binary_semaphore,
+                            nodes: std::mem::take(stage)
+                        },
+                    );
                 }
             }
         }

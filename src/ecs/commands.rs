@@ -48,6 +48,7 @@ where
         };
         system_meta.default_config.insert(RenderSystemConfig {
             queue: QueueAssignment::MinOverhead(flags),
+            force_binary_semaphore: false,
         });
     }
 
@@ -60,3 +61,11 @@ where
         RenderCommands {}
     }
 }
+// When can you record two command buffers concurrently?
+// - When they do not have any CPU side dependencies - build time enforcement
+// - When they do not have CPU side resource conflicts - runtime enforcement
+// systems with CPU side dependencies will always be recorded into the same command buffer.
+
+// For each queue node, add a submission node.
+// it's told the semaphores to wait and signal.
+// semaphores are entirely managed by the pass.

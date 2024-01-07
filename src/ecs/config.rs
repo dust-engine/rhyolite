@@ -8,6 +8,15 @@ use super::RenderSystemPass;
 pub struct RenderSystemConfig {
     /// The render system must be assigned onto a queue supporting these feature flags.
     pub queue: QueueAssignment,
+    pub force_binary_semaphore: bool,
+}
+impl Default for RenderSystemConfig {
+    fn default() -> Self {
+        Self {
+            queue: QueueAssignment::MinOverhead(QueueType::Graphics),
+            force_binary_semaphore: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,8 +49,9 @@ where
     /// while minimizing the amount of overhead associated with semaphore syncronizations.
     /// Should be called for most smaller render systems in-between heavier operations.
     fn on_queue<M>(self, queue_type: QueueType) -> SystemConfigs {
-        self.with_option::<RenderSystemPass>(RenderSystemConfig {
-            queue: QueueAssignment::MinOverhead(queue_type),
+        self.with_option::<RenderSystemPass>(|entry| {
+            let config = entry.or_default();
+            config.queue = QueueAssignment::MinOverhead(queue_type);
         })
     }
     /// Assign this render system to a queue supporting the specified queue flags
@@ -49,15 +59,17 @@ where
     ///
     /// Should be called for heavy weight operations only.
     fn on_async_queue<M>(self, queue: QueueType) -> SystemConfigs {
-        self.with_option::<RenderSystemPass>(RenderSystemConfig {
-            queue: QueueAssignment::MaxAsync(queue),
+        self.with_option::<RenderSystemPass>(|entry| {
+            let config = entry.or_default();
+            config.queue = QueueAssignment::MaxAsync(queue);
         })
     }
     /// Assign this render system to a specific queue. The caller is responsible for ensuring
     /// that the queue supports the features required.
     fn on_specific_queue<M>(self, queue: QueueRef) -> SystemConfigs {
-        self.with_option::<RenderSystemPass>(RenderSystemConfig {
-            queue: QueueAssignment::Manual(queue),
+        self.with_option::<RenderSystemPass>(|entry| {
+            let config = entry.or_default();
+            config.queue = QueueAssignment::Manual(queue);
         })
     }
 }

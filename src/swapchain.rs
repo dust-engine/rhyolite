@@ -7,7 +7,7 @@ use bevy_window::Window;
 
 use crate::{
     plugin::RhyoliteApp, utils::ColorSpace, utils::SharingMode, Device, HasDevice, PhysicalDevice,
-    QueueType, QueuesRouter, Surface,
+    QueueType, QueuesRouter, Surface, ecs::RenderSystemPass,
 };
 
 pub struct SwapchainPlugin {
@@ -31,8 +31,14 @@ impl Plugin for SwapchainPlugin {
             Update,
             (
                 extract_swapchains.after(crate::surface::extract_surfaces),
-                acquire_swapchain_image.after(extract_swapchains),
-                present.after(acquire_swapchain_image),
+                acquire_swapchain_image.with_option::<RenderSystemPass>(|entry| {
+                    let item = entry.or_default();
+                    item.force_binary_semaphore = true;
+                }).after(extract_swapchains),
+                present.with_option::<RenderSystemPass>(|entry| {
+                    let item = entry.or_default();
+                    item.force_binary_semaphore = true;
+                }).after(acquire_swapchain_image),
             ),
         );
     }
