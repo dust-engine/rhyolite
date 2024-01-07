@@ -155,7 +155,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             let node_color = meta.selected_queue;
             let mut should_defer = false;
             for parent in render_graph.neighbors_directed(node, Incoming) {
-                let parent_meta = render_graph_meta[parent].as_mut().unwrap();
+                let parent_meta = render_graph_meta[parent].as_ref().unwrap();
                 if parent_meta.selected_queue != node_color {
                     let start = parent_meta.selected_queue.0;
                     let end = node_color.0;
@@ -180,7 +180,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                 for parent in render_graph.neighbors_directed(node, Incoming) {
                     // Update the tiny graph.
                     let parent_meta = render_graph_meta[parent].as_mut().unwrap();
-                    if parent_meta.selected_queue != node_color {
+                    if parent_meta.selected_queue != node_color && parent_meta.stage_index == stage_index {
                         let start = parent_meta.selected_queue.0;
                         let end = node_color.0;
                         tiny_graph.add_edge(start, end, ());
