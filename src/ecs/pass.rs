@@ -126,7 +126,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         // this node to the next stage.
 
         // Step 1.2: Agressively merge nodes
-        let mut heap: Vec<usize> = Vec::new();
+        let mut heap: Vec<usize> = Vec::new(); // nodes with no incoming edges
 
         // First, find all nodes with no incoming edges
         for node in render_graph.nodes() {
@@ -142,7 +142,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         let mut stage_index = 0;
         // (buffer, stages)
-        let mut colors: Vec<(Vec<usize>, Vec<Vec<usize>>)> =
+        let mut colors: Vec<((Vec<usize>, bool), Vec<(Vec<usize>, bool)>)> =
             vec![Default::default(); num_queues as usize];
         let mut tiny_graph = bevy_utils::petgraph::graphmap::DiGraphMap::<u8, ()>::new();
         let mut current_graph = render_graph.clone();
@@ -151,22 +151,26 @@ impl ScheduleBuildPass for RenderSystemPass {
             let meta = render_graph_meta[node].as_ref().unwrap();
             let node_color = meta.selected_queue;
             let mut should_defer = false;
-            for parent in render_graph.neighbors_directed(node, Incoming) {
-                let parent_meta = render_graph_meta[parent].as_ref().unwrap();
-                if parent_meta.selected_queue != node_color ||
-                // In the case that they're the same color, the parent node can't also be a queue operation.
-                // Queue operations cannot be merged like this.
-                (parent_meta.config.is_queue_op || meta.config.is_queue_op) 
-                 {
-                    let start = parent_meta.selected_queue.0;
-                    let end = node_color.0;
-                    let has_path = Dfs::new(&tiny_graph, end)
-                        .iter(&tiny_graph)
-                        .any(|x| x == start);
-                    if has_path {
-                        // There is already a path from end to start, so adding a node from start to end causes a cycle.
-                        should_defer = true;
-                        break;
+            if meta.config.is_queue_op && !colors[meta.selected_queue.0 as usize].0.0.is_empty() {
+                // Can only push a queue op when there aren't other ops in the buffer
+                should_defer = true;
+            } else if !meta.config.is_queue_op && colors[meta.selected_queue.0 as usize].0.1 { // not a queue op, but a queue op was already queued
+                should_defer = true;
+            } else {
+                // not a queue op. push as many as we can
+                for parent in render_graph.neighbors_directed(node, Incoming) {
+                    let parent_meta = render_graph_meta[parent].as_ref().unwrap();
+                    if parent_meta.selected_queue != node_color {
+                        let start = parent_meta.selected_queue.0;
+                        let end = node_color.0;
+                        let has_path = Dfs::new(&tiny_graph, end)
+                            .iter(&tiny_graph)
+                            .any(|x| x == start);
+                        if has_path {
+                            // There is already a path from end to start, so adding a node from start to end causes a cycle.
+                            should_defer = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -176,7 +180,8 @@ impl ScheduleBuildPass for RenderSystemPass {
             } else {
                 let meta = render_graph_meta[node].as_mut().unwrap();
                 meta.stage_index = stage_index;
-                colors[meta.selected_queue.0 as usize].0.push(node);
+                colors[meta.selected_queue.0 as usize].0.0.push(node);
+                colors[meta.selected_queue.0 as usize].0.1 |= meta.config.is_queue_op;
 
                 for parent in render_graph.neighbors_directed(node, Incoming) {
                     // Update the tiny graph.
@@ -204,7 +209,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             if heap.is_empty() {
                 // Flush all colors
                 for (queue_node_buffer, stages) in colors.iter_mut() {
-                    if !queue_node_buffer.is_empty() {
+                    if !queue_node_buffer.0.is_empty() {
                         // Flush remaining nodes
                         stages.push(std::mem::take(queue_node_buffer));
                     }
@@ -226,6 +231,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         #[derive(Clone)]
         struct QueueGraphNodeMeta {
             force_binary_semaphore: bool,
+            is_queue_op: bool,
             nodes: Vec<usize>
         }
         let mut queue_graph =
@@ -233,14 +239,14 @@ impl ScheduleBuildPass for RenderSystemPass {
         let mut queue_graph_nodes = BTreeMap::<QueueGraphNode, QueueGraphNodeMeta>::new();
         // Flush all colors
         for (queue_node_buffer, stages) in colors.iter_mut() {
-            if !queue_node_buffer.is_empty() {
+            if !queue_node_buffer.0.is_empty() {
                 // Flush remaining nodes
                 stages.push(std::mem::take(queue_node_buffer));
             }
             for stage in stages.iter_mut() {
                 let mut queue_graph_node: Option<QueueGraphNode> = None;
                 let mut force_binary_semaphore = false;
-                for node in stage.iter() {
+                for node in stage.0.iter() {
                     let meta = render_graph_meta[*node].as_ref().unwrap();
                     if let Some(queue_graph_node) = &queue_graph_node {
                         // All nodes in here shall have the same stage index and selected queue
@@ -270,7 +276,8 @@ impl ScheduleBuildPass for RenderSystemPass {
                         queue_graph_node,
                         QueueGraphNodeMeta {
                             force_binary_semaphore,
-                            nodes: std::mem::take(stage)
+                            nodes: std::mem::take(&mut stage.0),
+                            is_queue_op: stage.1,
                         },
                     );
                 }
