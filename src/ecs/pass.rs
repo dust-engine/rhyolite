@@ -1,17 +1,18 @@
 use std::collections::BTreeMap;
 
+use ash::vk;
 use bevy_ecs::{
     schedule::{NodeId, ScheduleBuildPass},
     world::World,
 };
-use bevy_utils::petgraph::{
+use bevy_utils::{petgraph::{
     visit::{Dfs, Walker},
     Direction::{Incoming, Outgoing},
-};
+}, ConfigMap};
 
 use crate::{
-    ecs::QueueAssignment,
-    queue::{QueueRef, QueuesRouter},
+    ecs::{QueueAssignment, QueueSystemState},
+    queue::{QueueRef, QueuesRouter}, Device,
 };
 
 use super::RenderSystemConfig;
@@ -147,12 +148,16 @@ impl ScheduleBuildPass for RenderSystemPass {
         let mut current_graph = render_graph.clone();
         let mut heap_next_stage: Vec<usize> = Vec::new(); // nodes to be deferred to the next stage
         while let Some(node) = heap.pop() {
-            let meta = render_graph_meta[node].as_mut().unwrap();
+            let meta = render_graph_meta[node].as_ref().unwrap();
             let node_color = meta.selected_queue;
             let mut should_defer = false;
             for parent in render_graph.neighbors_directed(node, Incoming) {
                 let parent_meta = render_graph_meta[parent].as_ref().unwrap();
-                if parent_meta.selected_queue != node_color {
+                if parent_meta.selected_queue != node_color ||
+                // In the case that they're the same color, the parent node can't also be a queue operation.
+                // Queue operations cannot be merged like this.
+                (parent_meta.config.is_queue_op || meta.config.is_queue_op) 
+                 {
                     let start = parent_meta.selected_queue.0;
                     let end = node_color.0;
                     let has_path = Dfs::new(&tiny_graph, end)
@@ -273,8 +278,28 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         println!("{:#?}", queue_graph);
 
-        // Step 1.4: Insert systems to flush command buffers.
-        // TODO: create one timeline semaphore for each queue.
+        // Step 1.4: Disperse semaphores
+        let device = world.resource::<Device>();
+        for (i, queue_node) in queue_graph_nodes.iter() {
+            for j in queue_node.nodes.iter() {
+                let node = render_graph_meta[*j].as_ref().unwrap();
+                if node.config.is_queue_op {
+                    // need to signal for this.
+                    let system = &mut graph.systems[*j];
+                    let queue = device.get_raw_queue(node.selected_queue);
+                    let mut config = ConfigMap::new();
+                    config.insert(QueueSystemState {
+                        queue,
+                        semaphore_waits: vec![],
+                        semaphore_signals: vec![],
+                    });
+                    system.get_mut().unwrap().set_configs(&mut config);
+                }
+            }
+            // add a node and signal for all command nodes.
+        }
+
+        // Step 1.5: Command buffer recording re-serialization
 
         // Step 2: inside each queue, insert pipeline barriers.
 

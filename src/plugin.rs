@@ -13,7 +13,7 @@ use std::{
 
 use crate::{
     Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
-    QueuesRouter, Version,
+    QueuesRouter, Version, ecs::RenderSystemPass,
 };
 use cstr::cstr;
 
@@ -233,6 +233,9 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(properties)
             .insert_resource(features)
             .insert_resource(queue_router);
+
+        // Add build pass
+        app.get_schedule_mut(Update).as_mut().unwrap().add_build_pass(RenderSystemPass{});
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =

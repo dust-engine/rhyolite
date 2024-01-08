@@ -7,7 +7,7 @@ use bevy_window::Window;
 
 use crate::{
     plugin::RhyoliteApp, utils::ColorSpace, utils::SharingMode, Device, HasDevice, PhysicalDevice,
-    QueueType, QueuesRouter, Surface, ecs::RenderSystemPass,
+    QueueType, QueuesRouter, Surface, ecs::{RenderSystemPass, QueueContext},
 };
 
 pub struct SwapchainPlugin {
@@ -547,11 +547,14 @@ pub struct SwapchainImage {
 }
 
 pub fn acquire_swapchain_image(
+    queue_ctx: QueueContext<'g'>,
     mut query: Query<(
         &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
         &mut SwapchainImage,
     )>,
 ) {
+    println!("acquire {:?}", queue_ctx.queue);
+
     for (mut swapchain, mut swapchain_image) in query.iter_mut() {
         let (indice, suboptimal) = unsafe {
             let swapchain = swapchain.borrow_mut();
@@ -576,11 +579,13 @@ pub fn acquire_swapchain_image(
 }
 
 pub fn present(
+    queue_ctx: QueueContext<'g'>,
     swapchain_loader: Res<SwapchainLoader>,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
     mut query: Query<(&mut Swapchain, &SwapchainImage)>,
 ) {
+    println!("present {:?}", queue_ctx.queue);
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
     for (swapchain, swapchain_image) in query.iter_mut() {
