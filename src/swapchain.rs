@@ -7,7 +7,7 @@ use bevy_window::Window;
 
 use crate::{
     plugin::RhyoliteApp, utils::ColorSpace, utils::SharingMode, Device, HasDevice, PhysicalDevice,
-    QueueType, QueuesRouter, Surface, ecs::{RenderSystemPass, QueueContext},
+    QueueType, QueuesRouter, Surface, ecs::{RenderSystemPass, QueueContext, RenderComponent, RenderComponentMut},
 };
 
 pub struct SwapchainPlugin {
@@ -550,7 +550,7 @@ pub fn acquire_swapchain_image(
     queue_ctx: QueueContext<'g'>,
     mut query: Query<(
         &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
-        &mut SwapchainImage,
+        RenderComponentMut<SwapchainImage>,
     )>,
 ) {
     println!("acquire {:?}", queue_ctx.queue);
@@ -570,11 +570,13 @@ pub fn acquire_swapchain_image(
             tracing::warn!("Suboptimal swapchain");
         }
         let (image, image_view) = swapchain.0.images[indice as usize];
-        *swapchain_image = SwapchainImage {
-            image,
-            full_image_view: image_view,
-            indice,
-        };
+        unsafe {
+            *swapchain_image.get_on_host_mut() = SwapchainImage {
+                image,
+                full_image_view: image_view,
+                indice,
+            };
+        }
     }
 }
 
@@ -583,14 +585,17 @@ pub fn present(
     swapchain_loader: Res<SwapchainLoader>,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
-    mut query: Query<(&mut Swapchain, &SwapchainImage)>,
+    mut query: Query<(&mut Swapchain, RenderComponent<SwapchainImage>)>,
 ) {
     println!("present {:?}", queue_ctx.queue);
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
     for (swapchain, swapchain_image) in query.iter_mut() {
         swapchains.push(swapchain.0.inner);
-        swapchain_image_indices.push(swapchain_image.indice);
+        unsafe {
+            // Safety: we're only getting the indice of the image and we're not actually reading / writing to it.
+            swapchain_image_indices.push(swapchain_image.get_on_host().indice);
+        }
     }
     if swapchains.is_empty() {
         tracing::warn!("Nothing to present!");
