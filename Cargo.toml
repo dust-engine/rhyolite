@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 bevy_a11y = { path = "../bevy/crates/bevy_a11y" }
 bevy_window = { path = "../bevy/crates/bevy_window" }
-bevy_ecs = { path = "../bevy/crates/bevy_ecs" }
+bevy_ecs = { path = "../bevy/crates/bevy_ecs", features = ["multi-threaded"] }
 bevy_utils = { path = "../bevy/crates/bevy_utils" }
 bevy_winit = { path = "../bevy/crates/bevy_winit" }
 bevy_input = { path = "../bevy/crates/bevy_input" }
@@ -21,3 +21,17 @@ thread_local = "1"
 winit = { version = "0.29", default-features = false, features = ["rwh_05"] }
 raw-window-handle = "0.5"
 glam = "0.24"
+
+[dev-dependencies]
+bevy_mod_debugdump = { path = "../bevy_mod_debugdump" }
+
+[patch.crates-io]
+bevy = { path = "../bevy" }
+bevy_a11y = { path = "../bevy/crates/bevy_a11y" }
+bevy_window = { path = "../bevy/crates/bevy_window" }
+bevy_ecs = { path = "../bevy/crates/bevy_ecs" }
+bevy_utils = { path = "../bevy/crates/bevy_utils" }
+bevy_winit = { path = "../bevy/crates/bevy_winit" }
+bevy_input = { path = "../bevy/crates/bevy_input" }
+bevy_app = { path = "../bevy/crates/bevy_app" }
+bevy_render = { path = "../bevy/crates/bevy_render" }

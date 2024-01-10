@@ -1,16 +1,58 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, BTreeMap};
 
+use ash::vk;
 use bevy_ecs::{
     component::{ComponentId, Component},
-    system::{Res, ResMut, Resource, SystemParam}, query::{WorldQuery, QueryData, ReadOnlyQueryData}, world::Mut,
+    system::{Res, ResMut, Resource, SystemParam}, query::{WorldQuery, QueryData, ReadOnlyQueryData, Access}, world::{Mut, unsafe_world_cell::UnsafeWorldCell, World}, archetype::{ArchetypeComponentId, ArchetypeGeneration},
 };
 use bevy_utils::ConfigMap;
 
-use super::{RenderResAccess, RenderSystemConfig};
+use crate::QueueRef;
 
-#[derive(Resource, Default)]
+use super::{RenderSystemConfig};
+
+pub(crate) struct RenderResAccess {
+    pub(crate) stage: vk::PipelineStageFlags2,
+    pub(crate) access: vk::AccessFlags2,
+    pub(crate) stage_index: u32,
+    pub(crate) queue: QueueRef,
+}
+
+#[derive(Resource)]
 pub struct RenderResRegistry {
     component_ids: BTreeSet<ComponentId>,
+    archetype_component_ids: BTreeSet<ArchetypeComponentId>,
+    active_access: BTreeMap<ArchetypeComponentId, RenderResAccess>,
+
+    archetype_generation: ArchetypeGeneration,
+}
+impl RenderResRegistry {
+    pub fn archetype_component_access(&self) -> &BTreeSet<ArchetypeComponentId> {
+        &self.archetype_component_ids
+    }
+}
+impl Default for RenderResRegistry {
+    fn default() -> Self {
+        Self { component_ids: Default::default(), archetype_component_ids: Default::default(), active_access: Default::default(), archetype_generation: ArchetypeGeneration::initial() }
+    }
+}
+pub(crate) fn render_res_registry_update_archetype(
+    mut registry: ResMut<RenderResRegistry>,
+    world: UnsafeWorldCell,
+) {
+    let archetypes = world.archetypes();
+    if registry.archetype_generation == archetypes.generation() {
+        return;
+    }
+    let registry = registry.as_mut();
+    let old_generation = std::mem::replace(&mut registry.archetype_generation, archetypes.generation());
+    for archetype in &archetypes[old_generation..] {
+        for component_id in &registry.component_ids {
+            if let Some(archetype_component_id) = archetype.get_archetype_component_id(*component_id) {
+                registry.archetype_component_ids.insert(archetype_component_id);
+            }
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -41,7 +83,7 @@ unsafe impl<'a, T: Resource> SystemParam for RenderRes<'a, T> {
     ) -> Self::State {
         let component_id = Res::<'a, RenderResInner<T>>::init_state(world, system_meta);
         world
-            .get_resource_or_insert_with(RenderResRegistry::default)
+            .resource_mut::<RenderResRegistry>()
             .component_ids
             .insert(component_id);
         component_id
@@ -89,7 +131,7 @@ unsafe impl<'a, T: Resource> SystemParam for RenderResMut<'a, T> {
     ) -> Self::State {
         let component_id = ResMut::<'a, RenderResInner<T>>::init_state(world, system_meta);
         world
-            .get_resource_or_insert_with(RenderResRegistry::default)
+            .resource_mut::<RenderResRegistry>()
             .component_ids
             .insert(component_id);
         component_id
@@ -277,7 +319,7 @@ unsafe impl<T: Component> WorldQuery for RenderComponentMut<'_, T> {
     fn init_state(world: &mut bevy_ecs::world::World) -> Self::State {
         let component_id = <&mut T as WorldQuery>::init_state(world);
         world
-            .get_resource_or_insert_with(RenderResRegistry::default)
+            .resource_mut::<RenderResRegistry>()
             .component_ids
             .insert(component_id);
         component_id

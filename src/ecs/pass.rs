@@ -11,7 +11,7 @@ use bevy_utils::{petgraph::{
 }, ConfigMap};
 
 use crate::{
-    ecs::{QueueAssignment, QueueSystemState},
+    ecs::{QueueAssignment, QueueSystemInitialState},
     queue::{QueueRef, QueuesRouter}, Device,
 };
 
@@ -295,10 +295,8 @@ impl ScheduleBuildPass for RenderSystemPass {
                     let system = &mut graph.systems[*j];
                     let queue = device.get_raw_queue(node.selected_queue);
                     let mut config = ConfigMap::new();
-                    config.insert(QueueSystemState {
+                    config.insert(QueueSystemInitialState {
                         queue,
-                        semaphore_waits: vec![],
-                        semaphore_signals: vec![],
                     });
                     system.get_mut().unwrap().set_configs(&mut config);
                 }
