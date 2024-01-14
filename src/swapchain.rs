@@ -553,7 +553,7 @@ pub fn acquire_swapchain_image(
         RenderComponentMut<SwapchainImage>,
     )>,
 ) {
-    println!("acquire {:?}", queue_ctx.queue);
+    println!("acquire {:?}, waits {:?}, signals {:?}", queue_ctx.queue, queue_ctx.semaphore_waits, queue_ctx.semaphore_signals);
 
     for (mut swapchain, mut swapchain_image) in query.iter_mut() {
         let (indice, suboptimal) = unsafe {
@@ -587,7 +587,7 @@ pub fn present(
     queues_router: Res<QueuesRouter>,
     mut query: Query<(&mut Swapchain, RenderComponent<SwapchainImage>)>,
 ) {
-    println!("present {:?}", queue_ctx.queue);
+    println!("present {:?}, waits {:?}, signals {:?}", queue_ctx.queue, queue_ctx.semaphore_waits, queue_ctx.semaphore_signals);
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
     for (swapchain, swapchain_image) in query.iter_mut() {

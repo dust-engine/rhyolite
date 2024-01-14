@@ -1,4 +1,6 @@
+use ash::vk;
 use bevy_ecs::schedule::{IntoSystemConfigs, SystemConfigs};
+use bevy_utils::prelude::default;
 
 use crate::queue::{QueueRef, QueueType};
 
@@ -17,6 +19,32 @@ impl Default for RenderSystemConfig {
             queue: QueueAssignment::MinOverhead(QueueType::Graphics),
             force_binary_semaphore: false,
             is_queue_op: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Access {
+    pub stage: vk::PipelineStageFlags2,
+    pub access: vk::AccessFlags2,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueueSystemDependencyConfig {
+    pub wait: Access,
+    pub signal: Access,
+}
+impl Default for QueueSystemDependencyConfig {
+    fn default() -> Self {
+        Self {
+            wait: Access {
+                stage: vk::PipelineStageFlags2::ALL_COMMANDS,
+                access: vk::AccessFlags2::MEMORY_WRITE | vk::AccessFlags2::MEMORY_READ,
+            },
+            signal: Access {
+                stage: vk::PipelineStageFlags2::ALL_COMMANDS,
+                access: vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+            },
         }
     }
 }

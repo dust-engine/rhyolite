@@ -235,9 +235,9 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(queue_router);
 
         // Add build pass
-        app.get_schedule_mut(Update).as_mut().unwrap().add_build_pass(RenderSystemPass{});
+        app.get_schedule_mut(Update).as_mut().unwrap().add_build_pass(RenderSystemPass::default());
         app.init_resource::<RenderResRegistry>();
-        app.add_systems(PreUpdate, crate::ecs::render_res_registry_update_archetype);
+        //app.add_systems(PreUpdate, crate::ecs::render_res_registry_update_archetype);
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =

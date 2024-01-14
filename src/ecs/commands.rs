@@ -23,7 +23,7 @@ use queue_cap::*;
 
 use crate::queue::QueueType;
 
-use super::{QueueAssignment, RenderSystemConfig, RenderResRegistry};
+use super::{QueueAssignment, RenderSystemConfig, Access, RenderResRegistry};
 
 pub struct RenderCommands<const Q: char>
 where
@@ -66,20 +66,26 @@ where
 
 #[derive(Debug)]
 pub struct SemaphoreOp {
-    pub semaphore: vk::Semaphore,
-    pub stage: vk::PipelineStageFlags2,
-    pub value: u64,
+    pub ty: SemaphoreOpType,
+    pub access: Access,
+}
+#[derive(Debug, Clone)]
+pub enum SemaphoreOpType {
+    Binary(u32),
+    Timeline { semaphore: u32, value: u64 },
 }
 
 
 #[derive(Debug)]
 pub struct QueueSystemState {
-    queue: vk::Queue,
+    inner: QueueSystemInitialState,
     registry_component_id: ComponentId
 }
 #[derive(Debug)]
 pub struct QueueSystemInitialState {
     pub queue: vk::Queue,
+    pub signals: Vec<SemaphoreOp>,
+    pub waits: Vec<SemaphoreOp>,
 }
 
 pub struct QueueContext<'a, const Q: char>
@@ -105,7 +111,11 @@ where
         let component_id = Res::<RenderResRegistry>::init_state(world, system_meta);
         system_meta.set_has_deferred();
         QueueSystemState {
-            queue: vk::Queue::null(),
+            inner: QueueSystemInitialState {
+                queue: vk::Queue::null(),
+                signals: Vec::new(),
+                waits: Vec::new(),
+            },
             registry_component_id: component_id,
         }
     }
@@ -123,7 +133,7 @@ where
     }
     fn set_configs(state: &mut Self::State, config: &mut bevy_utils::ConfigMap) {
         let initial_state: QueueSystemInitialState = config.take().unwrap();
-        state.queue = initial_state.queue;
+        state.inner = initial_state;
     }
 
     fn apply(state: &mut Self::State, system_meta: &bevy_ecs::system::SystemMeta, world: &mut World) {
@@ -139,12 +149,10 @@ where
     ) -> Self::Item<'world, 'state> {
         let registry = Res::<RenderResRegistry>::get_param(&mut state.registry_component_id, system_meta, world, change_tick);
 
-        println!("system {} has access {:?}", system_meta.name(), system_meta.archetype_component_access());
-        println!("list of all rendering archetype components: {:?}", registry.archetype_component_access());
         QueueContext {
-            queue: state.queue,
-            semaphore_waits: &[],
-            semaphore_signals: &[],
+            queue: state.inner.queue,
+            semaphore_waits: &state.inner.waits,
+            semaphore_signals: &state.inner.signals,
         }
     }
 }

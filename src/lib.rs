@@ -7,6 +7,8 @@ mod plugin;
 mod queue;
 mod surface;
 mod swapchain;
+mod semaphore;
+
 pub mod utils;
 
 pub use cstr::cstr;
@@ -17,3 +19,4 @@ pub use plugin::RhyolitePlugin;
 pub use queue::*;
 pub use surface::*;
 pub use swapchain::*;
+pub use semaphore::*;
