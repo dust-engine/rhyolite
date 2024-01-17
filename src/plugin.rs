@@ -235,7 +235,7 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(queue_router);
 
         // Add build pass
-        app.get_schedule_mut(Update).as_mut().unwrap().add_build_pass(RenderSystemPass::default());
+        app.get_schedule_mut(Update).as_mut().unwrap().add_build_pass(RenderSystemPass::default()).before::<bevy_ecs::schedule::passes::AutoInsertApplyDeferredPass>();
         app.init_resource::<RenderResRegistry>();
         //app.add_systems(PreUpdate, crate::ecs::render_res_registry_update_archetype);
     }

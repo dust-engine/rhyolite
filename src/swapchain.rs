@@ -554,6 +554,8 @@ pub fn acquire_swapchain_image(
     )>,
 ) {
     println!("acquire {:?}, waits {:?}, signals {:?}", queue_ctx.queue, queue_ctx.semaphore_waits, queue_ctx.semaphore_signals);
+    assert!(queue_ctx.semaphore_waits.is_empty());
+    assert!(queue_ctx.semaphore_signals.len() <= 1);
 
     for (mut swapchain, mut swapchain_image) in query.iter_mut() {
         let (indice, suboptimal) = unsafe {

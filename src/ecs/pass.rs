@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use ash::vk;
 use bevy_ecs::{
-    schedule::{NodeId, ScheduleBuildPass},
-    world::World,
+    schedule::{NodeId, ScheduleBuildPass, SystemNode, IntoSystemConfigs, ProcessNodeConfig},
+    world::World, system::{BoxedSystem, IntoSystem, System},
 };
 use bevy_utils::{petgraph::{
-    visit::{Dfs, Walker},
-    Direction::{Incoming, Outgoing},
+    visit::{Dfs, Walker, IntoEdgeReferences, EdgeRef},
+    Direction::{Incoming, Outgoing}, dot::Config,
 }, ConfigMap};
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
     queue::{QueueRef, QueuesRouter}, Device,
 };
 
-use super::RenderSystemConfig;
+use super::{RenderSystemConfig, QueueContext, RenderCommands};
 
 #[derive(Debug, Default)]
 pub struct RenderSystemPass {
@@ -71,6 +71,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             config: RenderSystemConfig,
             selected_queue: QueueRef,
             stage_index: u32,
+            queue_graph_node: u32,
         }
         let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> =
             vec![None; graph.systems.len()];
@@ -86,10 +87,8 @@ impl ScheduleBuildPass for RenderSystemPass {
             let system = &graph.systems[node_id];
             let Some(render_system_config) = system.config.get::<RenderSystemConfig>()
             else {
-                println!("skipped. {}", system.get().unwrap().name());
                 continue; // not a render system
             };
-            println!("found. {}", system.get().unwrap().name());
             let selected_queue = match render_system_config.queue {
                 QueueAssignment::MinOverhead(queue) | QueueAssignment::MaxAsync(queue) => {
                     queue_router.of_type(queue)
@@ -102,6 +101,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                 config: render_system_config.clone(),
                 selected_queue,
                 stage_index: u32::MAX,
+                queue_graph_node: 0,
             });
             render_graph.add_node(node_id);
             for neighbor in dependency_flattened.neighbors(node) {
@@ -241,7 +241,10 @@ impl ScheduleBuildPass for RenderSystemPass {
         struct QueueGraphNodeMeta {
             force_binary_semaphore: bool,
             is_queue_op: bool,
-            nodes: Vec<usize>
+            /// for the queue node, this is the system id of the "queue op" system?
+            queue_node_index: usize,
+            nodes: Vec<usize>,
+            selected_queue: QueueRef,
         }
         #[derive(Debug)]
         struct QueueGraphEdge {
@@ -249,8 +252,8 @@ impl ScheduleBuildPass for RenderSystemPass {
             semaphore_id: Option<SemaphoreOpType>
         }
         let mut queue_graph =
-            bevy_utils::petgraph::graphmap::DiGraphMap::<QueueGraphNode, QueueGraphEdge>::new();
-        let mut queue_graph_nodes = BTreeMap::<QueueGraphNode, QueueGraphNodeMeta>::new();
+            bevy_utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
+        let mut queue_graph_nodes = Vec::<QueueGraphNodeMeta>::new();
         // Flush all colors
         for (queue_node_buffer, stages) in colors.iter_mut() {
             if !queue_node_buffer.0.is_empty() {
@@ -258,93 +261,136 @@ impl ScheduleBuildPass for RenderSystemPass {
                 stages.push(std::mem::take(queue_node_buffer));
             }
             for stage in stages.iter_mut() {
-                let mut queue_graph_node: Option<QueueGraphNode> = None;
+                let mut queue_graph_node_info: Option<QueueGraphNode> = None;
                 let mut force_binary_semaphore = false;
+                let queue_graph_node = queue_graph_nodes.len() as u32;
+                queue_graph.add_node(queue_graph_node);
+
                 for node in stage.0.iter() {
-                    let meta = render_graph_meta[*node].as_ref().unwrap();
-                    if let Some(queue_graph_node) = &queue_graph_node {
+                    let meta = render_graph_meta[*node].as_mut().unwrap();
+                    meta.queue_graph_node = queue_graph_node;
+                    if let Some(queue_graph_node_info) = &queue_graph_node_info {
                         // All nodes in here shall have the same stage index and selected queue
-                        assert_eq!(queue_graph_node.stage_index, meta.stage_index);
-                        assert_eq!(queue_graph_node.queue, meta.selected_queue);
+                        assert_eq!(queue_graph_node_info.stage_index, meta.stage_index);
+                        assert_eq!(queue_graph_node_info.queue, meta.selected_queue);
                     }
-                    let queue_graph_node = queue_graph_node.get_or_insert(QueueGraphNode {
+                    let queue_graph_node = queue_graph_node_info.get_or_insert(QueueGraphNode {
                         stage_index: meta.stage_index,
                         queue: meta.selected_queue,
                     }).clone();
-                    queue_graph.add_node(queue_graph_node);
-                    force_binary_semaphore = meta.config.force_binary_semaphore;
-                    for (_, neighbor, edge) in render_graph.edges(*node) {
-                        let neighbor_meta = render_graph_meta[neighbor].as_ref().unwrap();
-                        let neighbor_queue_graph_node = QueueGraphNode {
-                            stage_index: neighbor_meta.stage_index,
-                            queue: neighbor_meta.selected_queue,
-                        };
-                        if queue_graph_node != neighbor_queue_graph_node {
-                            // avoid self edges
-                            if let Some(existing) = queue_graph.edge_weight_mut(queue_graph_node, neighbor_queue_graph_node) {
-                                existing.config.wait.stage |= edge.wait.stage;
-                                existing.config.wait.access |= edge.wait.access;
-                                existing.config.signal.stage |= edge.signal.stage;
-                                existing.config.signal.access |= edge.signal.access;
-                            } else {
-                                queue_graph.add_edge(queue_graph_node, neighbor_queue_graph_node, QueueGraphEdge {
-                                    config: edge.clone(),
-                                    semaphore_id: None,
-                                });
-                            }
-                        }
-                    }
+                    force_binary_semaphore |= meta.config.force_binary_semaphore;
                 }
-                if let Some(queue_graph_node) = queue_graph_node {
-                    queue_graph_nodes.insert(
-                        queue_graph_node,
+                if let Some(queue_graph_node_info) = queue_graph_node_info {
+                    queue_graph_nodes.push(
                         QueueGraphNodeMeta {
                             force_binary_semaphore,
                             nodes: std::mem::take(&mut stage.0),
                             is_queue_op: stage.1,
+                            queue_node_index: 0,
+                            selected_queue: queue_graph_node_info.queue,
                         },
                     );
                 }
             }
         }
+        // queue graph connectivity
+        for (from, to, edge) in render_graph.all_edges() {
+            let from_meta = render_graph_meta[from].as_ref().unwrap();
+            let to_meta = render_graph_meta[to].as_ref().unwrap();
+            if from_meta.queue_graph_node != to_meta.queue_graph_node {
+                // avoid self edges
+            }
+            
+            if let Some(existing) = queue_graph.edge_weight_mut(from_meta.queue_graph_node, to_meta.queue_graph_node) {
+                existing.config.wait.stage |= edge.wait.stage;
+                existing.config.wait.access |= edge.wait.access;
+                existing.config.signal.stage |= edge.signal.stage;
+                existing.config.signal.access |= edge.signal.access;
+            } else {
+                queue_graph.add_edge(from_meta.queue_graph_node, to_meta.queue_graph_node, QueueGraphEdge {
+                    config: edge.clone(),
+                    semaphore_id: None,
+                });
+            }
+        }
         println!("{:#?}", queue_graph);
+        // Step 1.4: Insert queue submission systems
+        for (i, queue_node) in queue_graph_nodes.iter_mut().enumerate() {
+            if queue_node.is_queue_op {
+                assert!(queue_node.nodes.len() == 1);
+                queue_node.queue_node_index = queue_node.nodes[0];
+                continue;
+            }
+            let id_num = graph.systems.len();
+            let id = NodeId::System(id_num);
+            let mut system = Box::new(IntoSystem::into_system(
+                flush_system_graph,
+            ));
+            system.initialize(world);
+            graph.systems.push(SystemNode::new(system, Default::default()));
+            graph.system_conditions.push(Vec::new());
+            graph.ambiguous_with_all.insert(id);
 
-        // Step 1.4: Disperse semaphores
-        // Step 1.4.1: Assign semaphore IDs
+            queue_node.queue_node_index = id_num;
+        }
+        // Connect queue submission systems with parents and children
+        for (i, queue_node) in queue_graph_nodes.iter().enumerate() {
+            if queue_node.is_queue_op {
+                continue;
+            }
+            let new_node = NodeId::System(queue_node.queue_node_index);
+            for parent_command_node in queue_node.nodes.iter() {
+                // After all nodes within the corrent queue node
+                let command_node_id = NodeId::System(*parent_command_node);
+                dependency_flattened.add_edge(command_node_id, new_node, ());
+            }
+            for parent in queue_graph.neighbors_directed(i as u32, Outgoing) {
+                // Before all command nodes in the queue nodes following the current
+                let child_meta = &queue_graph_nodes[parent as usize];
+                for child_command_node in child_meta.nodes.iter() {
+                    let command_node_id = NodeId::System(*child_command_node);
+                    dependency_flattened.add_edge(new_node, command_node_id, ());
+                }
+            }
+        }
+        // Remove redundant edges
+        let queue_nodes_topo_sorted = bevy_utils::petgraph::algo::toposort(&queue_graph, None).unwrap();
+        let (queue_nodes_tred_list, _) = bevy_utils::petgraph::algo::tred::dag_to_toposorted_adjacency_list::<_, u32>(&queue_graph, &queue_nodes_topo_sorted);
+        let (reduction, _) = bevy_utils::petgraph::algo::tred::dag_transitive_reduction_closure(&queue_nodes_tred_list);
+
+
+        // Step 1.5: Disperse semaphores
+        // Step 1.5.1: Assign semaphore IDs
         let mut binary_semaphore_id = 0;
-        for (src, dst, edge) in queue_graph.all_edges_mut() {
-            let config_src = &queue_graph_nodes[&src];
-            let config_dst = &queue_graph_nodes[&dst];
+        let mut queue_graph_reduced = 
+        bevy_utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
+        for edge in reduction.edge_references() {
+            let config_src = &queue_graph_nodes[edge.source() as usize];
+            let config_dst = &queue_graph_nodes[edge.target() as usize];
+            let edge_ref = queue_graph.edge_weight(edge.source(), edge.target()).unwrap();
+            let mut new_edge = QueueGraphEdge {
+                config: edge_ref.config.clone(),
+                semaphore_id: None
+            };
             if config_src.force_binary_semaphore || config_dst.force_binary_semaphore {
-                edge.semaphore_id = Some(SemaphoreOpType::Binary(binary_semaphore_id));
+                new_edge.semaphore_id = Some(SemaphoreOpType::Binary(binary_semaphore_id));
                 binary_semaphore_id += 1;
             } else {
                 todo!()
             }
+            queue_graph_reduced.add_edge(edge.source(), edge.target(), new_edge);
         }
-        let device = world.resource::<Device>();
-        for (i, queue_node) in queue_graph_nodes.iter() {
-            let mut queue_op_node: Option<usize> = None;
-            for j in queue_node.nodes.iter() {
-                let node = render_graph_meta[*j].as_ref().unwrap();
-                assert!(node.selected_queue == i.queue);
-                assert!(node.stage_index == i.stage_index);
-                if node.config.is_queue_op {
-                    assert!(queue_op_node.is_none(), "one queue op node per queue");
-                    queue_op_node = Some(*j);
-                }
-            }
-            let queue_op_node = queue_op_node.expect("one queue op node per queue");
-            
+        let queue_graph = queue_graph_reduced;
+        for (i, queue_node) in queue_graph_nodes.iter().enumerate() {
             // need to signal for this.
-            let signals:Vec<SemaphoreOp> = queue_graph.edges_directed(*i, Outgoing)
+            let signals:Vec<SemaphoreOp> = queue_graph.edges_directed(i as u32, Outgoing)
             .map(|(_, _, edge)| {
                 SemaphoreOp {
                     ty: edge.semaphore_id.clone().unwrap(),
                     access: edge.config.signal.clone(),
                 }
             }).collect();
-            let waits:Vec<SemaphoreOp> = queue_graph.edges_directed(*i, Incoming)
+            let waits:Vec<SemaphoreOp> = queue_graph.edges_directed(i as u32, Incoming)
             .map(|(_, _, edge)| {
                 SemaphoreOp {
                     ty: edge.semaphore_id.clone().unwrap(),
@@ -352,11 +398,10 @@ impl ScheduleBuildPass for RenderSystemPass {
                 }
             }).collect();
 
-            let system = &mut graph.systems[queue_op_node];
-            let queue = device.get_raw_queue(i.queue);
+            let system = &mut graph.systems[queue_node.queue_node_index];
             let mut config = ConfigMap::new();
             config.insert(QueueSystemInitialState {
-                queue,
+                queue: queue_node.selected_queue,
                 signals,
                 waits
             });
@@ -369,4 +414,13 @@ impl ScheduleBuildPass for RenderSystemPass {
 
         Ok(())
     }
+}
+
+
+
+fn flush_system_graph  (
+    commands: RenderCommands<'g'>,
+    queue_ctx: QueueContext<'g'>
+)  {
+    println!("flush_system_graph {:?} {:?} {:?}", queue_ctx.queue, queue_ctx.semaphore_waits, queue_ctx.semaphore_signals)
 }

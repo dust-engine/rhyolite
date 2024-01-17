@@ -21,7 +21,7 @@ use ash::vk;
 use bevy_ecs::{system::{SystemParam, Res}, world::World, component::ComponentId};
 use queue_cap::*;
 
-use crate::queue::QueueType;
+use crate::{queue::QueueType, QueueRef, TimelineSemaphore};
 
 use super::{QueueAssignment, RenderSystemConfig, Access, RenderResRegistry};
 
@@ -83,7 +83,7 @@ pub struct QueueSystemState {
 }
 #[derive(Debug)]
 pub struct QueueSystemInitialState {
-    pub queue: vk::Queue,
+    pub queue: QueueRef,
     pub signals: Vec<SemaphoreOp>,
     pub waits: Vec<SemaphoreOp>,
 }
@@ -91,7 +91,7 @@ pub struct QueueSystemInitialState {
 pub struct QueueContext<'a, const Q: char>
 where
     (): IsQueueCap<Q>, {
-    pub queue: vk::Queue,
+    pub queue: QueueRef,
     pub semaphore_waits: &'a [SemaphoreOp],
     pub semaphore_signals: &'a [SemaphoreOp],
 }
@@ -112,7 +112,7 @@ where
         system_meta.set_has_deferred();
         QueueSystemState {
             inner: QueueSystemInitialState {
-                queue: vk::Queue::null(),
+                queue: QueueRef::null(),
                 signals: Vec::new(),
                 waits: Vec::new(),
             },
@@ -154,5 +154,14 @@ where
             semaphore_waits: &state.inner.waits,
             semaphore_signals: &state.inner.signals,
         }
+    }
+}
+
+impl<'a, const Q: char> QueueContext<'a, Q>
+where
+    (): IsQueueCap<Q>,
+{
+    pub fn set_timeline(&mut self, semaphore: TimelineSemaphore, value: u64) {
+        
     }
 }
