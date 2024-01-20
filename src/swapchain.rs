@@ -558,6 +558,7 @@ pub fn acquire_swapchain_image(
     assert!(queue_ctx.timeline_signals.is_empty());
     assert!(queue_ctx.timeline_waits.is_empty());
     assert!(queue_ctx.binary_signals.len() <= 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously.");
+    let semaphore = queue_ctx.binary_signals.get(0).map(|semaphore| semaphore.semaphore).unwrap_or_default();
 
     for (mut swapchain, mut swapchain_image) in query.iter_mut() {
         let (indice, suboptimal) = unsafe {
@@ -565,7 +566,7 @@ pub fn acquire_swapchain_image(
             swapchain.0.loader.acquire_next_image(
                 swapchain.0.inner,
                 !0,
-                vk::Semaphore::null(),
+                semaphore,
                 vk::Fence::null(),
             )
         }
@@ -591,7 +592,9 @@ pub fn present(
     queues_router: Res<QueuesRouter>,
     mut query: Query<(&mut Swapchain, RenderComponent<SwapchainImage>)>,
 ) {
-    println!("present {:?}, waits {:?}, signals {:?}", queue_ctx.queue, queue_ctx.binary_waits, queue_ctx.binary_signals);
+    assert!(queue_ctx.timeline_signals.is_empty());
+    assert!(queue_ctx.timeline_waits.is_empty());
+    assert!(queue_ctx.binary_signals.is_empty());
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
     for (swapchain, swapchain_image) in query.iter_mut() {
@@ -610,7 +613,8 @@ pub fn present(
     // select the best one.
     let present_queue = queues_router.of_type(QueueType::Graphics);
     let queue = device.get_raw_queue(present_queue);
-
+    let semaphore_to_wait: Vec<vk::Semaphore> = queue_ctx.binary_waits.iter().map(|wait| wait.semaphore.raw()).collect();
+    // TODO: Recycle semaphores. IMPORTANT
     unsafe {
         swapchain_loader
             .queue_present(
@@ -619,6 +623,8 @@ pub fn present(
                     swapchain_count: swapchains.len() as u32,
                     p_swapchains: swapchains.as_ptr(),
                     p_image_indices: swapchain_image_indices.as_ptr(),
+                    p_wait_semaphores: semaphore_to_wait.as_ptr(),
+                    wait_semaphore_count: semaphore_to_wait.len() as u32,
                     ..Default::default()
                 },
             )

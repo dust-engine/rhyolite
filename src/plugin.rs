@@ -237,6 +237,9 @@ impl Plugin for RhyolitePlugin {
         // Add build pass
         app.get_schedule_mut(Update).as_mut().unwrap().add_build_pass(RenderSystemPass::default()).before::<bevy_ecs::schedule::passes::AutoInsertApplyDeferredPass>();
         app.init_resource::<RenderResRegistry>();
+
+        // Required features
+        app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore);
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =

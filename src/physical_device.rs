@@ -403,3 +403,24 @@ impl PhysicalDeviceFeatures {
         }
     }
 }
+
+
+
+macro_rules! impl_feature {
+    ($feature:ty) => {
+        unsafe impl Feature for $feature {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn Any {
+                self
+            }
+            fn p_next(&mut self) -> &mut *mut c_void {
+                &mut self.p_next
+            }
+        }
+    };
+}
+impl_feature!(vk::PhysicalDeviceVulkan11Features);
+impl_feature!(vk::PhysicalDeviceVulkan12Features);
+impl_feature!(vk::PhysicalDeviceVulkan13Features);

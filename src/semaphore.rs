@@ -54,12 +54,7 @@ impl BinarySemaphorePool {
             },
             Err(crossbeam_channel::TryRecvError::Empty) => {
                 let semaphore = unsafe {
-                    let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
-                        .semaphore_type(vk::SemaphoreType::TIMELINE)
-                        .build();
-                    let info = vk::SemaphoreCreateInfo::builder()
-                        .push_next(&mut type_info)
-                        .build();
+                    let info = vk::SemaphoreCreateInfo::default();
                     self.device.create_semaphore(&info, None)
                 }.unwrap();
                 return BinarySemaphore {
