@@ -1,4 +1,3 @@
-use bevy_app::Update;
 use bevy_ecs::{system::Query, query::With, schedule::IntoSystemConfigs};
 use rhyolite::{RhyolitePlugin, SurfacePlugin, SwapchainPlugin, ecs::{RenderCommands, RenderComponent}, SwapchainImage, acquire_swapchain_image, present};
 
@@ -13,7 +12,8 @@ fn main() {
         .add_plugins(RhyolitePlugin::default())
         .add_plugins(SwapchainPlugin::default());
 
-    app.add_systems(Update, clear_main_window_color.after(acquire_swapchain_image).before(present));
+    //app.add_systems(Update, clear_main_window_color.after(acquire_swapchain_image).before(present));
+    //app.add_systems(Update, clear_main_window_color2.after(clear_main_window_color).before(present));
     app.finish();
     app.cleanup();
 
@@ -26,5 +26,11 @@ fn clear_main_window_color(
     mut commands: RenderCommands<'g'>,
     mut windows: Query<RenderComponent<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
 ) {
-    let window = windows.single();
+    let window = windows.get_single() else { return };
+}
+fn clear_main_window_color2(
+    mut commands: RenderCommands<'c'>,
+    mut windows: Query<RenderComponent<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
+) {
+    let window = windows.get_single() else { return };
 }

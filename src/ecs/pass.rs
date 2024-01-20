@@ -2,24 +2,48 @@ use std::collections::BTreeMap;
 
 use ash::vk;
 use bevy_ecs::{
-    schedule::{NodeId, ScheduleBuildPass, SystemNode, IntoSystemConfigs, ProcessNodeConfig},
+    schedule::{IntoSystemConfigs, NodeId, ProcessNodeConfig, ScheduleBuildPass, ScheduleGraph, SystemNode, SystemSchedule},
     world::World, system::{BoxedSystem, IntoSystem, System},
 };
 use bevy_utils::{petgraph::{
-    visit::{Dfs, Walker, IntoEdgeReferences, EdgeRef},
-    Direction::{Incoming, Outgoing}, dot::Config,
+    dot::Config, graphmap::GraphMap, visit::{Dfs, Walker, IntoEdgeReferences, EdgeRef}, Direction::{Incoming, Outgoing}
 }, ConfigMap};
 
 use crate::{
-    ecs::{QueueAssignment, QueueSystemInitialState, QueueSystemDependencyConfig, SemaphoreOp, SemaphoreOpType},
-    queue::{QueueRef, QueuesRouter}, Device,
+    ecs::{BinarySemaphoreWaitOp, QueueAssignment, QueueSystemStateUpdate, QueueSystemDependencyConfig, QueueSystemInitialState, SemaphoreOp}, queue::{QueueRef, QueuesRouter}, BinarySemaphore, BinarySemaphorePool, Device
 };
 
-use super::{RenderSystemConfig, QueueContext, RenderCommands};
+use super::{QueueContext, RenderCommands, RenderSystemConfig};
 
 #[derive(Debug, Default)]
 pub struct RenderSystemPass {
     edge_graph: BTreeMap<(NodeId, NodeId), QueueSystemDependencyConfig>,
+    queue_graph: bevy_utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>,
+    queue_graph_nodes: Vec::<QueueGraphNodeMeta>,
+    num_binary_semaphores: u32,
+    timeline_semaphores: Vec<vk::Semaphore>,
+    frame_index: u64,
+}
+#[derive(Debug)]
+enum QueueGraphEdgeSemaphoreType {
+    Binary(u32),
+    Timeline(u32)
+}
+
+#[derive(Debug)]
+struct QueueGraphEdge {
+    config: QueueSystemDependencyConfig,
+    semaphore_id: Option<QueueGraphEdgeSemaphoreType>
+}
+
+#[derive(Clone, Debug)]
+struct QueueGraphNodeMeta {
+    force_binary_semaphore: bool,
+    is_queue_op: bool,
+    /// for the queue node, this is the system id of the "queue op" system?
+    queue_node_index: usize,
+    nodes: Vec<usize>,
+    selected_queue: QueueRef,
 }
 
 impl ScheduleBuildPass for RenderSystemPass {
@@ -237,20 +261,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             queue: QueueRef,
         }
         
-        #[derive(Clone)]
-        struct QueueGraphNodeMeta {
-            force_binary_semaphore: bool,
-            is_queue_op: bool,
-            /// for the queue node, this is the system id of the "queue op" system?
-            queue_node_index: usize,
-            nodes: Vec<usize>,
-            selected_queue: QueueRef,
-        }
-        #[derive(Debug)]
-        struct QueueGraphEdge {
-            config: QueueSystemDependencyConfig,
-            semaphore_id: Option<SemaphoreOpType>
-        }
         let mut queue_graph =
             bevy_utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
         let mut queue_graph_nodes = Vec::<QueueGraphNodeMeta>::new();
@@ -355,57 +365,82 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         // Remove redundant edges
         let queue_nodes_topo_sorted = bevy_utils::petgraph::algo::toposort(&queue_graph, None).unwrap();
+        println!("topo sorted {:#?}", queue_nodes_topo_sorted);
         let (queue_nodes_tred_list, _) = bevy_utils::petgraph::algo::tred::dag_to_toposorted_adjacency_list::<_, u32>(&queue_graph, &queue_nodes_topo_sorted);
         let (reduction, _) = bevy_utils::petgraph::algo::tred::dag_transitive_reduction_closure(&queue_nodes_tred_list);
+        println!("reduction {:#?}", reduction);
 
 
         // Step 1.5: Disperse semaphores
         // Step 1.5.1: Assign semaphore IDs
         let mut binary_semaphore_id = 0;
+        let mut timeline_semaphore_id = 0;
         let mut queue_graph_reduced = 
         bevy_utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
         for edge in reduction.edge_references() {
-            let config_src = &queue_graph_nodes[edge.source() as usize];
-            let config_dst = &queue_graph_nodes[edge.target() as usize];
-            let edge_ref = queue_graph.edge_weight(edge.source(), edge.target()).unwrap();
+            let src = queue_nodes_topo_sorted[edge.source() as usize];
+            let dst = queue_nodes_topo_sorted[edge.target() as usize];
+            let config_src = &queue_graph_nodes[src as usize];
+            let config_dst = &queue_graph_nodes[dst as usize];
+            let edge_ref = queue_graph.edge_weight(src, dst).unwrap();
             let mut new_edge = QueueGraphEdge {
                 config: edge_ref.config.clone(),
                 semaphore_id: None
             };
             if config_src.force_binary_semaphore || config_dst.force_binary_semaphore {
-                new_edge.semaphore_id = Some(SemaphoreOpType::Binary(binary_semaphore_id));
+                new_edge.semaphore_id = Some(QueueGraphEdgeSemaphoreType::Binary(binary_semaphore_id));
                 binary_semaphore_id += 1;
             } else {
-                todo!()
+                new_edge.semaphore_id = Some(QueueGraphEdgeSemaphoreType::Timeline(timeline_semaphore_id));
+                timeline_semaphore_id += 1;
             }
             queue_graph_reduced.add_edge(edge.source(), edge.target(), new_edge);
         }
-        let queue_graph = queue_graph_reduced;
-        for (i, queue_node) in queue_graph_nodes.iter().enumerate() {
-            // need to signal for this.
-            let signals:Vec<SemaphoreOp> = queue_graph.edges_directed(i as u32, Outgoing)
-            .map(|(_, _, edge)| {
-                SemaphoreOp {
-                    ty: edge.semaphore_id.clone().unwrap(),
+        self.queue_graph = queue_graph_reduced;
+        self.queue_graph_nodes = queue_graph_nodes;
+        self.num_binary_semaphores = binary_semaphore_id;
+        let timeline_semaphores: Vec<vk::Semaphore> = {
+            // Create timeline semaphores
+            let device = world.resource::<Device>();
+            let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
+            .semaphore_type(vk::SemaphoreType::TIMELINE)
+            .build();
+            let info = vk::SemaphoreCreateInfo::builder()
+                .push_next(&mut type_info)
+                .build();
+             (0..timeline_semaphore_id).map(|_| unsafe {
+                device.create_semaphore(&info, None).unwrap()
+            }).collect()
+        };
+        // distribute timeline semaphores
+        for (i, queue_node) in self.queue_graph_nodes.iter().enumerate() {
+            let signals:Vec<SemaphoreOp> = self.queue_graph.edges_directed(i as u32, Outgoing)
+            .filter_map(|(_, _, edge)| {
+                Some(SemaphoreOp {
+                    semaphore: match edge.semaphore_id.as_ref().unwrap() {
+                        QueueGraphEdgeSemaphoreType::Binary(_) => return None,
+                        QueueGraphEdgeSemaphoreType::Timeline(u32) => timeline_semaphores[*u32 as usize],
+                    },
                     access: edge.config.signal.clone(),
-                }
+                })
             }).collect();
-            let waits:Vec<SemaphoreOp> = queue_graph.edges_directed(i as u32, Incoming)
-            .map(|(_, _, edge)| {
-                SemaphoreOp {
-                    ty: edge.semaphore_id.clone().unwrap(),
+            let waits:Vec<SemaphoreOp> =  self.queue_graph.edges_directed(i as u32, Incoming)
+            .filter_map(|(_, _, edge)| {
+                Some(SemaphoreOp {
+                    semaphore: match edge.semaphore_id.as_ref().unwrap() {
+                        QueueGraphEdgeSemaphoreType::Binary(_) => return None,
+                        QueueGraphEdgeSemaphoreType::Timeline(u32) => timeline_semaphores[*u32 as usize],
+                    },
                     access: edge.config.wait.clone(),
-                }
+                })
             }).collect();
 
             let system = &mut graph.systems[queue_node.queue_node_index];
-            let mut config = ConfigMap::new();
-            config.insert(QueueSystemInitialState {
+            system.get_mut().unwrap().set_configs(Box::new(QueueSystemInitialState {
                 queue: queue_node.selected_queue,
-                signals,
-                waits
-            });
-            system.get_mut().unwrap().set_configs(&mut config);
+                timeline_signals: signals,
+                timeline_waits: waits,
+            }));
         }
 
         // Step 1.5: Command buffer recording re-serialization
@@ -413,6 +448,59 @@ impl ScheduleBuildPass for RenderSystemPass {
         // Step 2: inside each queue, insert pipeline barriers.
 
         Ok(())
+    }
+
+    fn initialize(
+        &mut self,
+        world: &mut World,
+        graph: &mut SystemSchedule,
+    ) {
+        let binary_semaphore_pool = world.resource::<BinarySemaphorePool>();
+        // Ownership of binary semaphores are managed by [`BinarySemaphorePool`]. Drop on wait, then the semaphore gets
+        // sent back into the pool.
+        let mut binary_semaphores: Vec<Option<BinarySemaphore>> = (0..self.num_binary_semaphores).map(|_| None).collect();
+        for (i, queue_node) in self.queue_graph_nodes.iter().enumerate() {
+            // need to signal for this.
+            
+            let signals:Vec<SemaphoreOp> = self.queue_graph.edges_directed(i as u32, Outgoing)
+            .filter_map(|(_, _, edge)| {
+                Some(SemaphoreOp {
+                    semaphore: match edge.semaphore_id.as_ref().unwrap() {
+                        QueueGraphEdgeSemaphoreType::Binary(u32) => {
+                            let semaphore = binary_semaphore_pool.create();
+                            let raw = semaphore.raw();
+                            binary_semaphores[*u32 as usize] = Some(semaphore);
+                            raw
+                        },
+                        QueueGraphEdgeSemaphoreType::Timeline(u32) => return None,
+                    },
+                    access: edge.config.signal.clone(),
+                })
+            }).collect();
+            let waits:Vec<BinarySemaphoreWaitOp> =  self.queue_graph.edges_directed(i as u32, Incoming)
+            .filter_map(|(_, _, edge)| {
+                Some(BinarySemaphoreWaitOp {
+                    semaphore: match edge.semaphore_id.as_ref().unwrap() {
+                        QueueGraphEdgeSemaphoreType::Binary(u32) => {
+                            let semaphore = binary_semaphores[*u32 as usize].take().unwrap();
+                            semaphore
+                        },
+                        QueueGraphEdgeSemaphoreType::Timeline(u32) => return None,
+                    },
+                    access: edge.config.wait.clone(),
+                })
+            }).collect();
+
+            let system_id = graph.system_idx_map[&NodeId::System(queue_node.queue_node_index)];
+            let system: &mut Box<dyn System<In = (), Out = ()>> = &mut graph.systems[system_id];
+            system.set_configs(Box::new(QueueSystemStateUpdate {
+                frame_index: self.frame_index,
+                binary_signals: signals,
+                binary_waits: waits,
+            }));
+        }
+        self.frame_index += 1;
+        assert!(binary_semaphores.iter().all(|x| x.is_none()));
     }
 }
 
@@ -422,5 +510,5 @@ fn flush_system_graph  (
     commands: RenderCommands<'g'>,
     queue_ctx: QueueContext<'g'>
 )  {
-    println!("flush_system_graph {:?} {:?} {:?}", queue_ctx.queue, queue_ctx.semaphore_waits, queue_ctx.semaphore_signals)
+    println!("flush_system_graph {:?}", queue_ctx.queue)
 }

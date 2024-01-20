@@ -237,7 +237,6 @@ impl Plugin for RhyolitePlugin {
         // Add build pass
         app.get_schedule_mut(Update).as_mut().unwrap().add_build_pass(RenderSystemPass::default()).before::<bevy_ecs::schedule::passes::AutoInsertApplyDeferredPass>();
         app.init_resource::<RenderResRegistry>();
-        //app.add_systems(PreUpdate, crate::ecs::render_res_registry_update_archetype);
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =
@@ -255,8 +254,10 @@ impl Plugin for RhyolitePlugin {
             features.pdevice_features2(),
         )
         .unwrap();
+        let binary_semaphore_pool = crate::BinarySemaphorePool::new(device.clone());
 
         app.insert_resource(device);
+        app.insert_resource(binary_semaphore_pool);
     }
 }
 

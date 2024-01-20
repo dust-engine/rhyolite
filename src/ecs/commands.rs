@@ -17,11 +17,13 @@ pub mod queue_cap {
     impl IsComputeQueueCap<'c'> for () {}
 }
 
+use std::any::Any;
+
 use ash::vk;
 use bevy_ecs::{system::{SystemParam, Res}, world::World, component::ComponentId};
 use queue_cap::*;
 
-use crate::{queue::QueueType, QueueRef, TimelineSemaphore};
+use crate::{queue::QueueType, BinarySemaphore, QueueRef};
 
 use super::{QueueAssignment, RenderSystemConfig, Access, RenderResRegistry};
 
@@ -65,35 +67,48 @@ where
 }
 
 #[derive(Debug)]
-pub struct SemaphoreOp {
-    pub ty: SemaphoreOpType,
+pub struct BinarySemaphoreWaitOp {
+    pub semaphore: BinarySemaphore,
     pub access: Access,
 }
-#[derive(Debug, Clone)]
-pub enum SemaphoreOpType {
-    Binary(u32),
-    Timeline { semaphore: u32, value: u64 },
+#[derive(Debug)]
+pub struct SemaphoreOp {
+    pub semaphore: vk::Semaphore,
+    pub access: Access,
 }
 
 
 #[derive(Debug)]
 pub struct QueueSystemState {
-    inner: QueueSystemInitialState,
+    pub queue: QueueRef,
+    pub frame_index: u64,
+    pub binary_signals: Vec<SemaphoreOp>,
+    pub binary_waits: Vec<BinarySemaphoreWaitOp>,
+    pub timeline_signals: Vec<SemaphoreOp>,
+    pub timeline_waits: Vec<SemaphoreOp>,
     registry_component_id: ComponentId
 }
 #[derive(Debug)]
 pub struct QueueSystemInitialState {
     pub queue: QueueRef,
-    pub signals: Vec<SemaphoreOp>,
-    pub waits: Vec<SemaphoreOp>,
+    pub timeline_signals: Vec<SemaphoreOp>,
+    pub timeline_waits: Vec<SemaphoreOp>,
+}
+#[derive(Debug)]
+pub struct QueueSystemStateUpdate {
+    pub frame_index: u64,
+    pub binary_signals: Vec<SemaphoreOp>,
+    pub binary_waits: Vec<BinarySemaphoreWaitOp>,
 }
 
 pub struct QueueContext<'a, const Q: char>
 where
     (): IsQueueCap<Q>, {
     pub queue: QueueRef,
-    pub semaphore_waits: &'a [SemaphoreOp],
-    pub semaphore_signals: &'a [SemaphoreOp],
+    pub binary_signals: &'a [SemaphoreOp],
+    pub binary_waits: &'a [BinarySemaphoreWaitOp],
+    pub timeline_signals: &'a [SemaphoreOp],
+    pub timeline_waits: &'a [SemaphoreOp],
 }
 
 unsafe impl<'a, const Q: char> SystemParam for QueueContext<'a, Q>
@@ -111,12 +126,13 @@ where
         let component_id = Res::<RenderResRegistry>::init_state(world, system_meta);
         system_meta.set_has_deferred();
         QueueSystemState {
-            inner: QueueSystemInitialState {
-                queue: QueueRef::null(),
-                signals: Vec::new(),
-                waits: Vec::new(),
-            },
             registry_component_id: component_id,
+            queue: QueueRef::default(),
+            binary_signals: Vec::new(),
+            binary_waits: Vec::new(),
+            timeline_signals: Vec::new(),
+            timeline_waits: Vec::new(),
+            frame_index: 0,
         }
     }
 
@@ -131,9 +147,26 @@ where
         config.queue = QueueAssignment::MinOverhead(flags);
         config.is_queue_op = true;
     }
-    fn set_configs(state: &mut Self::State, config: &mut bevy_utils::ConfigMap) {
-        let initial_state: QueueSystemInitialState = config.take().unwrap();
-        state.inner = initial_state;
+    fn set_configs(state: &mut Self::State, config: &mut Option<Box<dyn Any>>) {
+        let Some(c) = config else {
+            return;
+        };
+        if c.is::<QueueSystemInitialState>() {
+            let config = config.take().unwrap();
+            let initial_state: Box<QueueSystemInitialState> = config.downcast().unwrap();
+            state.queue = initial_state.queue;
+            state.timeline_signals = initial_state.timeline_signals;
+            state.timeline_waits = initial_state.timeline_waits;
+            return;
+        }
+        if c.is::<QueueSystemStateUpdate>() {
+            let config = config.take().unwrap();
+            let update: Box<QueueSystemStateUpdate> = config.downcast().unwrap();
+            state.binary_signals = update.binary_signals;
+            state.binary_waits = update.binary_waits;
+            state.frame_index = update.frame_index;
+            return;
+        }
     }
 
     fn apply(state: &mut Self::State, system_meta: &bevy_ecs::system::SystemMeta, world: &mut World) {
@@ -150,18 +183,11 @@ where
         let registry = Res::<RenderResRegistry>::get_param(&mut state.registry_component_id, system_meta, world, change_tick);
 
         QueueContext {
-            queue: state.inner.queue,
-            semaphore_waits: &state.inner.waits,
-            semaphore_signals: &state.inner.signals,
+            queue: state.queue,
+            binary_signals: &state.binary_signals,
+            binary_waits: &state.binary_waits,
+            timeline_signals: &state.timeline_signals,
+            timeline_waits: &state.timeline_waits,
         }
-    }
-}
-
-impl<'a, const Q: char> QueueContext<'a, Q>
-where
-    (): IsQueueCap<Q>,
-{
-    pub fn set_timeline(&mut self, semaphore: TimelineSemaphore, value: u64) {
-        
     }
 }
