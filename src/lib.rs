@@ -8,6 +8,7 @@ mod queue;
 mod surface;
 mod swapchain;
 mod semaphore;
+mod commands;
 
 pub mod utils;
 

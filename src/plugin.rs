@@ -12,8 +12,7 @@ use std::{
 };
 
 use crate::{
-    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
-    QueuesRouter, Version, ecs::{RenderSystemPass, RenderResRegistry},
+    command_pool::RecordingCommandBuffer, ecs::{RenderSystemPass, RenderResRegistry}, Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties, QueuesRouter, Version
 };
 use cstr::cstr;
 

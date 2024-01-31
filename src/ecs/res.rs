@@ -172,7 +172,7 @@ unsafe impl<'a, T: Resource> SystemParam for RenderResMut<'a, T> {
 
 
 pub struct RenderComponent<'a, T: Component> {
-    inner: &'a T,
+    pub inner: &'a T,
 }
 impl<T: Component> RenderComponent<'_, T> {
     pub unsafe fn get_on_host(&self) -> &T {

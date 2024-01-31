@@ -2,11 +2,16 @@ use ash::{prelude::VkResult, vk};
 use bevy_ecs::system::Resource;
 use thread_local::ThreadLocal;
 
-use crate::Device;
+use crate::{Device, HasDevice};
 
 pub struct CommandPool {
     device: Device,
     raw: vk::CommandPool,
+}
+impl HasDevice for CommandPool {
+    fn device(&self) -> &Device {
+        &self.device
+    }
 }
 impl CommandPool {
     pub fn new(device: Device, queue_family_index: u32) -> VkResult<Self> {
@@ -48,7 +53,55 @@ impl CommandPool {
     }
 }
 
-#[derive(Resource)]
-pub struct CommandPools {
-    pools: ThreadLocal<CommandPool>,
+impl Drop for CommandPool {
+    fn drop(&mut self) {
+        unsafe {
+            self.device
+                .destroy_command_pool(self.raw, None);
+        }
+    }
+}
+
+
+
+pub struct RecordingCommandBuffer {
+    pub(crate) pool: CommandPool,
+    /// The currently recording command buffer. May be null.
+    command_buffer: vk::CommandBuffer,
+}
+impl RecordingCommandBuffer {
+    pub fn new(device: Device, queue_family_index: u32) -> Self {
+        let pool = CommandPool::new(device, queue_family_index).unwrap();
+        Self {
+            pool,
+            command_buffer: vk::CommandBuffer::null(),
+        }
+    }
+    /// Returns the command buffer currently being recorded, or allocates a new one if none is currently recording.
+    pub fn record(&mut self) -> vk::CommandBuffer {
+        if self.command_buffer == vk::CommandBuffer::null() {
+            self.command_buffer = unsafe { self.pool.allocate() }.unwrap();
+            unsafe {
+                self.pool.device.begin_command_buffer(
+                    self.command_buffer,
+                    &vk::CommandBufferBeginInfo {
+                        flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                        ..Default::default()
+                    },
+                ).unwrap();
+            }
+        }
+        self.command_buffer
+    }
+    pub unsafe fn take(&mut self) -> vk::CommandBuffer {
+        if self.command_buffer != vk::CommandBuffer::null() {
+            self.pool.device.end_command_buffer(self.command_buffer).unwrap();
+        }
+        std::mem::take(&mut self.command_buffer)
+    }
+}
+impl HasDevice for RecordingCommandBuffer {
+    fn device(&self) -> &Device {
+        self.pool.device()
+    }
 }

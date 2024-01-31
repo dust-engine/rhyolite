@@ -541,7 +541,7 @@ fn get_surface_preferred_format(
 
 #[derive(Component)]
 pub struct SwapchainImage {
-    image: vk::Image,
+    pub image: vk::Image,
     full_image_view: vk::ImageView,
     indice: u32,
 }

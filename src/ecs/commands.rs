@@ -17,34 +17,70 @@ pub mod queue_cap {
     impl IsComputeQueueCap<'c'> for () {}
 }
 
-use std::any::Any;
+use std::{any::Any, ops::DerefMut};
 
 use ash::vk;
-use bevy_ecs::{system::{SystemParam, Res}, world::World, component::ComponentId};
+use bevy_ecs::{system::{Res, ResMut, Resource, SystemParam}, world::{FromWorld, Mut, World}, component::{ComponentDescriptor, ComponentId, ComponentInfo}};
 use queue_cap::*;
 
-use crate::{queue::QueueType, BinarySemaphore, QueueRef};
+use crate::{command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType, BinarySemaphore, Device, HasDevice, QueueRef, QueuesRouter};
 
 use super::{QueueAssignment, RenderSystemConfig, Access, RenderResRegistry};
 
-pub struct RenderCommands<const Q: char>
-where
-    (): IsQueueCap<Q>, {}
+/// A wrapper to produce multiple [`RecordingCommandBuffer`] variants based on the queue type it supports.
+#[derive(Resource)]
+struct RecordingCommandBufferWrapper<const Q: char>(RecordingCommandBuffer);
 
-unsafe impl<const Q: char> SystemParam for RenderCommands<Q>
+pub struct RenderCommands<'w, const Q: char>
+where
+    (): IsQueueCap<Q>, {
+    recording_cmd_buf: ResMut<'w, RecordingCommandBufferWrapper<Q>>,
+}
+
+impl<'w, const Q: char> RenderCommands<'w, Q> where (): IsQueueCap<Q> {
+    pub fn record_commands(&mut self) -> CommandRecorder<Q>  {
+        let cmd_buf = self.recording_cmd_buf.0.record();
+        CommandRecorder {
+            device: self.recording_cmd_buf.0.device(),
+            cmd_buf
+        }
+    }
+}
+
+pub struct RenderCommandState {
+    recording_cmd_buf_component_id: ComponentId,
+}
+
+
+unsafe impl<'a, const Q: char> SystemParam for RenderCommands<'a, Q>
 where
     (): IsQueueCap<Q>,
 {
-    type State = ();
+    type State = RenderCommandState;
 
-    type Item<'world, 'state> = RenderCommands<Q>;
+    type Item<'world, 'state> = RenderCommands<'world, Q>;
 
     fn init_state(
-        _world: &mut World,
+        world: &mut World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
+        let recording_cmd_buf_component_id = ResMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
+        if world.get_resource_by_id(recording_cmd_buf_component_id).is_none() {
+            let device = world.resource::<Device>().clone();
+            let router = world.resource::<QueuesRouter>();
+            let queue_family = router.queue_family_of_type(match Q {
+                'g' => QueueType::Graphics,
+                'c' => QueueType::Compute,
+                't' => QueueType::Transfer,
+                _ => panic!(),
+            });
+            let pool = RecordingCommandBuffer::new(device, queue_family);
+            world.insert_resource(RecordingCommandBufferWrapper::<Q>(pool));
+        }
+        RenderCommandState {
+            recording_cmd_buf_component_id,
+        }
     }
-
     fn default_configs(config: &mut bevy_utils::ConfigMap) {
         let flags = match Q {
             'g' => QueueType::Graphics,
@@ -57,12 +93,15 @@ where
     }
 
     unsafe fn get_param<'world, 'state>(
-        _state: &'state mut Self::State,
-        _system_meta: &bevy_ecs::system::SystemMeta,
-        _world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        _change_tick: bevy_ecs::component::Tick,
+        state: &'state mut Self::State,
+        system_meta: &bevy_ecs::system::SystemMeta,
+        world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        RenderCommands {}
+        let recording_cmd_buf = ResMut::<RecordingCommandBufferWrapper<Q>>::get_param(&mut state.recording_cmd_buf_component_id, system_meta, world, change_tick);
+        RenderCommands {
+            recording_cmd_buf,
+        }
     }
 }
 

@@ -48,6 +48,11 @@ impl QueuesRouter {
     pub fn of_type(&self, ty: QueueType) -> QueueRef {
         self.queue_type_to_index[ty as usize]
     }
+    pub fn queue_family_of_type(&self, ty: QueueType) -> u32 {
+        let queue_ty = self.of_type(ty);
+        let queue_family = self.queue_type_to_family[queue_ty.0 as usize];
+        queue_family
+    }
     pub(crate) fn find_with_queue_family_properties(
         available_queue_family: &[vk::QueueFamilyProperties],
     ) -> Self {
