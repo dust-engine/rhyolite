@@ -18,7 +18,7 @@ impl Default for QueueRef {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum QueueType {
     Graphics = 0,
     Compute = 1,

@@ -701,6 +701,5 @@ mod tests {
     #[test]
     fn test_color_space_conversion() {
         let mat = super::ColorSpacePrimaries::ACES_AP1.to_xyz();
-        println!("{:?}", mat);
     }
 }

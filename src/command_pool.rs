@@ -56,13 +56,10 @@ impl CommandPool {
 impl Drop for CommandPool {
     fn drop(&mut self) {
         unsafe {
-            self.device
-                .destroy_command_pool(self.raw, None);
+            self.device.destroy_command_pool(self.raw, None);
         }
     }
 }
-
-
 
 pub struct RecordingCommandBuffer {
     pub(crate) pool: CommandPool,
@@ -82,20 +79,26 @@ impl RecordingCommandBuffer {
         if self.command_buffer == vk::CommandBuffer::null() {
             self.command_buffer = unsafe { self.pool.allocate() }.unwrap();
             unsafe {
-                self.pool.device.begin_command_buffer(
-                    self.command_buffer,
-                    &vk::CommandBufferBeginInfo {
-                        flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-                        ..Default::default()
-                    },
-                ).unwrap();
+                self.pool
+                    .device
+                    .begin_command_buffer(
+                        self.command_buffer,
+                        &vk::CommandBufferBeginInfo {
+                            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
             }
         }
         self.command_buffer
     }
     pub unsafe fn take(&mut self) -> vk::CommandBuffer {
         if self.command_buffer != vk::CommandBuffer::null() {
-            self.pool.device.end_command_buffer(self.command_buffer).unwrap();
+            self.pool
+                .device
+                .end_command_buffer(self.command_buffer)
+                .unwrap();
         }
         std::mem::take(&mut self.command_buffer)
     }

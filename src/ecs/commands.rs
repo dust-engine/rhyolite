@@ -20,12 +20,19 @@ pub mod queue_cap {
 use std::{any::Any, ops::DerefMut};
 
 use ash::vk;
-use bevy_ecs::{system::{Res, ResMut, Resource, SystemParam}, world::{FromWorld, Mut, World}, component::{ComponentDescriptor, ComponentId, ComponentInfo}};
+use bevy_ecs::{
+    component::{ComponentDescriptor, ComponentId, ComponentInfo},
+    system::{Res, ResMut, Resource, SystemParam},
+    world::{FromWorld, Mut, World},
+};
 use queue_cap::*;
 
-use crate::{command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType, BinarySemaphore, Device, HasDevice, QueueRef, QueuesRouter};
+use crate::{
+    command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType,
+    BinarySemaphore, Device, HasDevice, QueueRef, QueuesRouter,
+};
 
-use super::{QueueAssignment, RenderSystemConfig, Access, RenderResRegistry};
+use super::{Access, RenderResRegistry, RenderSystemConfig};
 
 /// A wrapper to produce multiple [`RecordingCommandBuffer`] variants based on the queue type it supports.
 #[derive(Resource)]
@@ -33,16 +40,20 @@ struct RecordingCommandBufferWrapper<const Q: char>(RecordingCommandBuffer);
 
 pub struct RenderCommands<'w, const Q: char>
 where
-    (): IsQueueCap<Q>, {
+    (): IsQueueCap<Q>,
+{
     recording_cmd_buf: ResMut<'w, RecordingCommandBufferWrapper<Q>>,
 }
 
-impl<'w, const Q: char> RenderCommands<'w, Q> where (): IsQueueCap<Q> {
-    pub fn record_commands(&mut self) -> CommandRecorder<Q>  {
+impl<'w, const Q: char> RenderCommands<'w, Q>
+where
+    (): IsQueueCap<Q>,
+{
+    pub fn record_commands(&mut self) -> CommandRecorder<Q> {
         let cmd_buf = self.recording_cmd_buf.0.record();
         CommandRecorder {
             device: self.recording_cmd_buf.0.device(),
-            cmd_buf
+            cmd_buf,
         }
     }
 }
@@ -50,7 +61,6 @@ impl<'w, const Q: char> RenderCommands<'w, Q> where (): IsQueueCap<Q> {
 pub struct RenderCommandState {
     recording_cmd_buf_component_id: ComponentId,
 }
-
 
 unsafe impl<'a, const Q: char> SystemParam for RenderCommands<'a, Q>
 where
@@ -64,8 +74,12 @@ where
         world: &mut World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
-        let recording_cmd_buf_component_id = ResMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
-        if world.get_resource_by_id(recording_cmd_buf_component_id).is_none() {
+        let recording_cmd_buf_component_id =
+            ResMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
+        if world
+            .get_resource_by_id(recording_cmd_buf_component_id)
+            .is_none()
+        {
             let device = world.resource::<Device>().clone();
             let router = world.resource::<QueuesRouter>();
             let queue_family = router.queue_family_of_type(match Q {
@@ -89,7 +103,7 @@ where
             _ => unreachable!(),
         };
         let config = config.entry::<RenderSystemConfig>().or_default();
-        config.queue = QueueAssignment::MinOverhead(flags);
+        config.queue = flags;
     }
 
     unsafe fn get_param<'world, 'state>(
@@ -98,10 +112,13 @@ where
         world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        let recording_cmd_buf = ResMut::<RecordingCommandBufferWrapper<Q>>::get_param(&mut state.recording_cmd_buf_component_id, system_meta, world, change_tick);
-        RenderCommands {
-            recording_cmd_buf,
-        }
+        let recording_cmd_buf = ResMut::<RecordingCommandBufferWrapper<Q>>::get_param(
+            &mut state.recording_cmd_buf_component_id,
+            system_meta,
+            world,
+            change_tick,
+        );
+        RenderCommands { recording_cmd_buf }
     }
 }
 
@@ -116,7 +133,6 @@ pub struct SemaphoreOp {
     pub access: Access,
 }
 
-
 #[derive(Debug)]
 pub struct QueueSystemState {
     pub queue: QueueRef,
@@ -125,7 +141,7 @@ pub struct QueueSystemState {
     pub binary_waits: Vec<BinarySemaphoreWaitOp>,
     pub timeline_signals: Vec<SemaphoreOp>,
     pub timeline_waits: Vec<SemaphoreOp>,
-    registry_component_id: ComponentId
+    registry_component_id: ComponentId,
 }
 #[derive(Debug)]
 pub struct QueueSystemInitialState {
@@ -142,8 +158,10 @@ pub struct QueueSystemStateUpdate {
 
 pub struct QueueContext<'a, const Q: char>
 where
-    (): IsQueueCap<Q>, {
+    (): IsQueueCap<Q>,
+{
     pub queue: QueueRef,
+    pub frame_index: u64,
     pub binary_signals: &'a [SemaphoreOp],
     pub binary_waits: &'a [BinarySemaphoreWaitOp],
     pub timeline_signals: &'a [SemaphoreOp],
@@ -183,7 +201,7 @@ where
             _ => unreachable!(),
         };
         let config = config.entry::<RenderSystemConfig>().or_default();
-        config.queue = QueueAssignment::MinOverhead(flags);
+        config.queue = flags;
         config.is_queue_op = true;
     }
     fn set_configs(state: &mut Self::State, config: &mut Option<Box<dyn Any>>) {
@@ -208,7 +226,11 @@ where
         }
     }
 
-    fn apply(state: &mut Self::State, system_meta: &bevy_ecs::system::SystemMeta, world: &mut World) {
+    fn apply(
+        state: &mut Self::State,
+        system_meta: &bevy_ecs::system::SystemMeta,
+        world: &mut World,
+    ) {
         let mut registry = world.resource_mut::<RenderResRegistry>();
         Res::<RenderResRegistry>::apply(&mut state.registry_component_id, system_meta, world);
     }
@@ -219,14 +241,98 @@ where
         world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        let registry = Res::<RenderResRegistry>::get_param(&mut state.registry_component_id, system_meta, world, change_tick);
+        let registry = Res::<RenderResRegistry>::get_param(
+            &mut state.registry_component_id,
+            system_meta,
+            world,
+            change_tick,
+        );
 
         QueueContext {
             queue: state.queue,
+            frame_index: state.frame_index,
             binary_signals: &state.binary_signals,
             binary_waits: &state.binary_waits,
             timeline_signals: &state.timeline_signals,
             timeline_waits: &state.timeline_waits,
         }
+    }
+}
+
+// So, what happens if multiple systems get assigned to the same queue?
+// flush_system_graph will only run once for that particular queue.
+// If they were assigned to different queues,
+// flush_system_graph will run multiple times, once for each queue.
+pub(crate) fn flush_system_graph<const Q: char>(
+    mut commands: RenderCommands<Q>,
+    queue_ctx: QueueContext<Q>,
+    device: Res<Device>,
+) where
+    (): IsQueueCap<Q>,
+{
+    let command_buffer = unsafe { commands.recording_cmd_buf.0.take() };
+    let semaphore_signals = queue_ctx
+        .binary_signals
+        .iter()
+        .map(|op| vk::SemaphoreSubmitInfo {
+            semaphore: op.semaphore,
+            value: 0,
+            stage_mask: op.access.stage,
+            ..Default::default()
+        })
+        .chain(
+            queue_ctx
+                .timeline_signals
+                .iter()
+                .map(|op| vk::SemaphoreSubmitInfo {
+                    semaphore: op.semaphore,
+                    value: queue_ctx.frame_index,
+                    stage_mask: op.access.stage,
+                    ..Default::default()
+                }),
+        )
+        .collect::<Vec<_>>();
+    let semaphore_waits = queue_ctx
+        .binary_waits
+        .iter()
+        .map(|op| vk::SemaphoreSubmitInfo {
+            semaphore: op.semaphore.raw(),
+            value: 0,
+            stage_mask: op.access.stage,
+            ..Default::default()
+        })
+        .chain(
+            queue_ctx
+                .timeline_waits
+                .iter()
+                .map(|op| vk::SemaphoreSubmitInfo {
+                    semaphore: op.semaphore,
+                    value: queue_ctx.frame_index,
+                    stage_mask: op.access.stage,
+                    ..Default::default()
+                }),
+        )
+        .collect::<Vec<_>>();
+    unsafe {
+        let queue = device.get_raw_queue(queue_ctx.queue);
+        device
+            .queue_submit2(
+                queue,
+                &[vk::SubmitInfo2KHR {
+                    flags: vk::SubmitFlags::empty(),
+                    wait_semaphore_info_count: semaphore_waits.len() as u32,
+                    p_wait_semaphore_infos: semaphore_waits.as_ptr(),
+                    command_buffer_info_count: 1,
+                    p_command_buffer_infos: &vk::CommandBufferSubmitInfoKHR {
+                        command_buffer: command_buffer,
+                        ..Default::default()
+                    },
+                    signal_semaphore_info_count: semaphore_signals.len() as u32,
+                    p_signal_semaphore_infos: semaphore_signals.as_ptr(),
+                    ..Default::default()
+                }],
+                vk::Fence::null(),
+            )
+            .unwrap();
     }
 }

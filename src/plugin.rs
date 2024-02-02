@@ -12,7 +12,10 @@ use std::{
 };
 
 use crate::{
-    command_pool::RecordingCommandBuffer, ecs::{RenderSystemPass, RenderResRegistry}, Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties, QueuesRouter, Version
+    command_pool::RecordingCommandBuffer,
+    ecs::{RenderResRegistry, RenderSystemPass},
+    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
+    QueuesRouter, Version,
 };
 use cstr::cstr;
 
@@ -234,7 +237,11 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(queue_router);
 
         // Add build pass
-        app.get_schedule_mut(Update).as_mut().unwrap().add_build_pass(RenderSystemPass::default()).before::<bevy_ecs::schedule::passes::AutoInsertApplyDeferredPass>();
+        app.get_schedule_mut(Update)
+            .as_mut()
+            .unwrap()
+            .add_build_pass(RenderSystemPass::default())
+            .before::<bevy_ecs::schedule::passes::AutoInsertApplyDeferredPass>();
         app.init_resource::<RenderResRegistry>();
 
         // Required features

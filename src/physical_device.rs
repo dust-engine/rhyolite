@@ -404,8 +404,6 @@ impl PhysicalDeviceFeatures {
     }
 }
 
-
-
 macro_rules! impl_feature {
     ($feature:ty) => {
         unsafe impl Feature for $feature {

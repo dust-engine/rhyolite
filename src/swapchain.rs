@@ -6,8 +6,11 @@ use bevy_ecs::prelude::*;
 use bevy_window::Window;
 
 use crate::{
-    plugin::RhyoliteApp, utils::ColorSpace, utils::SharingMode, Device, HasDevice, PhysicalDevice,
-    QueueType, QueuesRouter, Surface, ecs::{RenderSystemPass, QueueContext, RenderComponent, RenderComponentMut},
+    ecs::{QueueContext, RenderComponent, RenderComponentMut, RenderSystemPass},
+    plugin::RhyoliteApp,
+    utils::ColorSpace,
+    utils::SharingMode,
+    Device, HasDevice, PhysicalDevice, QueueType, QueuesRouter, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -31,14 +34,18 @@ impl Plugin for SwapchainPlugin {
             Update,
             (
                 extract_swapchains.after(crate::surface::extract_surfaces),
-                acquire_swapchain_image.with_option::<RenderSystemPass>(|entry| {
-                    let item = entry.or_default();
-                    item.force_binary_semaphore = true;
-                }).after(extract_swapchains),
-                present.with_option::<RenderSystemPass>(|entry| {
-                    let item = entry.or_default();
-                    item.force_binary_semaphore = true;
-                }).after(acquire_swapchain_image),
+                acquire_swapchain_image
+                    .with_option::<RenderSystemPass>(|entry| {
+                        let item = entry.or_default();
+                        item.force_binary_semaphore = true;
+                    })
+                    .after(extract_swapchains),
+                present
+                    .with_option::<RenderSystemPass>(|entry| {
+                        let item = entry.or_default();
+                        item.force_binary_semaphore = true;
+                    })
+                    .after(acquire_swapchain_image),
             ),
         );
     }
@@ -553,12 +560,15 @@ pub fn acquire_swapchain_image(
         RenderComponentMut<SwapchainImage>,
     )>,
 ) {
-    println!("acquire {:?}, signals {:?}", queue_ctx.queue, queue_ctx.binary_signals);
     assert!(queue_ctx.binary_waits.is_empty());
     assert!(queue_ctx.timeline_signals.is_empty());
     assert!(queue_ctx.timeline_waits.is_empty());
     assert!(queue_ctx.binary_signals.len() <= 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously.");
-    let semaphore = queue_ctx.binary_signals.get(0).map(|semaphore| semaphore.semaphore).unwrap_or_default();
+    let semaphore = queue_ctx
+        .binary_signals
+        .get(0)
+        .map(|semaphore| semaphore.semaphore)
+        .unwrap_or_default();
 
     for (mut swapchain, mut swapchain_image) in query.iter_mut() {
         let (indice, suboptimal) = unsafe {
@@ -613,7 +623,11 @@ pub fn present(
     // select the best one.
     let present_queue = queues_router.of_type(QueueType::Graphics);
     let queue = device.get_raw_queue(present_queue);
-    let semaphore_to_wait: Vec<vk::Semaphore> = queue_ctx.binary_waits.iter().map(|wait| wait.semaphore.raw()).collect();
+    let semaphore_to_wait: Vec<vk::Semaphore> = queue_ctx
+        .binary_waits
+        .iter()
+        .map(|wait| wait.semaphore.raw())
+        .collect();
     // TODO: Recycle semaphores. IMPORTANT
     unsafe {
         swapchain_loader

@@ -1,4 +1,9 @@
-use std::{fmt::Debug, mem::ManuallyDrop, sync::{Arc, atomic::AtomicU64}, thread::JoinHandle};
+use std::{
+    fmt::Debug,
+    mem::ManuallyDrop,
+    sync::{atomic::AtomicU64, Arc},
+    thread::JoinHandle,
+};
 
 use ash::vk;
 use bevy_ecs::system::Resource;
@@ -9,13 +14,12 @@ use crate::Device;
 pub(crate) struct BinarySemaphorePool {
     device: Device,
     recycler: crossbeam_channel::Receiver<vk::Semaphore>,
-    sender: crossbeam_channel::Sender<vk::Semaphore>
+    sender: crossbeam_channel::Sender<vk::Semaphore>,
 }
-
 
 pub struct BinarySemaphore {
     semaphore: vk::Semaphore,
-    recycler: crossbeam_channel::Sender<vk::Semaphore>
+    recycler: crossbeam_channel::Sender<vk::Semaphore>,
 }
 impl BinarySemaphore {
     pub fn raw(&self) -> vk::Semaphore {
@@ -36,34 +40,35 @@ impl Drop for BinarySemaphore {
     }
 }
 
-
 impl BinarySemaphorePool {
     pub fn new(device: Device) -> Self {
         let (sender, recycler) = crossbeam_channel::unbounded();
         Self {
             device,
             recycler,
-            sender
+            sender,
         }
     }
     pub fn create(&self) -> BinarySemaphore {
         match self.recycler.try_recv() {
-            Ok(semaphore) => return BinarySemaphore {
-                semaphore,
-                recycler: self.sender.clone()
-            },
+            Ok(semaphore) => {
+                return BinarySemaphore {
+                    semaphore,
+                    recycler: self.sender.clone(),
+                }
+            }
             Err(crossbeam_channel::TryRecvError::Empty) => {
                 let semaphore = unsafe {
                     let info = vk::SemaphoreCreateInfo::default();
                     self.device.create_semaphore(&info, None)
-                }.unwrap();
+                }
+                .unwrap();
                 return BinarySemaphore {
                     semaphore,
-                    recycler: self.sender.clone()
-                }
-            },
-            Err(crossbeam_channel::TryRecvError::Disconnected) => unreachable!()
+                    recycler: self.sender.clone(),
+                };
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => unreachable!(),
         }
     }
 }
-

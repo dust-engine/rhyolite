@@ -1,15 +1,18 @@
-use std::collections::{BTreeSet, BTreeMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use ash::vk;
 use bevy_ecs::{
-    component::{ComponentId, Component},
-    system::{Res, ResMut, Resource, SystemParam}, query::{WorldQuery, QueryData, ReadOnlyQueryData, Access}, world::{Mut, unsafe_world_cell::UnsafeWorldCell, World}, archetype::{ArchetypeComponentId, ArchetypeGeneration},
+    archetype::{ArchetypeComponentId, ArchetypeGeneration},
+    component::{Component, ComponentId},
+    query::{Access, QueryData, ReadOnlyQueryData, WorldQuery},
+    system::{Res, ResMut, Resource, SystemParam},
+    world::{unsafe_world_cell::UnsafeWorldCell, Mut, World},
 };
 use bevy_utils::ConfigMap;
 
 use crate::QueueRef;
 
-use super::{RenderSystemConfig};
+use super::RenderSystemConfig;
 
 pub(crate) struct RenderResAccess {
     pub(crate) stage: vk::PipelineStageFlags2,
@@ -33,7 +36,12 @@ impl RenderResRegistry {
 }
 impl Default for RenderResRegistry {
     fn default() -> Self {
-        Self { component_ids: Default::default(), archetype_component_ids: Default::default(), active_access: Default::default(), archetype_generation: ArchetypeGeneration::initial() }
+        Self {
+            component_ids: Default::default(),
+            archetype_component_ids: Default::default(),
+            active_access: Default::default(),
+            archetype_generation: ArchetypeGeneration::initial(),
+        }
     }
 }
 pub(crate) fn render_res_registry_update_archetype(
@@ -45,11 +53,16 @@ pub(crate) fn render_res_registry_update_archetype(
         return;
     }
     let registry = registry.as_mut();
-    let old_generation = std::mem::replace(&mut registry.archetype_generation, archetypes.generation());
+    let old_generation =
+        std::mem::replace(&mut registry.archetype_generation, archetypes.generation());
     for archetype in &archetypes[old_generation..] {
         for component_id in &registry.component_ids {
-            if let Some(archetype_component_id) = archetype.get_archetype_component_id(*component_id) {
-                registry.archetype_component_ids.insert(archetype_component_id);
+            if let Some(archetype_component_id) =
+                archetype.get_archetype_component_id(*component_id)
+            {
+                registry
+                    .archetype_component_ids
+                    .insert(archetype_component_id);
             }
         }
     }
@@ -170,7 +183,6 @@ unsafe impl<'a, T: Resource> SystemParam for RenderResMut<'a, T> {
     }
 }
 
-
 pub struct RenderComponent<'a, T: Component> {
     pub inner: &'a T,
 }
@@ -179,7 +191,6 @@ impl<T: Component> RenderComponent<'_, T> {
         self.inner
     }
 }
-
 
 unsafe impl<T: Component> WorldQuery for RenderComponent<'_, T> {
     type Item<'w> = RenderComponent<'w, T>;
@@ -212,7 +223,11 @@ unsafe impl<T: Component> WorldQuery for RenderComponent<'_, T> {
         <&T as WorldQuery>::set_archetype(fetch, state, archetype, table)
     }
 
-    unsafe fn set_table<'w>(fetch: &mut Self::Fetch<'w>, state: &Self::State, table: &'w bevy_ecs::storage::Table) {
+    unsafe fn set_table<'w>(
+        fetch: &mut Self::Fetch<'w>,
+        state: &Self::State,
+        table: &'w bevy_ecs::storage::Table,
+    ) {
         <&T as WorldQuery>::set_table(fetch, state, table);
     }
 
@@ -225,7 +240,10 @@ unsafe impl<T: Component> WorldQuery for RenderComponent<'_, T> {
         RenderComponent { inner }
     }
 
-    fn update_component_access(state: &Self::State, access: &mut bevy_ecs::query::FilteredAccess<ComponentId>) {
+    fn update_component_access(
+        state: &Self::State,
+        access: &mut bevy_ecs::query::FilteredAccess<ComponentId>,
+    ) {
         <&T as WorldQuery>::update_component_access(state, access);
     }
 
@@ -248,17 +266,14 @@ unsafe impl<T: Component> WorldQuery for RenderComponent<'_, T> {
         <&T as WorldQuery>::matches_component_set(state, set_contains_id)
     }
 }
-unsafe impl<T: Component> ReadOnlyQueryData for RenderComponent<'_, T> {
-}
+unsafe impl<T: Component> ReadOnlyQueryData for RenderComponent<'_, T> {}
 unsafe impl<T: Component> QueryData for RenderComponent<'_, T> {
     type ReadOnly = Self;
 }
 
-
 pub struct RenderComponentMut<'a, T: Component> {
     inner: Mut<'a, T>,
 }
-
 
 unsafe impl<T: Component> WorldQuery for RenderComponentMut<'_, T> {
     type Item<'w> = RenderComponentMut<'w, T>;
@@ -291,7 +306,11 @@ unsafe impl<T: Component> WorldQuery for RenderComponentMut<'_, T> {
         <&mut T as WorldQuery>::set_archetype(fetch, state, archetype, table)
     }
 
-    unsafe fn set_table<'w>(fetch: &mut Self::Fetch<'w>, state: &Self::State, table: &'w bevy_ecs::storage::Table) {
+    unsafe fn set_table<'w>(
+        fetch: &mut Self::Fetch<'w>,
+        state: &Self::State,
+        table: &'w bevy_ecs::storage::Table,
+    ) {
         <&mut T as WorldQuery>::set_table(fetch, state, table);
     }
 
@@ -304,7 +323,10 @@ unsafe impl<T: Component> WorldQuery for RenderComponentMut<'_, T> {
         RenderComponentMut { inner }
     }
 
-    fn update_component_access(state: &Self::State, access: &mut bevy_ecs::query::FilteredAccess<ComponentId>) {
+    fn update_component_access(
+        state: &Self::State,
+        access: &mut bevy_ecs::query::FilteredAccess<ComponentId>,
+    ) {
         <&mut T as WorldQuery>::update_component_access(state, access);
     }
 
@@ -344,6 +366,3 @@ impl<T: Component> RenderComponentMut<'_, T> {
         self.inner.as_mut()
     }
 }
-
-
-

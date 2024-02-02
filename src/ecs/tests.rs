@@ -79,7 +79,7 @@ fn test1() {
         system_c1.after(system_g1),
         system_g2.after(system_c1),
         system_t2.after(system_g2),
-        system_g3.after(system_t2)
+        system_g3.after(system_t2),
     ));
 
     let mut world = World::default();
