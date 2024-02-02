@@ -17,7 +17,7 @@ pub mod queue_cap {
     impl IsComputeQueueCap<'c'> for () {}
 }
 
-use std::{any::Any, ops::DerefMut};
+use std::{any::Any, collections::BTreeMap, ops::DerefMut};
 
 use ash::vk;
 use bevy_ecs::{
@@ -133,7 +133,6 @@ pub struct SemaphoreOp {
     pub access: Access,
 }
 
-#[derive(Debug)]
 pub struct QueueSystemState {
     pub queue: QueueRef,
     pub frame_index: u64,
@@ -141,7 +140,10 @@ pub struct QueueSystemState {
     pub binary_waits: Vec<BinarySemaphoreWaitOp>,
     pub timeline_signals: Vec<SemaphoreOp>,
     pub timeline_waits: Vec<SemaphoreOp>,
-    registry_component_id: ComponentId,
+    device_component_id: ComponentId,
+
+    /// Map from frame index to retained objects
+    pub retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
 }
 #[derive(Debug)]
 pub struct QueueSystemInitialState {
@@ -162,10 +164,30 @@ where
 {
     pub queue: QueueRef,
     pub frame_index: u64,
-    pub binary_signals: &'a [SemaphoreOp],
-    pub binary_waits: &'a [BinarySemaphoreWaitOp],
+    pub binary_signals: Vec<SemaphoreOp>,
+    pub binary_waits: Vec<BinarySemaphoreWaitOp>,
     pub timeline_signals: &'a [SemaphoreOp],
     pub timeline_waits: &'a [SemaphoreOp],
+    retained_objects: &'a mut Vec<Box<dyn Send + Sync>>,
+}
+impl<const Q: char> Drop for QueueContext<'_, Q>
+where
+    (): IsQueueCap<Q>,
+{
+    fn drop(&mut self) {
+        for op in std::mem::take(&mut self.binary_waits) {
+            self.retained_objects.push(Box::new(op));
+        }
+    }
+}
+
+impl<'a, const Q: char> QueueContext<'a, Q>
+where
+    (): IsQueueCap<Q>,
+{
+    pub fn retain<T: 'static + Drop + Send + Sync>(&mut self, obj: Box<T>) {
+        self.retained_objects.push(obj);
+    }
 }
 
 unsafe impl<'a, const Q: char> SystemParam for QueueContext<'a, Q>
@@ -180,16 +202,16 @@ where
         world: &mut World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
-        let component_id = Res::<RenderResRegistry>::init_state(world, system_meta);
-        system_meta.set_has_deferred();
+        let device_component_id = Res::<Device>::init_state(world, system_meta);
         QueueSystemState {
-            registry_component_id: component_id,
+            device_component_id,
             queue: QueueRef::default(),
             binary_signals: Vec::new(),
             binary_waits: Vec::new(),
             timeline_signals: Vec::new(),
             timeline_waits: Vec::new(),
             frame_index: 0,
+            retained_objects: BTreeMap::new(),
         }
     }
 
@@ -226,35 +248,47 @@ where
         }
     }
 
-    fn apply(
-        state: &mut Self::State,
-        system_meta: &bevy_ecs::system::SystemMeta,
-        world: &mut World,
-    ) {
-        let mut registry = world.resource_mut::<RenderResRegistry>();
-        Res::<RenderResRegistry>::apply(&mut state.registry_component_id, system_meta, world);
-    }
-
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
         system_meta: &bevy_ecs::system::SystemMeta,
         world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        let registry = Res::<RenderResRegistry>::get_param(
-            &mut state.registry_component_id,
-            system_meta,
-            world,
-            change_tick,
-        );
+        let num_frame_in_flight = 3;
+
+        if !state.timeline_signals.is_empty() {
+            let wait_value = if state.frame_index <= num_frame_in_flight { 0 } else { state.frame_index - num_frame_in_flight };
+            let signaled_semaphore = state.timeline_signals[0].semaphore;
+            let device = Res::<Device>::get_param(
+                &mut state.device_component_id,
+                system_meta,
+                world,
+                change_tick,
+            );
+            unsafe {
+                device.wait_semaphores(&vk::SemaphoreWaitInfo {
+                    semaphore_count: 1,
+                    p_semaphores: &signaled_semaphore,
+                    p_values: &wait_value, // num of frame in flight
+                    ..Default::default()
+                }, !0).unwrap();
+            }
+        }
+        if state.frame_index > num_frame_in_flight {
+            let objs = state.retained_objects.remove(&(&state.frame_index - &num_frame_in_flight));
+            drop(objs.unwrap());
+        }
+
+        let retained_objects: &mut Vec<Box<dyn Send + Sync>> = state.retained_objects.entry(state.frame_index).or_default();
 
         QueueContext {
             queue: state.queue,
             frame_index: state.frame_index,
-            binary_signals: &state.binary_signals,
-            binary_waits: &state.binary_waits,
+            binary_signals: std::mem::take(&mut state.binary_signals),
+            binary_waits: std::mem::take(&mut state.binary_waits),
             timeline_signals: &state.timeline_signals,
             timeline_waits: &state.timeline_waits,
+            retained_objects,
         }
     }
 }
@@ -295,11 +329,14 @@ pub(crate) fn flush_system_graph<const Q: char>(
     let semaphore_waits = queue_ctx
         .binary_waits
         .iter()
-        .map(|op| vk::SemaphoreSubmitInfo {
-            semaphore: op.semaphore.raw(),
-            value: 0,
-            stage_mask: op.access.stage,
-            ..Default::default()
+        .map(|op| {
+            let info = vk::SemaphoreSubmitInfo {
+                semaphore: op.semaphore.raw(),
+                value: 0,
+                stage_mask: op.access.stage,
+                ..Default::default()
+            };
+            info
         })
         .chain(
             queue_ctx

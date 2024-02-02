@@ -628,7 +628,6 @@ pub fn present(
         .iter()
         .map(|wait| wait.semaphore.raw())
         .collect();
-    // TODO: Recycle semaphores. IMPORTANT
     unsafe {
         swapchain_loader
             .queue_present(
