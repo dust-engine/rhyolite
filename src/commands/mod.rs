@@ -1,3 +1,5 @@
+use std::mem;
+
 use ash::{vk, Device};
 
 use crate::ecs::queue_cap::IsQueueCap;
@@ -28,6 +30,28 @@ where
                 image_layout,
                 clear_color_value,
                 ranges,
+            )
+        }
+    }
+
+    pub fn pipeline_barrier(
+        &mut self,
+        src_stage_mask: vk::PipelineStageFlags,
+        dst_stage_mask: vk::PipelineStageFlags,
+        dependency_flags: vk::DependencyFlags,
+        memory_barriers: &[vk::MemoryBarrier],
+        buffer_memory_barriers: &[vk::BufferMemoryBarrier],
+        image_memory_barriers: &[vk::ImageMemoryBarrier],
+    ) {
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                self.cmd_buf,
+                src_stage_mask,
+                dst_stage_mask,
+                dependency_flags,
+                memory_barriers,
+                buffer_memory_barriers,
+                image_memory_barriers,
             )
         }
     }

@@ -246,6 +246,7 @@ impl Plugin for RhyolitePlugin {
 
         // Required features
         app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore);
+        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|f| &mut f.synchronization2);
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =
