@@ -17,7 +17,11 @@ pub mod queue_cap {
     impl IsComputeQueueCap<'c'> for () {}
 }
 
-use std::{any::Any, collections::BTreeMap, ops::DerefMut};
+use std::{
+    any::Any,
+    collections::BTreeMap,
+    ops::{Deref, DerefMut},
+};
 
 use ash::vk;
 use bevy_ecs::{
@@ -144,6 +148,7 @@ pub struct QueueSystemState {
 
     /// Map from frame index to retained objects
     pub retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
+    pub fence_to_wait: BTreeMap<u64, vk::Fence>,
 }
 #[derive(Debug)]
 pub struct QueueSystemInitialState {
@@ -158,19 +163,21 @@ pub struct QueueSystemStateUpdate {
     pub binary_waits: Vec<BinarySemaphoreWaitOp>,
 }
 
-pub struct QueueContext<'a, const Q: char>
+pub struct QueueContext<'world, 'state, const Q: char>
 where
     (): IsQueueCap<Q>,
 {
+    device: Res<'world, Device>,
     pub queue: QueueRef,
     pub frame_index: u64,
     pub binary_signals: Vec<SemaphoreOp>,
     pub binary_waits: Vec<BinarySemaphoreWaitOp>,
-    pub timeline_signals: &'a [SemaphoreOp],
-    pub timeline_waits: &'a [SemaphoreOp],
-    retained_objects: &'a mut Vec<Box<dyn Send + Sync>>,
+    pub timeline_signals: &'state [SemaphoreOp],
+    pub timeline_waits: &'state [SemaphoreOp],
+    retained_objects: &'state mut Vec<Box<dyn Send + Sync>>,
+    fences: &'state mut BTreeMap<u64, vk::Fence>,
 }
-impl<const Q: char> Drop for QueueContext<'_, Q>
+impl<const Q: char> Drop for QueueContext<'_, '_, Q>
 where
     (): IsQueueCap<Q>,
 {
@@ -181,22 +188,51 @@ where
     }
 }
 
-impl<'a, const Q: char> QueueContext<'a, Q>
+impl<const Q: char> QueueContext<'_, '_, Q>
 where
     (): IsQueueCap<Q>,
 {
     pub fn retain<T: 'static + Drop + Send + Sync>(&mut self, obj: Box<T>) {
         self.retained_objects.push(obj);
     }
+    /// Returns a fence that the caller MUST wait on.
+    /// Safety:
+    /// - A system may either call this method EVERY FRAME, or NEVER
+    /// - Once called, the returned fence must be used.
+    pub unsafe fn fence_to_wait(&mut self) -> vk::Fence {
+        let num_frame_in_flight = 3;
+
+        let mut fence = vk::Fence::null();
+
+        if self.frame_index > num_frame_in_flight {
+            let fence_to_recycle = self
+                .fences
+                .remove(&(self.frame_index - num_frame_in_flight));
+            fence = fence_to_recycle.unwrap_or_default();
+        }
+
+        if fence == vk::Fence::null() {
+            // create a new fence
+            unsafe {
+                fence = self
+                    .device
+                    .create_fence(&vk::FenceCreateInfo::default(), None)
+                    .unwrap()
+            }
+        };
+        let old = self.fences.insert(self.frame_index, fence);
+        assert!(old.is_none());
+        fence
+    }
 }
 
-unsafe impl<'a, const Q: char> SystemParam for QueueContext<'a, Q>
+unsafe impl<const Q: char> SystemParam for QueueContext<'_, '_, Q>
 where
     (): IsQueueCap<Q>,
 {
     type State = QueueSystemState;
 
-    type Item<'world, 'state> = QueueContext<'state, Q>;
+    type Item<'world, 'state> = QueueContext<'world, 'state, Q>;
 
     fn init_state(
         world: &mut World,
@@ -212,6 +248,7 @@ where
             timeline_waits: Vec::new(),
             frame_index: 0,
             retained_objects: BTreeMap::new(),
+            fence_to_wait: BTreeMap::new(),
         }
     }
 
@@ -254,34 +291,58 @@ where
         world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
+        let device: Res<'world, Device> = Res::<Device>::get_param(
+            &mut state.device_component_id,
+            system_meta,
+            world,
+            change_tick,
+        );
+
         let num_frame_in_flight = 3;
 
-        if !state.timeline_signals.is_empty() {
-            let wait_value = if state.frame_index <= num_frame_in_flight { 0 } else { state.frame_index - num_frame_in_flight };
-            let signaled_semaphore = state.timeline_signals[0].semaphore;
-            let device = Res::<Device>::get_param(
-                &mut state.device_component_id,
-                system_meta,
-                world,
-                change_tick,
-            );
-            unsafe {
-                device.wait_semaphores(&vk::SemaphoreWaitInfo {
-                    semaphore_count: 1,
-                    p_semaphores: &signaled_semaphore,
-                    p_values: &wait_value, // num of frame in flight
-                    ..Default::default()
-                }, !0).unwrap();
-            }
-        }
         if state.frame_index > num_frame_in_flight {
-            let objs = state.retained_objects.remove(&(&state.frame_index - &num_frame_in_flight));
-            drop(objs.unwrap());
+            let wait_value = state.frame_index - num_frame_in_flight;
+            let mut waited = false;
+            if !state.timeline_signals.is_empty() {
+                let signaled_semaphore = state.timeline_signals[0].semaphore;
+                // Just waiting on one of those timeline semaphore should be fine, right?
+                unsafe {
+                    device
+                        .wait_semaphores(
+                            &vk::SemaphoreWaitInfo {
+                                semaphore_count: 1,
+                                p_semaphores: &signaled_semaphore,
+                                p_values: &wait_value, // num of frame in flight
+                                ..Default::default()
+                            },
+                            !0,
+                        )
+                        .unwrap();
+                }
+                waited = true;
+            }
+            if let Some(&fence) = state.fence_to_wait.get(&wait_value) {
+                unsafe {
+                    device.wait_for_fences(&[fence], true, !0).unwrap();
+                    device.reset_fences(&[fence]).unwrap();
+                    // This fence will later be cleaned up by a call to fence_to_wait
+                    waited = true;
+                }
+            }
+
+            let objs = state.retained_objects.remove(&wait_value).unwrap();
+
+            if !waited && !objs.is_empty() {
+                println!("Warning: retained resources dropped without waiting on anything.")
+            }
+            drop(objs);
         }
 
-        let retained_objects: &mut Vec<Box<dyn Send + Sync>> = state.retained_objects.entry(state.frame_index).or_default();
+        let retained_objects: &mut Vec<Box<dyn Send + Sync>> =
+            state.retained_objects.entry(state.frame_index).or_default();
 
         QueueContext {
+            device,
             queue: state.queue,
             frame_index: state.frame_index,
             binary_signals: std::mem::take(&mut state.binary_signals),
@@ -289,6 +350,7 @@ where
             timeline_signals: &state.timeline_signals,
             timeline_waits: &state.timeline_waits,
             retained_objects,
+            fences: &mut state.fence_to_wait,
         }
     }
 }

@@ -1,5 +1,5 @@
 mod format;
-
+pub mod resource_pool;
 pub use format::*;
 use std::ops::Deref;
 

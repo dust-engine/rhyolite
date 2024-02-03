@@ -30,7 +30,7 @@ use crate::{
 
 use super::{queue_cap::IsQueueCap, QueueContext, RenderCommands, RenderSystemConfig};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RenderSystemPass {
     edge_graph: BTreeMap<(NodeId, NodeId), QueueSystemDependencyConfig>,
     queue_graph: bevy_utils::petgraph::graphmap::DiGraphMap<u32, QueueGraphEdge>,
@@ -39,6 +39,20 @@ pub struct RenderSystemPass {
     timeline_semaphores: Vec<vk::Semaphore>,
     frame_index: u64,
 }
+
+impl RenderSystemPass {
+    pub fn new() -> Self {
+        Self {
+            edge_graph: BTreeMap::new(),
+            queue_graph: Default::default(),
+            queue_graph_nodes: Vec::new(),
+            num_binary_semaphores: 0,
+            timeline_semaphores: Vec::new(),
+            frame_index: 1,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum QueueGraphEdgeSemaphoreType {
     Binary(u32),

@@ -2,8 +2,8 @@ use std::{borrow::BorrowMut, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
 use bevy_app::{App, Plugin, Update};
-use bevy_ecs::prelude::*;
-use bevy_window::Window;
+use bevy_ecs::{prelude::*, query::QueryFilter};
+use bevy_window::{PrimaryWindow, Window};
 
 use crate::{
     ecs::{QueueContext, RenderComponent, RenderComponentMut, RenderSystemPass},
@@ -34,18 +34,17 @@ impl Plugin for SwapchainPlugin {
             Update,
             (
                 extract_swapchains.after(crate::surface::extract_surfaces),
-                acquire_swapchain_image
+                present.with_option::<RenderSystemPass>(|entry| {
+                    let item = entry.or_default();
+                    item.force_binary_semaphore = true;
+                }),
+                acquire_swapchain_image::<With<PrimaryWindow>>
                     .with_option::<RenderSystemPass>(|entry| {
                         let item = entry.or_default();
                         item.force_binary_semaphore = true;
                     })
-                    .after(extract_swapchains),
-                present
-                    .with_option::<RenderSystemPass>(|entry| {
-                        let item = entry.or_default();
-                        item.force_binary_semaphore = true;
-                    })
-                    .after(acquire_swapchain_image),
+                    .after(extract_swapchains)
+                    .before(present),
             ),
         );
     }
@@ -553,45 +552,45 @@ pub struct SwapchainImage {
     indice: u32,
 }
 
-pub fn acquire_swapchain_image(
-    queue_ctx: QueueContext<'g'>,
-    mut query: Query<(
-        &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
-        RenderComponentMut<SwapchainImage>,
-    )>,
+pub fn acquire_swapchain_image<Filter: QueryFilter>(
+    mut queue_ctx: QueueContext<'g'>,
+    mut query: Query<
+        (
+            &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
+            RenderComponentMut<SwapchainImage>,
+        ),
+        Filter,
+    >,
 ) {
     assert!(queue_ctx.binary_waits.is_empty());
     assert!(queue_ctx.timeline_signals.is_empty());
     assert!(queue_ctx.timeline_waits.is_empty());
-    assert!(queue_ctx.binary_signals.len() <= 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously.");
-    let semaphore = queue_ctx
-        .binary_signals
-        .get(0)
-        .map(|semaphore| semaphore.semaphore)
-        .unwrap_or_default();
+    assert!(queue_ctx.binary_signals.len() == 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously.");
+    let semaphore = queue_ctx.binary_signals[0].semaphore;
 
-    for (mut swapchain, mut swapchain_image) in query.iter_mut() {
-        let (indice, suboptimal) = unsafe {
-            let swapchain = swapchain.borrow_mut();
-            swapchain.0.loader.acquire_next_image(
-                swapchain.0.inner,
-                !0,
-                semaphore,
-                vk::Fence::null(),
-            )
-        }
-        .unwrap();
-        if suboptimal {
-            tracing::warn!("Suboptimal swapchain");
-        }
-        let (image, image_view) = swapchain.0.images[indice as usize];
-        unsafe {
-            *swapchain_image.get_on_host_mut() = SwapchainImage {
-                image,
-                full_image_view: image_view,
-                indice,
-            };
-        }
+    let (mut swapchain, mut swapchain_image) = query.single_mut();
+    let (indice, suboptimal) = unsafe {
+        // Technically, we don't have to do this here. With Swapchain_Maintenance1,
+        // we could do this in the present workflow which should be more correct.
+        // TODO: verify correctness.
+        let fence = queue_ctx.fence_to_wait();
+        let swapchain = swapchain.borrow_mut();
+        swapchain
+            .0
+            .loader
+            .acquire_next_image(swapchain.0.inner, !0, semaphore, fence)
+    }
+    .unwrap();
+    if suboptimal {
+        tracing::warn!("Suboptimal swapchain");
+    }
+    let (image, image_view) = swapchain.0.images[indice as usize];
+    unsafe {
+        *swapchain_image.get_on_host_mut() = SwapchainImage {
+            image,
+            full_image_view: image_view,
+            indice,
+        };
     }
 }
 

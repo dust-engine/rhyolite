@@ -1,74 +1,43 @@
-use std::{
-    fmt::Debug,
-    mem::ManuallyDrop,
-    sync::{atomic::AtomicU64, Arc},
-    thread::JoinHandle,
-};
+use std::fmt::Debug;
 
 use ash::vk;
 use bevy_ecs::system::Resource;
 
-use crate::Device;
+use crate::{
+    utils::resource_pool::{ResourcePool, ResourcePoolItem},
+    Device,
+};
 
 #[derive(Resource)]
 pub(crate) struct BinarySemaphorePool {
     device: Device,
-    recycler: crossbeam_channel::Receiver<vk::Semaphore>,
-    sender: crossbeam_channel::Sender<vk::Semaphore>,
+    pool: ResourcePool<vk::Semaphore>,
 }
 
-pub struct BinarySemaphore {
-    semaphore: vk::Semaphore,
-    recycler: crossbeam_channel::Sender<vk::Semaphore>,
-}
+pub struct BinarySemaphore(ResourcePoolItem<vk::Semaphore>);
 impl BinarySemaphore {
     pub fn raw(&self) -> vk::Semaphore {
-        self.semaphore
+        *self.0
     }
 }
 impl Debug for BinarySemaphore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("BinarySemaphore")
-            .field(&self.semaphore)
-            .finish()
-    }
-}
-
-impl Drop for BinarySemaphore {
-    fn drop(&mut self) {
-        self.recycler.send(self.semaphore).unwrap();
+        f.debug_tuple("BinarySemaphore").field(&self.raw()).finish()
     }
 }
 
 impl BinarySemaphorePool {
     pub fn new(device: Device) -> Self {
-        let (sender, recycler) = crossbeam_channel::unbounded();
         Self {
             device,
-            recycler,
-            sender,
+            pool: ResourcePool::new(),
         }
     }
     pub fn create(&self) -> BinarySemaphore {
-        match self.recycler.try_recv() {
-            Ok(semaphore) => {
-                return BinarySemaphore {
-                    semaphore,
-                    recycler: self.sender.clone(),
-                }
-            }
-            Err(crossbeam_channel::TryRecvError::Empty) => {
-                let semaphore = unsafe {
-                    let info = vk::SemaphoreCreateInfo::default();
-                    self.device.create_semaphore(&info, None)
-                }
-                .unwrap();
-                return BinarySemaphore {
-                    semaphore,
-                    recycler: self.sender.clone(),
-                };
-            }
-            Err(crossbeam_channel::TryRecvError::Disconnected) => unreachable!(),
-        }
+        let item = self.pool.create(|| unsafe {
+            let info = vk::SemaphoreCreateInfo::default();
+            self.device.create_semaphore(&info, None).unwrap()
+        });
+        BinarySemaphore(item)
     }
 }

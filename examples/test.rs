@@ -1,6 +1,7 @@
 use ash::vk;
 use bevy_app::Update;
 use bevy_ecs::{entity::Entity, query::With, schedule::IntoSystemConfigs, system::Query};
+use bevy_window::PrimaryWindow;
 use rhyolite::{
     acquire_swapchain_image,
     ecs::{RenderCommands, RenderComponent},
@@ -20,13 +21,13 @@ fn main() {
     app.add_systems(
         Update,
         clear_main_window_color
-            .after(acquire_swapchain_image)
+            .after(acquire_swapchain_image::<With<PrimaryWindow>>)
             .before(present),
     );
 
     let primary_window = app
         .world
-        .query_filtered::<Entity, With<bevy_window::PrimaryWindow>>()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
         .iter(&app.world)
         .next()
         .unwrap();

@@ -53,7 +53,7 @@ const ROUTER: QueuesRouter = QueuesRouter {
 #[test]
 fn test0() {
     let mut schedule = Schedule::new(Update);
-    schedule.add_build_pass(RenderSystemPass::default());
+    schedule.add_build_pass(RenderSystemPass::new());
 
     schedule.add_systems((
         system_g1,
@@ -72,7 +72,7 @@ fn test0() {
 #[test]
 fn test1() {
     let mut schedule = Schedule::new(Update);
-    schedule.add_build_pass(RenderSystemPass::default());
+    schedule.add_build_pass(RenderSystemPass::new());
 
     schedule.add_systems((
         system_g1,

@@ -240,7 +240,7 @@ impl Plugin for RhyolitePlugin {
         app.get_schedule_mut(Update)
             .as_mut()
             .unwrap()
-            .add_build_pass(RenderSystemPass::default())
+            .add_build_pass(RenderSystemPass::new())
             .before::<bevy_ecs::schedule::passes::AutoInsertApplyDeferredPass>();
         app.init_resource::<RenderResRegistry>();
 
