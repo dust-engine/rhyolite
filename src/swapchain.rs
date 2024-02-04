@@ -609,7 +609,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
 }
 
 pub fn present(
-    queue_ctx: QueueContext<'g'>,
+    mut queue_ctx: QueueContext<'g'>,
     swapchain_loader: Res<SwapchainLoader>,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
@@ -619,6 +619,14 @@ pub fn present(
     assert!(queue_ctx.timeline_signals.is_empty());
     assert!(queue_ctx.timeline_waits.is_empty());
     assert!(queue_ctx.binary_signals.is_empty());
+
+    
+    // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
+    // select the best one.
+    let present_queue = queues_router.of_type(QueueType::Graphics);
+    let queue = device.get_raw_queue(present_queue);
+
+
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
     for (swapchain, swapchain_image) in query.iter_mut() {
@@ -630,20 +638,34 @@ pub fn present(
     }
     if swapchains.is_empty() {
         // A bit of a special case: we can't call `queue_present` with an empty swapchain list.
-        // So, for all the semaphores signaled as a part of this step, we can't reuse them.
-        for semaphore in queue_ctx.binary_waits.iter() {
-            if let Some(destroy_handle) = binary_semaphore_tracker.destroy(semaphore.index) {
-                queue_ctx.retained_objects.push(Box::new(destroy_handle));
+        // So, we call an empty `vkQueueSubmit` instead to reset all these semaphores and give
+        // us an opportunity to wait on its completion.
+        let mut semaphores: Vec<vk::SemaphoreSubmitInfo> = Vec::new();
+        for op in queue_ctx.binary_waits.iter() {
+            if let Some(semaphore) = binary_semaphore_tracker.wait(op.index) {
+                semaphores.push(vk::SemaphoreSubmitInfo {
+                    semaphore: semaphore.raw(),
+                    stage_mask: op.access.stage,
+                    ..Default::default()
+                });
+                queue_ctx.retained_objects.push(Box::new(semaphore));
             }
-
+        }
+        if !semaphores.is_empty() {
+            unsafe {
+                let fence = queue_ctx.fence_to_wait();
+                device.queue_submit2(queue, &[
+                    vk::SubmitInfo2 {
+                        wait_semaphore_info_count: semaphores.len() as u32,
+                        p_wait_semaphore_infos: semaphores.as_ptr(),
+                        ..Default::default()
+                    }
+                ], fence).unwrap();
+            }
         }
         return;
     }
 
-    // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
-    // select the best one.
-    let present_queue = queues_router.of_type(QueueType::Graphics);
-    let queue = device.get_raw_queue(present_queue);
     let semaphore_to_wait: Vec<vk::Semaphore> = queue_ctx
         .binary_waits
         .iter()

@@ -152,8 +152,8 @@ impl Drop for QueueSystemState {
     fn drop(&mut self) {
         // On destuction, wait for everything to finish execution.
         unsafe {
-            if !self.timeline_waits.is_empty() {
-                let timeline_semaphore_to_wait = self.timeline_waits[0].semaphore;
+            if !self.timeline_signals.is_empty() {
+                let timeline_semaphore_to_wait = self.timeline_signals[0].semaphore;
                 self.device.wait_semaphores(&vk::SemaphoreWaitInfo {
                     semaphore_count: 1,
                     p_semaphores: &timeline_semaphore_to_wait,
@@ -164,6 +164,10 @@ impl Drop for QueueSystemState {
             if !self.fence_to_wait.is_empty() {
                 let fence_to_wait: Vec<vk::Fence> = self.fence_to_wait.values().cloned().collect();
                 self.device.wait_for_fences(&fence_to_wait, true, !0).unwrap();
+            }
+            // Now, it's safe to destroy things like `QuerySystemSTate::retained_objects`
+            for fence in self.fence_to_wait.values() {
+                self.device.destroy_fence(*fence, None);
             }
         }
     }
@@ -434,17 +438,6 @@ pub struct RecycledBinarySemaphore {
     semaphore: vk::Semaphore,
     sender: crossbeam_channel::Sender<vk::Semaphore>,
 }
-pub struct BinarySemaphoreToDestroy {
-    device: Device,
-    semaphore: vk::Semaphore,
-}
-impl Drop for BinarySemaphoreToDestroy {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_semaphore(self.semaphore, None);
-        }
-    }
-}
 impl RecycledBinarySemaphore {
     pub fn raw(&self) -> vk::Semaphore {
         self.semaphore
@@ -491,18 +484,6 @@ impl RenderSystemsBinarySemaphoreTracker {
             None
         } else {
             Some(RecycledBinarySemaphore { semaphore, sender: self.sender.clone() })
-        }
-    }
-    pub fn destroy(&self, index: u32) -> Option<BinarySemaphoreToDestroy> {
-        let semaphore = self.semaphores[index as usize].swap(0, std::sync::atomic::Ordering::Relaxed);
-        let semaphore = vk::Semaphore::from_raw(semaphore);
-        if semaphore == vk::Semaphore::null() {
-            None
-        } else {
-            Some(BinarySemaphoreToDestroy {
-                device: self.device.clone(),
-                semaphore,
-            })
         }
     }
 }
