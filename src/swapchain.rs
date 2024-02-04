@@ -6,10 +6,9 @@ use bevy_ecs::{prelude::*, query::{QueryFilter, QuerySingleError}};
 use bevy_window::{PrimaryWindow, Window};
 
 use crate::{
-    ecs::{QueueContext, RenderComponent, RenderComponentMut, RenderSystemPass},
+    ecs::{QueueContext, RenderComponent, RenderComponentMut, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
     plugin::RhyoliteApp,
-    utils::ColorSpace,
-    utils::SharingMode,
+    utils::{ColorSpace, SharingMode},
     Device, HasDevice, PhysicalDevice, QueueType, QueuesRouter, Surface,
 };
 
@@ -565,12 +564,12 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         ),
         Filter,
     >,
+    binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
 ) {
     assert!(queue_ctx.binary_waits.is_empty());
     assert!(queue_ctx.timeline_signals.is_empty());
     assert!(queue_ctx.timeline_waits.is_empty());
     assert!(queue_ctx.binary_signals.len() == 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously.");
-    let semaphore = queue_ctx.binary_signals[0].semaphore;
 
     let (mut swapchain, mut swapchain_image) = match query.get_single_mut() {
         Ok(item) => item,
@@ -581,6 +580,8 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
             panic!("{}", str)
         }
     };
+    let semaphore = queue_ctx.binary_signals[0].index;
+    let semaphore = binary_semaphore_tracker.signal(semaphore);
 
     let (indice, suboptimal) = unsafe {
         // Technically, we don't have to do this here. With Swapchain_Maintenance1,
@@ -613,6 +614,7 @@ pub fn present(
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
     mut query: Query<(&mut Swapchain, RenderComponent<SwapchainImage>)>,
+    binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
 ) {
     assert!(queue_ctx.timeline_signals.is_empty());
     assert!(queue_ctx.timeline_waits.is_empty());
@@ -627,6 +629,14 @@ pub fn present(
         }
     }
     if swapchains.is_empty() {
+        // A bit of a special case: we can't call `queue_present` with an empty swapchain list.
+        // So, for all the semaphores signaled as a part of this step, we can't reuse them.
+        for semaphore in queue_ctx.binary_waits.iter() {
+            if let Some(destroy_handle) = binary_semaphore_tracker.destroy(semaphore.index) {
+                queue_ctx.retained_objects.push(Box::new(destroy_handle));
+            }
+
+        }
         return;
     }
 
@@ -637,7 +647,12 @@ pub fn present(
     let semaphore_to_wait: Vec<vk::Semaphore> = queue_ctx
         .binary_waits
         .iter()
-        .map(|wait| wait.semaphore.raw())
+        .filter_map(|wait| {
+            let semaphore = binary_semaphore_tracker.wait(wait.index)?;
+            let raw = semaphore.raw();
+            queue_ctx.retained_objects.push(Box::new(semaphore));
+            Some(raw)
+        })
         .collect();
     unsafe {
         swapchain_loader

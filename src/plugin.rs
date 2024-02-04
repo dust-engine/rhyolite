@@ -264,10 +264,7 @@ impl Plugin for RhyolitePlugin {
             features.pdevice_features2(),
         )
         .unwrap();
-        let binary_semaphore_pool = crate::BinarySemaphorePool::new(device.clone());
-
         app.insert_resource(device);
-        app.insert_resource(binary_semaphore_pool);
     }
 }
 

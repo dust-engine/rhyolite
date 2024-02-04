@@ -6,7 +6,6 @@ mod instance;
 mod physical_device;
 mod plugin;
 mod queue;
-mod semaphore;
 mod surface;
 mod swapchain;
 
@@ -18,6 +17,5 @@ pub use instance::*;
 pub use physical_device::*;
 pub use plugin::RhyolitePlugin;
 pub use queue::*;
-pub use semaphore::*;
 pub use surface::*;
 pub use swapchain::*;

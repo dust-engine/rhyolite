@@ -18,12 +18,10 @@ pub mod queue_cap {
 }
 
 use std::{
-    any::Any,
-    collections::BTreeMap,
-    ops::{Deref, DerefMut},
+    any::Any, cell::RefCell, collections::BTreeMap, ops::{Deref, DerefMut}, sync::atomic::AtomicU64
 };
 
-use ash::vk;
+use ash::vk::{self, Handle};
 use bevy_ecs::{
     component::{ComponentDescriptor, ComponentId, ComponentInfo},
     system::{Res, ResMut, Resource, SystemParam},
@@ -33,7 +31,7 @@ use queue_cap::*;
 
 use crate::{
     command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType,
-    BinarySemaphore, Device, HasDevice, QueueRef, QueuesRouter,
+    Device, HasDevice, QueueRef, QueuesRouter,
 };
 
 use super::{Access, RenderResRegistry, RenderSystemConfig};
@@ -127,8 +125,8 @@ where
 }
 
 #[derive(Debug)]
-pub struct BinarySemaphoreWaitOp {
-    pub semaphore: BinarySemaphore,
+pub struct BinarySemaphoreOp {
+    pub index: u32,
     pub access: Access,
 }
 #[derive(Debug)]
@@ -140,55 +138,60 @@ pub struct SemaphoreOp {
 pub struct QueueSystemState {
     pub queue: QueueRef,
     pub frame_index: u64,
-    pub binary_signals: Vec<SemaphoreOp>,
-    pub binary_waits: Vec<BinarySemaphoreWaitOp>,
+    pub binary_signals: Vec<BinarySemaphoreOp>,
+    pub binary_waits: Vec<BinarySemaphoreOp>,
     pub timeline_signals: Vec<SemaphoreOp>,
     pub timeline_waits: Vec<SemaphoreOp>,
-    device_component_id: ComponentId,
+    device: Device,
 
     /// Map from frame index to retained objects
     pub retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     pub fence_to_wait: BTreeMap<u64, vk::Fence>,
+}
+impl Drop for QueueSystemState {
+    fn drop(&mut self) {
+        // On destuction, wait for everything to finish execution.
+        unsafe {
+            if !self.timeline_waits.is_empty() {
+                let timeline_semaphore_to_wait = self.timeline_waits[0].semaphore;
+                self.device.wait_semaphores(&vk::SemaphoreWaitInfo {
+                    semaphore_count: 1,
+                    p_semaphores: &timeline_semaphore_to_wait,
+                    p_values: &self.frame_index,
+                    ..Default::default()
+                }, !0).unwrap();
+            }
+            if !self.fence_to_wait.is_empty() {
+                let fence_to_wait: Vec<vk::Fence> = self.fence_to_wait.values().cloned().collect();
+                self.device.wait_for_fences(&fence_to_wait, true, !0).unwrap();
+            }
+        }
+    }
 }
 #[derive(Debug)]
 pub struct QueueSystemInitialState {
     pub queue: QueueRef,
     pub timeline_signals: Vec<SemaphoreOp>,
     pub timeline_waits: Vec<SemaphoreOp>,
-}
-#[derive(Debug)]
-pub struct QueueSystemStateUpdate {
-    pub frame_index: u64,
-    pub binary_signals: Vec<SemaphoreOp>,
-    pub binary_waits: Vec<BinarySemaphoreWaitOp>,
+    pub binary_signals: Vec<BinarySemaphoreOp>,
+    pub binary_waits: Vec<BinarySemaphoreOp>
 }
 
-pub struct QueueContext<'world, 'state, const Q: char>
+pub struct QueueContext<'state, const Q: char>
 where
     (): IsQueueCap<Q>,
 {
-    device: Res<'world, Device>,
+    device: &'state Device,
     pub queue: QueueRef,
     pub frame_index: u64,
-    pub binary_signals: Vec<SemaphoreOp>,
-    pub binary_waits: Vec<BinarySemaphoreWaitOp>,
+    pub binary_signals: &'state [BinarySemaphoreOp],
+    pub binary_waits: &'state [BinarySemaphoreOp],
     pub timeline_signals: &'state [SemaphoreOp],
     pub timeline_waits: &'state [SemaphoreOp],
-    retained_objects: &'state mut Vec<Box<dyn Send + Sync>>,
+    pub(crate) retained_objects: &'state mut Vec<Box<dyn Send + Sync>>,
     fences: &'state mut BTreeMap<u64, vk::Fence>,
 }
-impl<const Q: char> Drop for QueueContext<'_, '_, Q>
-where
-    (): IsQueueCap<Q>,
-{
-    fn drop(&mut self) {
-        for op in std::mem::take(&mut self.binary_waits) {
-            self.retained_objects.push(Box::new(op));
-        }
-    }
-}
-
-impl<const Q: char> QueueContext<'_, '_, Q>
+impl<const Q: char> QueueContext<'_, Q>
 where
     (): IsQueueCap<Q>,
 {
@@ -231,21 +234,20 @@ where
     }
 }
 
-unsafe impl<const Q: char> SystemParam for QueueContext<'_, '_, Q>
+unsafe impl<const Q: char> SystemParam for QueueContext<'_, Q>
 where
     (): IsQueueCap<Q>,
 {
     type State = QueueSystemState;
 
-    type Item<'world, 'state> = QueueContext<'world, 'state, Q>;
+    type Item<'world, 'state> = QueueContext<'state, Q>;
 
     fn init_state(
         world: &mut World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
-        let device_component_id = Res::<Device>::init_state(world, system_meta);
         QueueSystemState {
-            device_component_id,
+            device: world.resource::<Device>().clone(),
             queue: QueueRef::default(),
             binary_signals: Vec::new(),
             binary_waits: Vec::new(),
@@ -278,14 +280,8 @@ where
             state.queue = initial_state.queue;
             state.timeline_signals = initial_state.timeline_signals;
             state.timeline_waits = initial_state.timeline_waits;
-            return;
-        }
-        if c.is::<QueueSystemStateUpdate>() {
-            let config = config.take().unwrap();
-            let update: Box<QueueSystemStateUpdate> = config.downcast().unwrap();
-            state.binary_signals = update.binary_signals;
-            state.binary_waits = update.binary_waits;
-            state.frame_index = update.frame_index;
+            state.binary_signals = initial_state.binary_signals;
+            state.binary_waits = initial_state.binary_waits;
             return;
         }
     }
@@ -296,12 +292,7 @@ where
         world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        let device: Res<'world, Device> = Res::<Device>::get_param(
-            &mut state.device_component_id,
-            system_meta,
-            world,
-            change_tick,
-        );
+        state.frame_index += 1;
 
         let num_frame_in_flight = 3;
 
@@ -311,7 +302,7 @@ where
                 let signaled_semaphore = state.timeline_signals[0].semaphore;
                 // Just waiting on one of those timeline semaphore should be fine, right?
                 unsafe {
-                    device
+                    state.device
                         .wait_semaphores(
                             &vk::SemaphoreWaitInfo {
                                 semaphore_count: 1,
@@ -326,7 +317,7 @@ where
             }
             if let Some(&fence) = state.fence_to_wait.get(&wait_value) {
                 unsafe {
-                    device.wait_for_fences(&[fence], true, !0).unwrap();
+                    state.device.wait_for_fences(&[fence], true, !0).unwrap();
                     // This fence will later be cleaned up by a call to fence_to_wait
                 }
             }
@@ -339,11 +330,11 @@ where
             state.retained_objects.entry(state.frame_index).or_default();
 
         QueueContext {
-            device,
+            device: &state.device,
             queue: state.queue,
             frame_index: state.frame_index,
-            binary_signals: std::mem::take(&mut state.binary_signals),
-            binary_waits: std::mem::take(&mut state.binary_waits),
+            binary_signals: &state.binary_signals,
+            binary_waits:&state.binary_waits,
             timeline_signals: &state.timeline_signals,
             timeline_waits: &state.timeline_waits,
             retained_objects,
@@ -359,6 +350,7 @@ where
 pub(crate) fn flush_system_graph<const Q: char>(
     mut commands: RenderCommands<Q>,
     queue_ctx: QueueContext<Q>,
+    binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
     device: Res<Device>,
 ) where
     (): IsQueueCap<Q>,
@@ -368,7 +360,7 @@ pub(crate) fn flush_system_graph<const Q: char>(
         .binary_signals
         .iter()
         .map(|op| vk::SemaphoreSubmitInfo {
-            semaphore: op.semaphore,
+            semaphore: binary_semaphore_tracker.signal(op.index),
             value: 0,
             stage_mask: op.access.stage,
             ..Default::default()
@@ -388,14 +380,17 @@ pub(crate) fn flush_system_graph<const Q: char>(
     let semaphore_waits = queue_ctx
         .binary_waits
         .iter()
-        .map(|op| {
+        .filter_map(|op| {
+            let semaphore = binary_semaphore_tracker.wait(op.index)?;
+            let raw = semaphore.raw();
+            queue_ctx.retained_objects.push(Box::new(semaphore));
             let info = vk::SemaphoreSubmitInfo {
-                semaphore: op.semaphore.raw(),
+                semaphore: raw,
                 value: 0,
                 stage_mask: op.access.stage,
                 ..Default::default()
             };
-            info
+            Some(info)
         })
         .chain(
             queue_ctx
@@ -430,5 +425,84 @@ pub(crate) fn flush_system_graph<const Q: char>(
                 vk::Fence::null(),
             )
             .unwrap();
+    }
+}
+
+
+
+pub struct RecycledBinarySemaphore {
+    semaphore: vk::Semaphore,
+    sender: crossbeam_channel::Sender<vk::Semaphore>,
+}
+pub struct BinarySemaphoreToDestroy {
+    device: Device,
+    semaphore: vk::Semaphore,
+}
+impl Drop for BinarySemaphoreToDestroy {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_semaphore(self.semaphore, None);
+        }
+    }
+}
+impl RecycledBinarySemaphore {
+    pub fn raw(&self) -> vk::Semaphore {
+        self.semaphore
+    }
+}
+impl Drop for RecycledBinarySemaphore {
+    fn drop(&mut self) {
+        self.sender.send(self.semaphore).unwrap();
+    }
+}
+#[derive(Resource)]
+pub struct RenderSystemsBinarySemaphoreTracker {
+    device: Device,
+    sender: crossbeam_channel::Sender<vk::Semaphore>,
+    receiver: crossbeam_channel::Receiver<vk::Semaphore>,
+    semaphores: Vec<AtomicU64>
+}
+impl RenderSystemsBinarySemaphoreTracker {
+    pub fn new(device: Device, max_semaphore: usize) -> Self {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        Self {
+            device,
+            sender,
+            receiver,
+            semaphores: (0..max_semaphore).map(|_| AtomicU64::new(0)).collect(),
+        }
+    }
+    pub fn signal(&self, index: u32) -> vk::Semaphore {
+        let semaphore = match self.receiver.try_recv() {
+            Ok(semaphore) => semaphore,
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                let semaphore = unsafe { self.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap() };
+                semaphore
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => panic!()
+        };
+        self.semaphores[index as usize].compare_exchange(0, semaphore.as_raw(), std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed).expect("Double signal");
+        semaphore
+    }
+    pub fn wait(&self, index: u32) -> Option<RecycledBinarySemaphore> {
+        let semaphore = self.semaphores[index as usize].swap(0, std::sync::atomic::Ordering::Relaxed);
+        let semaphore = vk::Semaphore::from_raw(semaphore);
+        if semaphore == vk::Semaphore::null() {
+            None
+        } else {
+            Some(RecycledBinarySemaphore { semaphore, sender: self.sender.clone() })
+        }
+    }
+    pub fn destroy(&self, index: u32) -> Option<BinarySemaphoreToDestroy> {
+        let semaphore = self.semaphores[index as usize].swap(0, std::sync::atomic::Ordering::Relaxed);
+        let semaphore = vk::Semaphore::from_raw(semaphore);
+        if semaphore == vk::Semaphore::null() {
+            None
+        } else {
+            Some(BinarySemaphoreToDestroy {
+                device: self.device.clone(),
+                semaphore,
+            })
+        }
     }
 }
