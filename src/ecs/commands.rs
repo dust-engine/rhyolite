@@ -208,7 +208,12 @@ where
             let fence_to_recycle = self
                 .fences
                 .remove(&(self.frame_index - num_frame_in_flight));
-            fence = fence_to_recycle.unwrap_or_default();
+            if let Some(fence_to_recycle) = fence_to_recycle {
+                unsafe {
+                    self.device.reset_fences(&[fence_to_recycle]).unwrap();
+                }
+                fence = fence_to_recycle;
+            }
         }
 
         if fence == vk::Fence::null() {
@@ -302,7 +307,6 @@ where
 
         if state.frame_index > num_frame_in_flight {
             let wait_value = state.frame_index - num_frame_in_flight;
-            let mut waited = false;
             if !state.timeline_signals.is_empty() {
                 let signaled_semaphore = state.timeline_signals[0].semaphore;
                 // Just waiting on one of those timeline semaphore should be fine, right?
@@ -319,22 +323,15 @@ where
                         )
                         .unwrap();
                 }
-                waited = true;
             }
             if let Some(&fence) = state.fence_to_wait.get(&wait_value) {
                 unsafe {
                     device.wait_for_fences(&[fence], true, !0).unwrap();
-                    device.reset_fences(&[fence]).unwrap();
                     // This fence will later be cleaned up by a call to fence_to_wait
-                    waited = true;
                 }
             }
 
             let objs = state.retained_objects.remove(&wait_value).unwrap();
-
-            if !waited && !objs.is_empty() {
-                println!("Warning: retained resources dropped without waiting on anything.")
-            }
             drop(objs);
         }
 
@@ -421,7 +418,7 @@ pub(crate) fn flush_system_graph<const Q: char>(
                     flags: vk::SubmitFlags::empty(),
                     wait_semaphore_info_count: semaphore_waits.len() as u32,
                     p_wait_semaphore_infos: semaphore_waits.as_ptr(),
-                    command_buffer_info_count: 1,
+                    command_buffer_info_count: if command_buffer == vk::CommandBuffer::null() { 0 } else { 1 },
                     p_command_buffer_infos: &vk::CommandBufferSubmitInfoKHR {
                         command_buffer: command_buffer,
                         ..Default::default()

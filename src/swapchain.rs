@@ -2,7 +2,7 @@ use std::{borrow::BorrowMut, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
 use bevy_app::{App, Plugin, Update};
-use bevy_ecs::{prelude::*, query::QueryFilter};
+use bevy_ecs::{prelude::*, query::{QueryFilter, QuerySingleError}};
 use bevy_window::{PrimaryWindow, Window};
 
 use crate::{
@@ -552,6 +552,10 @@ pub struct SwapchainImage {
     indice: u32,
 }
 
+/// Acquires the next image from the swapchain by calling [`ash::extensions::khr::Swapchain::acquire_next_image`].
+/// Generic parameter `Filter` is used to uniquely specify the swapchain to acquire from.
+/// For example, `With<PrimaryWindow>` will only acquire the next image from the swapchain
+/// associated with the primary window.
 pub fn acquire_swapchain_image<Filter: QueryFilter>(
     mut queue_ctx: QueueContext<'g'>,
     mut query: Query<
@@ -568,7 +572,16 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     assert!(queue_ctx.binary_signals.len() == 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously.");
     let semaphore = queue_ctx.binary_signals[0].semaphore;
 
-    let (mut swapchain, mut swapchain_image) = query.single_mut();
+    let (mut swapchain, mut swapchain_image) = match query.get_single_mut() {
+        Ok(item) => item,
+        Err(QuerySingleError::NoEntities(str)) => {
+            return;
+        }
+        Err(QuerySingleError::MultipleEntities(str)) => {
+            panic!("{}", str)
+        }
+    };
+
     let (indice, suboptimal) = unsafe {
         // Technically, we don't have to do this here. With Swapchain_Maintenance1,
         // we could do this in the present workflow which should be more correct.
@@ -614,7 +627,6 @@ pub fn present(
         }
     }
     if swapchains.is_empty() {
-        tracing::warn!("Nothing to present!");
         return;
     }
 

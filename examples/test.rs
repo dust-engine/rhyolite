@@ -50,14 +50,14 @@ fn clear_main_window_color(
         return;
     };
     commands.record_commands().pipeline_barrier(
-        vk::PipelineStageFlags::TOP_OF_PIPE,
-        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        vk::PipelineStageFlags::TRANSFER,
+        vk::PipelineStageFlags::TRANSFER,
         vk::DependencyFlags::empty(),
         &[],
         &[],
         &[vk::ImageMemoryBarrier {
             src_access_mask: vk::AccessFlags::empty(),
-            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
             old_layout: vk::ImageLayout::UNDEFINED,
             new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             image: swapchain_image.inner.image,
@@ -86,13 +86,13 @@ fn clear_main_window_color(
         }],
     );
     commands.record_commands().pipeline_barrier(
-        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+        vk::PipelineStageFlags::TRANSFER,
+        vk::PipelineStageFlags::TRANSFER,
         vk::DependencyFlags::empty(),
         &[],
         &[],
         &[vk::ImageMemoryBarrier {
-            src_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
             dst_access_mask: vk::AccessFlags::empty(),
             old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
