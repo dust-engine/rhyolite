@@ -2,11 +2,17 @@ use std::{borrow::BorrowMut, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
 use bevy_app::{App, Plugin, Update};
-use bevy_ecs::{prelude::*, query::{QueryFilter, QuerySingleError}};
+use bevy_ecs::{
+    prelude::*,
+    query::{QueryFilter, QuerySingleError},
+};
 use bevy_window::{PrimaryWindow, Window};
 
 use crate::{
-    ecs::{QueueContext, RenderComponent, RenderComponentMut, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
+    ecs::{
+        QueueContext, RenderComponent, RenderComponentMut, RenderSystemPass,
+        RenderSystemsBinarySemaphoreTracker,
+    },
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
     Device, HasDevice, PhysicalDevice, QueueType, QueuesRouter, Surface,
@@ -527,7 +533,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
 
     let (mut swapchain, mut swapchain_image) = match query.get_single_mut() {
         Ok(item) => item,
-        Err(QuerySingleError::NoEntities(str)) => {
+        Err(QuerySingleError::NoEntities(_str)) => {
             return;
         }
         Err(QuerySingleError::MultipleEntities(str)) => {
@@ -552,12 +558,9 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     if suboptimal {
         tracing::warn!("Suboptimal swapchain");
     }
-    let image= swapchain.0.images[indice as usize];
+    let image = swapchain.0.images[indice as usize];
     unsafe {
-        *swapchain_image.get_on_host_mut() = SwapchainImage {
-            image,
-            indice,
-        };
+        *swapchain_image.get_on_host_mut() = SwapchainImage { image, indice };
     }
 }
 
@@ -573,12 +576,10 @@ pub fn present(
     assert!(queue_ctx.timeline_waits.is_empty());
     assert!(queue_ctx.binary_signals.is_empty());
 
-    
     // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
     // select the best one.
     let present_queue = queues_router.of_type(QueueType::Graphics);
     let queue = device.get_raw_queue(present_queue);
-
 
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
@@ -607,13 +608,17 @@ pub fn present(
         if !semaphores.is_empty() {
             unsafe {
                 let fence = queue_ctx.fence_to_wait();
-                device.queue_submit2(queue, &[
-                    vk::SubmitInfo2 {
-                        wait_semaphore_info_count: semaphores.len() as u32,
-                        p_wait_semaphore_infos: semaphores.as_ptr(),
-                        ..Default::default()
-                    }
-                ], fence).unwrap();
+                device
+                    .queue_submit2(
+                        queue,
+                        &[vk::SubmitInfo2 {
+                            wait_semaphore_info_count: semaphores.len() as u32,
+                            p_wait_semaphore_infos: semaphores.as_ptr(),
+                            ..Default::default()
+                        }],
+                        fence,
+                    )
+                    .unwrap();
             }
         }
         return;

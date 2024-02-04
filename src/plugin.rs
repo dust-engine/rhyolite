@@ -12,7 +12,6 @@ use std::{
 };
 
 use crate::{
-    command_pool::RecordingCommandBuffer,
     ecs::{RenderResRegistry, RenderSystemPass},
     Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
     QueuesRouter, Version,

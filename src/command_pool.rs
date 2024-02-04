@@ -1,6 +1,4 @@
 use ash::{prelude::VkResult, vk};
-use bevy_ecs::system::Resource;
-use thread_local::ThreadLocal;
 
 use crate::{Device, HasDevice};
 

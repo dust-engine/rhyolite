@@ -1,5 +1,3 @@
-use std::mem;
-
 use ash::{vk, Device};
 
 use crate::ecs::queue_cap::IsQueueCap;

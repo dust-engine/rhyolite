@@ -2,31 +2,25 @@ use std::collections::BTreeMap;
 
 use ash::vk;
 use bevy_ecs::{
-    schedule::{
-        IntoSystemConfigs, NodeId, ProcessNodeConfig, ScheduleBuildPass, ScheduleGraph, SystemNode,
-        SystemSchedule,
-    },
-    system::{BoxedSystem, IntoSystem, Resource, System},
+    schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
+    system::{BoxedSystem, IntoSystem, System},
     world::World,
 };
-use bevy_utils::{
-    petgraph::{
-        dot::Config,
-        graphmap::GraphMap,
-        visit::{Dfs, EdgeRef, IntoEdgeReferences, Walker},
-        Direction::{Incoming, Outgoing},
-    },
-    ConfigMap,
+use bevy_utils::petgraph::{
+    visit::{Dfs, EdgeRef, IntoEdgeReferences, Walker},
+    Direction::{Incoming, Outgoing},
 };
 
 use crate::{
     ecs::{
-        BinarySemaphoreOp, QueueSystemDependencyConfig, QueueSystemInitialState, RenderSystemsBinarySemaphoreTracker, SemaphoreOp
+        BinarySemaphoreOp, QueueSystemDependencyConfig, QueueSystemInitialState,
+        RenderSystemsBinarySemaphoreTracker, SemaphoreOp,
     },
-    queue::{QueueRef, QueuesRouter},  Device, QueueType,
+    queue::{QueueRef, QueuesRouter},
+    Device, QueueType,
 };
 
-use super::{queue_cap::IsQueueCap, QueueContext, RenderCommands, RenderSystemConfig};
+use super::RenderSystemConfig;
 
 #[derive(Debug)]
 pub struct RenderSystemPass {
@@ -315,7 +309,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                         assert_eq!(queue_graph_node_info.stage_index, meta.stage_index);
                         assert_eq!(queue_graph_node_info.queue, meta.selected_queue);
                     }
-                    let queue_graph_node = queue_graph_node_info
+                    let _queue_graph_node = queue_graph_node_info
                         .get_or_insert(QueueGraphNode {
                             stage_index: meta.stage_index,
                             queue: meta.selected_queue,
@@ -363,7 +357,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             }
         }
         // Step 1.4: Insert queue submission systems
-        for (i, queue_node) in queue_graph_nodes.iter_mut().enumerate() {
+        for (_i, queue_node) in queue_graph_nodes.iter_mut().enumerate() {
             if queue_node.is_queue_op {
                 assert!(queue_node.nodes.len() == 1);
                 queue_node.queue_node_index = queue_node.nodes[0];
@@ -472,40 +466,36 @@ impl ScheduleBuildPass for RenderSystemPass {
         for (i, queue_node) in self.queue_graph_nodes.iter().enumerate() {
             let mut signals: Vec<SemaphoreOp> = Vec::new();
             let mut binary_signals: Vec<BinarySemaphoreOp> = Vec::new();
-            self
-                .queue_graph
+            self.queue_graph
                 .edges_directed(i as u32, Outgoing)
-                .for_each(|(_, _, edge)| {
-                    match edge.semaphore_id.as_ref().unwrap() {
-                        QueueGraphEdgeSemaphoreType::Binary(u32) => binary_signals.push(BinarySemaphoreOp {
+                .for_each(|(_, _, edge)| match edge.semaphore_id.as_ref().unwrap() {
+                    QueueGraphEdgeSemaphoreType::Binary(u32) => {
+                        binary_signals.push(BinarySemaphoreOp {
                             index: *u32,
                             access: edge.config.signal.clone(),
-                        }),
-                        QueueGraphEdgeSemaphoreType::Timeline(u32) => {
-                            signals.push(SemaphoreOp {
-                                semaphore: timeline_semaphores[*u32 as usize],
-                                access: edge.config.signal.clone(),
-                            })
-                        }
+                        })
                     }
+                    QueueGraphEdgeSemaphoreType::Timeline(u32) => signals.push(SemaphoreOp {
+                        semaphore: timeline_semaphores[*u32 as usize],
+                        access: edge.config.signal.clone(),
+                    }),
                 });
             let mut waits: Vec<SemaphoreOp> = Vec::new();
             let mut binary_waits: Vec<BinarySemaphoreOp> = Vec::new();
-            self
-                .queue_graph
+            self.queue_graph
                 .edges_directed(i as u32, Incoming)
-                .for_each(|(_, _, edge)| {
-                    match edge.semaphore_id.as_ref().unwrap() {
-                        QueueGraphEdgeSemaphoreType::Binary(u32) => binary_waits.push(BinarySemaphoreOp {
+                .for_each(|(_, _, edge)| match edge.semaphore_id.as_ref().unwrap() {
+                    QueueGraphEdgeSemaphoreType::Binary(u32) => {
+                        binary_waits.push(BinarySemaphoreOp {
                             index: *u32,
                             access: edge.config.wait.clone(),
-                        }),
-                        QueueGraphEdgeSemaphoreType::Timeline(u32) => {
-                            waits.push(SemaphoreOp {
-                                semaphore: timeline_semaphores[*u32 as usize],
-                                access: edge.config.wait.clone(),
-                            });
-                        }
+                        })
+                    }
+                    QueueGraphEdgeSemaphoreType::Timeline(u32) => {
+                        waits.push(SemaphoreOp {
+                            semaphore: timeline_semaphores[*u32 as usize],
+                            access: edge.config.wait.clone(),
+                        });
                     }
                 });
 
@@ -518,11 +508,12 @@ impl ScheduleBuildPass for RenderSystemPass {
                     timeline_signals: signals,
                     timeline_waits: waits,
                     binary_signals,
-                    binary_waits
+                    binary_waits,
                 }));
         }
         let device: &Device = world.resource();
-        let binary_semaphores = RenderSystemsBinarySemaphoreTracker::new(device.clone(), binary_semaphore_id as usize);
+        let binary_semaphores =
+            RenderSystemsBinarySemaphoreTracker::new(device.clone(), binary_semaphore_id as usize);
         world.insert_resource(binary_semaphores);
 
         // Step 1.5: Command buffer recording re-serialization

@@ -4,9 +4,9 @@ use ash::vk;
 use bevy_ecs::{
     archetype::{ArchetypeComponentId, ArchetypeGeneration},
     component::{Component, ComponentId},
-    query::{Access, QueryData, ReadOnlyQueryData, WorldQuery},
+    query::{QueryData, ReadOnlyQueryData, WorldQuery},
     system::{Res, ResMut, Resource, SystemParam},
-    world::{unsafe_world_cell::UnsafeWorldCell, Mut, World},
+    world::{unsafe_world_cell::UnsafeWorldCell, Mut},
 };
 use bevy_utils::ConfigMap;
 

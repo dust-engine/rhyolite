@@ -1,8 +1,7 @@
 use ash::vk;
 use bevy_ecs::schedule::{IntoSystemConfigs, SystemConfigs};
-use bevy_utils::prelude::default;
 
-use crate::queue::{QueueRef, QueueType};
+use crate::queue::QueueType;
 
 use super::RenderSystemPass;
 
