@@ -81,7 +81,7 @@ struct SwapchainInner {
     loader: SwapchainLoader,
     surface: Surface,
     inner: vk::SwapchainKHR,
-    images: Vec<(vk::Image, vk::ImageView)>,
+    images: Vec<vk::Image>,
     format: vk::Format,
     generation: u64,
 
@@ -157,7 +157,7 @@ impl Swapchain {
                 }
             }
             let swapchain = swapchain_loader.create_swapchain(&create_info, None)?;
-            let images = get_swapchain_images(&swapchain_loader, swapchain, info.image_format)?;
+            let images = swapchain_loader.get_swapchain_images(swapchain)?;
             let swapchain = SwapchainInner {
                 loader: swapchain_loader,
                 surface,
@@ -210,7 +210,7 @@ impl Swapchain {
             }
             let new_swapchain = self.0.loader.create_swapchain(&create_info, None)?;
 
-            let images = get_swapchain_images(&self.0.loader, new_swapchain, info.image_format)?;
+            let images = self.0.loader.get_swapchain_images(new_swapchain)?;
 
             let inner = SwapchainInner {
                 loader: self.0.loader.clone(),
@@ -317,54 +317,9 @@ pub(super) fn extract_swapchains(
             .insert(new_swapchain)
             .insert(SwapchainImage {
                 image: vk::Image::null(),
-                full_image_view: vk::ImageView::null(),
                 indice: u32::MAX,
             });
     }
-}
-
-unsafe fn get_swapchain_images(
-    loader: &SwapchainLoader,
-    swapchain: vk::SwapchainKHR,
-    format: vk::Format,
-) -> VkResult<Vec<(vk::Image, vk::ImageView)>> {
-    let images = loader.get_swapchain_images(swapchain)?;
-    let mut image_views: Vec<(vk::Image, vk::ImageView)> = Vec::with_capacity(images.len());
-    for image in images.into_iter() {
-        let view = loader.device().create_image_view(
-            &vk::ImageViewCreateInfo {
-                image,
-                view_type: vk::ImageViewType::TYPE_2D,
-                format,
-                components: vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::R,
-                    g: vk::ComponentSwizzle::G,
-                    b: vk::ComponentSwizzle::B,
-                    a: vk::ComponentSwizzle::A,
-                },
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                ..Default::default()
-            },
-            None,
-        );
-        match view {
-            Ok(view) => image_views.push((image, view)),
-            Err(err) => {
-                // Destroy existing
-                for (_image, view) in image_views.into_iter() {
-                    loader.device().destroy_image_view(view, None);
-                }
-                return Err(err);
-            }
-        }
-    }
-    Ok(image_views)
 }
 
 fn get_create_info<'a>(
@@ -547,7 +502,6 @@ fn get_surface_preferred_format(
 #[derive(Component)]
 pub struct SwapchainImage {
     pub image: vk::Image,
-    full_image_view: vk::ImageView,
     indice: u32,
 }
 
@@ -598,11 +552,10 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     if suboptimal {
         tracing::warn!("Suboptimal swapchain");
     }
-    let (image, image_view) = swapchain.0.images[indice as usize];
+    let image= swapchain.0.images[indice as usize];
     unsafe {
         *swapchain_image.get_on_host_mut() = SwapchainImage {
             image,
-            full_image_view: image_view,
             indice,
         };
     }

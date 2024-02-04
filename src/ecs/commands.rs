@@ -455,6 +455,19 @@ pub struct RenderSystemsBinarySemaphoreTracker {
     receiver: crossbeam_channel::Receiver<vk::Semaphore>,
     semaphores: Vec<AtomicU64>
 }
+impl Drop for RenderSystemsBinarySemaphoreTracker {
+    fn drop(&mut self) {
+        while let Ok(sem) = self.receiver.try_recv() {
+            unsafe {
+                self.device.destroy_semaphore(sem, None);
+            }
+            for sem in self.semaphores.iter_mut() {
+                let val = sem.get_mut();
+                assert!(*val == 0);
+            }
+        }
+    }
+}
 impl RenderSystemsBinarySemaphoreTracker {
     pub fn new(device: Device, max_semaphore: usize) -> Self {
         let (sender, receiver) = crossbeam_channel::unbounded();
