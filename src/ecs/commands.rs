@@ -17,7 +17,7 @@ pub mod queue_cap {
     impl IsComputeQueueCap<'c'> for () {}
 }
 
-use std::{any::Any, collections::BTreeMap, sync::atomic::AtomicU64};
+use std::{any::Any, collections::BTreeMap, sync::{atomic::AtomicU64, Arc}};
 
 use ash::vk::{self, Handle};
 use bevy_ecs::{
@@ -28,8 +28,7 @@ use bevy_ecs::{
 use queue_cap::*;
 
 use crate::{
-    command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType, Device,
-    HasDevice, QueueRef, QueuesRouter,
+    command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType, semaphore::TimelineSemaphore, Device, HasDevice, QueueRef, QueuesRouter
 };
 
 use super::{Access, RenderSystemConfig};
@@ -60,6 +59,8 @@ where
 
 pub struct RenderCommandState {
     recording_cmd_buf_component_id: ComponentId,
+    semaphores_to_signal: Option<Arc<TimelineSemaphore>>,
+    frame_index: u64,
 }
 
 unsafe impl<'a, const Q: char> SystemParam for RenderCommands<'a, Q>
@@ -93,6 +94,8 @@ where
         }
         RenderCommandState {
             recording_cmd_buf_component_id,
+            semaphores_to_signal: None,
+            frame_index: 0,
         }
     }
     fn default_configs(config: &mut bevy_utils::ConfigMap) {
@@ -105,6 +108,17 @@ where
         let config = config.entry::<RenderSystemConfig>().or_default();
         config.queue = flags;
     }
+    fn set_configs(state: &mut Self::State, config: &mut Option<Box<dyn Any>>) {
+        let Some(c) = config else {
+            return;
+        };
+        if c.is::<RenderSystemInitialState>() {
+            let config = config.take().unwrap();
+            let initial_state: Box<RenderSystemInitialState> = config.downcast().unwrap();
+            state.semaphores_to_signal = Some(initial_state.timeline_signal);
+            return;
+        }
+    }
 
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
@@ -112,6 +126,13 @@ where
         world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
+        state.frame_index += 1;
+        let num_frame_in_flight = 3;
+        if let Some(semaphore) = &state.semaphores_to_signal {
+            if state.frame_index > num_frame_in_flight {
+                semaphore.wait_blocked(state.frame_index - num_frame_in_flight, !0).unwrap()
+            }
+        }
         let recording_cmd_buf = ResMut::<RecordingCommandBufferWrapper<Q>>::get_param(
             &mut state.recording_cmd_buf_component_id,
             system_meta,
@@ -127,9 +148,10 @@ pub struct BinarySemaphoreOp {
     pub index: u32,
     pub access: Access,
 }
-#[derive(Debug)]
-pub struct SemaphoreOp {
-    pub semaphore: vk::Semaphore,
+
+#[derive(Clone)]
+pub struct TimelineSemaphoreOp {
+    pub semaphore: Arc<TimelineSemaphore>,
     pub access: Access,
 }
 
@@ -138,8 +160,8 @@ pub struct QueueSystemState {
     pub frame_index: u64,
     pub binary_signals: Vec<BinarySemaphoreOp>,
     pub binary_waits: Vec<BinarySemaphoreOp>,
-    pub timeline_signals: Vec<SemaphoreOp>,
-    pub timeline_waits: Vec<SemaphoreOp>,
+    pub timeline_signals: Vec<TimelineSemaphoreOp>,
+    pub timeline_waits: Vec<TimelineSemaphoreOp>,
     device: Device,
 
     /// Map from frame index to retained objects
@@ -151,7 +173,7 @@ impl Drop for QueueSystemState {
         // On destuction, wait for everything to finish execution.
         unsafe {
             if !self.timeline_signals.is_empty() {
-                let timeline_semaphore_to_wait = self.timeline_signals[0].semaphore;
+                let timeline_semaphore_to_wait = self.timeline_signals[0].semaphore.raw();
                 self.device
                     .wait_semaphores(
                         &vk::SemaphoreWaitInfo {
@@ -177,13 +199,18 @@ impl Drop for QueueSystemState {
         }
     }
 }
-#[derive(Debug)]
+
 pub struct QueueSystemInitialState {
     pub queue: QueueRef,
-    pub timeline_signals: Vec<SemaphoreOp>,
-    pub timeline_waits: Vec<SemaphoreOp>,
+    pub timeline_signals: Vec<TimelineSemaphoreOp>,
+    pub timeline_waits: Vec<TimelineSemaphoreOp>,
     pub binary_signals: Vec<BinarySemaphoreOp>,
     pub binary_waits: Vec<BinarySemaphoreOp>,
+}
+
+pub struct RenderSystemInitialState {
+    pub queue: QueueRef,
+    pub timeline_signal: Arc<TimelineSemaphore>,
 }
 
 pub struct QueueContext<'state, const Q: char>
@@ -195,8 +222,8 @@ where
     pub frame_index: u64,
     pub binary_signals: &'state [BinarySemaphoreOp],
     pub binary_waits: &'state [BinarySemaphoreOp],
-    pub timeline_signals: &'state [SemaphoreOp],
-    pub timeline_waits: &'state [SemaphoreOp],
+    pub timeline_signals: &'state [TimelineSemaphoreOp],
+    pub timeline_waits: &'state [TimelineSemaphoreOp],
     pub(crate) retained_objects: &'state mut Vec<Box<dyn Send + Sync>>,
     fences: &'state mut BTreeMap<u64, vk::Fence>,
 }
@@ -308,7 +335,7 @@ where
         if state.frame_index > num_frame_in_flight {
             let wait_value = state.frame_index - num_frame_in_flight;
             if !state.timeline_signals.is_empty() {
-                let signaled_semaphore = state.timeline_signals[0].semaphore;
+                let signaled_semaphore = state.timeline_signals[0].semaphore.raw();
                 // Just waiting on one of those timeline semaphore should be fine, right?
                 unsafe {
                     state
@@ -380,7 +407,7 @@ pub(crate) fn flush_system_graph<const Q: char>(
                 .timeline_signals
                 .iter()
                 .map(|op| vk::SemaphoreSubmitInfo {
-                    semaphore: op.semaphore,
+                    semaphore: op.semaphore.raw(),
                     value: queue_ctx.frame_index,
                     stage_mask: op.access.stage,
                     ..Default::default()
@@ -407,7 +434,7 @@ pub(crate) fn flush_system_graph<const Q: char>(
                 .timeline_waits
                 .iter()
                 .map(|op| vk::SemaphoreSubmitInfo {
-                    semaphore: op.semaphore,
+                    semaphore: op.semaphore.raw(),
                     value: queue_ctx.frame_index,
                     stage_mask: op.access.stage,
                     ..Default::default()

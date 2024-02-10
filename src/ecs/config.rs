@@ -22,7 +22,7 @@ impl Default for RenderSystemConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Access {
     pub stage: vk::PipelineStageFlags2,
     pub access: vk::AccessFlags2,

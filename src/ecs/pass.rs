@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use ash::vk;
 use bevy_ecs::{
@@ -13,11 +13,8 @@ use bevy_utils::petgraph::{
 
 use crate::{
     ecs::{
-        BinarySemaphoreOp, QueueSystemDependencyConfig, QueueSystemInitialState,
-        RenderSystemsBinarySemaphoreTracker, SemaphoreOp,
-    },
-    queue::{QueueRef, QueuesRouter},
-    Device, QueueType,
+        BinarySemaphoreOp, QueueSystemDependencyConfig, QueueSystemInitialState, RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker, TimelineSemaphoreOp
+    }, queue::{QueueRef, QueuesRouter}, semaphore::TimelineSemaphore, Device, QueueType
 };
 
 use super::RenderSystemConfig;
@@ -28,7 +25,6 @@ pub struct RenderSystemPass {
     queue_graph: bevy_utils::petgraph::graphmap::DiGraphMap<u32, QueueGraphEdge>,
     queue_graph_nodes: Vec<QueueGraphNodeMeta>,
     num_binary_semaphores: u32,
-    timeline_semaphores: Vec<vk::Semaphore>,
 }
 
 impl RenderSystemPass {
@@ -38,7 +34,6 @@ impl RenderSystemPass {
             queue_graph: Default::default(),
             queue_graph_nodes: Vec::new(),
             num_binary_semaphores: 0,
-            timeline_semaphores: Vec::new(),
         }
     }
 }
@@ -449,22 +444,15 @@ impl ScheduleBuildPass for RenderSystemPass {
         self.queue_graph = queue_graph_reduced;
         self.queue_graph_nodes = queue_graph_nodes;
         self.num_binary_semaphores = binary_semaphore_id;
-        let timeline_semaphores: Vec<vk::Semaphore> = {
-            // Create timeline semaphores
-            let device = world.resource::<Device>();
-            let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
-                .semaphore_type(vk::SemaphoreType::TIMELINE)
-                .build();
-            let info = vk::SemaphoreCreateInfo::builder()
-                .push_next(&mut type_info)
-                .build();
+        let device = world.resource::<Device>();
+        let timeline_semaphores: Vec<_> = {
             (0..timeline_semaphore_id)
-                .map(|_| unsafe { device.create_semaphore(&info, None).unwrap() })
+                .map(|_| Arc::new(TimelineSemaphore::new(device.clone()).unwrap()))
                 .collect()
         };
         // distribute timeline semaphores
         for (i, queue_node) in self.queue_graph_nodes.iter().enumerate() {
-            let mut signals: Vec<SemaphoreOp> = Vec::new();
+            let mut signals: Vec<TimelineSemaphoreOp> = Vec::new();
             let mut binary_signals: Vec<BinarySemaphoreOp> = Vec::new();
             self.queue_graph
                 .edges_directed(i as u32, Outgoing)
@@ -475,12 +463,12 @@ impl ScheduleBuildPass for RenderSystemPass {
                             access: edge.config.signal.clone(),
                         })
                     }
-                    QueueGraphEdgeSemaphoreType::Timeline(u32) => signals.push(SemaphoreOp {
-                        semaphore: timeline_semaphores[*u32 as usize],
+                    QueueGraphEdgeSemaphoreType::Timeline(u32) => signals.push(TimelineSemaphoreOp {
+                        semaphore: timeline_semaphores[*u32 as usize].clone(),
                         access: edge.config.signal.clone(),
                     }),
                 });
-            let mut waits: Vec<SemaphoreOp> = Vec::new();
+            let mut waits: Vec<TimelineSemaphoreOp> = Vec::new();
             let mut binary_waits: Vec<BinarySemaphoreOp> = Vec::new();
             self.queue_graph
                 .edges_directed(i as u32, Incoming)
@@ -492,24 +480,44 @@ impl ScheduleBuildPass for RenderSystemPass {
                         })
                     }
                     QueueGraphEdgeSemaphoreType::Timeline(u32) => {
-                        waits.push(SemaphoreOp {
-                            semaphore: timeline_semaphores[*u32 as usize],
+                        waits.push(TimelineSemaphoreOp {
+                            semaphore: timeline_semaphores[*u32 as usize].clone(),
                             access: edge.config.wait.clone(),
                         });
                     }
                 });
-
-            let system = &mut graph.systems[queue_node.queue_node_index];
-            system
-                .get_mut()
-                .unwrap()
-                .set_configs(Box::new(QueueSystemInitialState {
-                    queue: queue_node.selected_queue,
-                    timeline_signals: signals,
-                    timeline_waits: waits,
-                    binary_signals,
-                    binary_waits,
-                }));
+                for i in queue_node.nodes.iter() {
+                    if *i == queue_node.queue_node_index {
+                        continue;
+                    }
+                    if signals.is_empty() {
+                        // Make sure we signal at least one timeline semaphore.
+                        signals.push(TimelineSemaphoreOp {
+                            access: Default::default(),
+                            semaphore: Arc::new(TimelineSemaphore::new(device.clone()).unwrap())
+                        })
+                    }
+                    // Set config for all nodes in system
+                    let node = &mut graph.systems[*i];
+                    node
+                    .get_mut()
+                    .unwrap()
+                    .set_configs(Box::new(RenderSystemInitialState {
+                        queue: queue_node.selected_queue,
+                        timeline_signal: signals[0].semaphore.clone()
+                    }));
+                }
+    let system = &mut graph.systems[queue_node.queue_node_index];
+    system
+        .get_mut()
+        .unwrap()
+        .set_configs(Box::new(QueueSystemInitialState {
+            queue: queue_node.selected_queue,
+            timeline_signals: signals,
+            timeline_waits: waits,
+            binary_signals,
+            binary_waits,
+        }));
         }
         let device: &Device = world.resource();
         let binary_semaphores =
