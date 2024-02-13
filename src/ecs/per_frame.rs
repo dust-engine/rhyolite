@@ -1,6 +1,12 @@
-use std::{ops::{Deref, DerefMut}, sync::Arc};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
-use bevy_ecs::{component::ComponentId, system::{Local, ResMut, Resource, System, SystemParam, SystemParamItem}, world::FromWorld};
+use bevy_ecs::{
+    component::ComponentId,
+    system::{ResMut, Resource, System, SystemParam, SystemParamItem},
+};
 
 use crate::semaphore::TimelineSemaphore;
 
@@ -8,13 +14,13 @@ use super::RenderSystemInitialState;
 
 pub trait PerFrameResource: Resource {
     type Params: SystemParam;
-    fn reset(&mut self, _params: SystemParamItem<'_, '_, Self::Params>){}
+    fn reset(&mut self, _params: SystemParamItem<'_, '_, Self::Params>) {}
     fn create(params: SystemParamItem<'_, '_, Self::Params>) -> Self;
 }
 
 pub struct PerFrameMut<'a, T: PerFrameResource> {
     index: usize,
-    items: ResMut<'a, PerFrameResourceContainer<T>>
+    items: ResMut<'a, PerFrameResourceContainer<T>>,
 }
 
 impl<'a, T: PerFrameResource> Deref for PerFrameMut<'a, T> {
@@ -22,31 +28,34 @@ impl<'a, T: PerFrameResource> Deref for PerFrameMut<'a, T> {
 
     fn deref(&self) -> &Self::Target {
         match &self.items.frames[self.index] {
-            PerFrameResourceFrame::Some { frame, last_used: _ } => frame,
-            _ => panic!()
+            PerFrameResourceFrame::Some {
+                frame,
+                last_used: _,
+            } => frame,
+            _ => panic!(),
         }
     }
 }
 impl<'a, T: PerFrameResource> DerefMut for PerFrameMut<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match &mut self.items.frames[self.index] {
-            PerFrameResourceFrame::Some { frame, last_used: _ } => frame,
-            _ => panic!()
+            PerFrameResourceFrame::Some {
+                frame,
+                last_used: _,
+            } => frame,
+            _ => panic!(),
         }
     }
 }
 
 enum PerFrameResourceFrame<T> {
     Empty,
-    Some {
-        frame: T,
-        last_used: u64
-    }
+    Some { frame: T, last_used: u64 },
 }
 #[derive(Resource)]
 struct PerFrameResourceContainer<T> {
     semaphores: Vec<Arc<TimelineSemaphore>>,
-    frames: Vec<PerFrameResourceFrame<T>>
+    frames: Vec<PerFrameResourceFrame<T>>,
 }
 
 pub struct PerFrameState<T: PerFrameResource> {
@@ -77,7 +86,10 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
 
     type Item<'world, 'state> = PerFrameMut<'world, T>;
 
-    fn init_state(world: &mut bevy_ecs::world::World, system_meta: &mut bevy_ecs::system::SystemMeta) -> Self::State {
+    fn init_state(
+        world: &mut bevy_ecs::world::World,
+        system_meta: &mut bevy_ecs::system::SystemMeta,
+    ) -> Self::State {
         let component_id = ResMut::<PerFrameResourceContainer<T>>::init_state(world, system_meta);
         let param_state = T::Params::init_state(world, system_meta);
         let num_frame_in_flight = 3;
@@ -85,17 +97,23 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
         if world.get_resource_by_id(component_id).is_none() {
             world.insert_resource(PerFrameResourceContainer::<T> {
                 semaphores: Vec::new(),
-                frames: (0..num_frame_in_flight).map(|_| PerFrameResourceFrame::Empty).collect()
+                frames: (0..num_frame_in_flight)
+                    .map(|_| PerFrameResourceFrame::Empty)
+                    .collect(),
             });
         }
         PerFrameState {
             frame_index: 0,
             component_id,
-            param_state
+            param_state,
         }
     }
 
-    fn configurate(state: &mut Self::State, config: &mut dyn std::any::Any, world: &mut bevy_ecs::world::World) {
+    fn configurate(
+        state: &mut Self::State,
+        config: &mut dyn std::any::Any,
+        world: &mut bevy_ecs::world::World,
+    ) {
         if config.is::<RenderSystemInitialState>() {
             let initial_state: &mut RenderSystemInitialState = config.downcast_mut().unwrap();
             let res = world.get_resource_mut_by_id(state.component_id).unwrap();
@@ -112,11 +130,16 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
         change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         state.frame_index += 1;
-        let mut res = ResMut::<PerFrameResourceContainer<T>>::get_param(&mut state.component_id, system_meta, world, change_tick);
+        let mut res = ResMut::<PerFrameResourceContainer<T>>::get_param(
+            &mut state.component_id,
+            system_meta,
+            world,
+            change_tick,
+        );
         let num_frame_in_flight = 3;
         if state.frame_index > num_frame_in_flight {
             let value = num_frame_in_flight - 3;
-            
+
             let semaphores = res.semaphores.iter().map(|s| (s.as_ref(), value));
             TimelineSemaphore::wait_all_blocked(semaphores, !0).unwrap();
         }
@@ -124,21 +147,21 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
         let params = T::Params::get_param(&mut state.param_state, system_meta, world, change_tick);
         match &mut res.frames[index] {
             PerFrameResourceFrame::Empty => {
-                res.frames[index] = PerFrameResourceFrame::Some{
+                res.frames[index] = PerFrameResourceFrame::Some {
                     frame: T::create(params),
-                    last_used: state.frame_index
+                    last_used: state.frame_index,
                 };
-            },
+            }
             PerFrameResourceFrame::Some { frame, last_used } => {
                 if *last_used < state.frame_index {
                     frame.reset(params);
                     *last_used = state.frame_index;
-                }  
+                }
             }
         }
         PerFrameMut {
             index: (state.frame_index % num_frame_in_flight) as usize,
-            items: res
+            items: res,
         }
     }
 }

@@ -17,18 +17,22 @@ pub mod queue_cap {
     impl IsComputeQueueCap<'c'> for () {}
 }
 
-use std::{any::Any, collections::BTreeMap, sync::{atomic::AtomicU64, Arc}};
+use std::{
+    any::Any,
+    collections::BTreeMap,
+    sync::{atomic::AtomicU64, Arc},
+};
 
 use ash::vk::{self, Handle};
 use bevy_ecs::{
-    component::ComponentId,
-    system::{lifetimeless::SRes, Res, ResMut, Resource, SystemParam},
+    system::{lifetimeless::SRes, Res, Resource, SystemParam},
     world::World,
 };
 use queue_cap::*;
 
 use crate::{
-    command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType, semaphore::TimelineSemaphore, Device, HasDevice, QueueRef, QueuesRouter
+    command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType,
+    semaphore::TimelineSemaphore, Device, HasDevice, QueueRef, QueuesRouter,
 };
 
 use super::{Access, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemConfig};
@@ -37,7 +41,7 @@ use super::{Access, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemCo
 #[derive(Resource)]
 struct RecordingCommandBufferWrapper<const Q: char>(RecordingCommandBuffer);
 impl<const Q: char> PerFrameResource for RecordingCommandBufferWrapper<Q> {
-    type Params = (SRes::<Device>, SRes::<QueuesRouter>);
+    type Params = (SRes<Device>, SRes<QueuesRouter>);
 
     fn create((device, router): bevy_ecs::system::SystemParamItem<'_, '_, Self::Params>) -> Self {
         let queue_family = router.queue_family_of_type(match Q {
@@ -50,8 +54,7 @@ impl<const Q: char> PerFrameResource for RecordingCommandBufferWrapper<Q> {
         Self(pool)
     }
     fn reset(&mut self, _: bevy_ecs::system::SystemParamItem<'_, '_, Self::Params>) {
-        self.0.pool.reset().unwrap();
-        assert_eq!(self.0.command_buffer, vk::CommandBuffer::null());
+        self.0.reset();
     }
 }
 
@@ -83,7 +86,7 @@ unsafe impl<'a, const Q: char> SystemParam for RenderCommands<'a, Q>
 where
     (): IsQueueCap<Q>,
 {
-    type State = RenderCommandState::<Q>;
+    type State = RenderCommandState<Q>;
 
     type Item<'world, 'state> = RenderCommands<'world, Q>;
 
@@ -93,9 +96,7 @@ where
     ) -> Self::State {
         let recording_cmd_buf =
             PerFrameMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
-        RenderCommandState {
-            recording_cmd_buf,
-        }
+        RenderCommandState { recording_cmd_buf }
     }
     fn default_configs(config: &mut bevy_utils::ConfigMap) {
         let flags = match Q {
@@ -368,7 +369,14 @@ pub(crate) fn flush_system_graph<const Q: char>(
 ) where
     (): IsQueueCap<Q>,
 {
-    let command_buffer = unsafe { commands.recording_cmd_buf.0.take() };
+    let command_buffer = commands.recording_cmd_buf.0.take();
+    let command_buffer: Vec<_> = command_buffer
+        .into_iter()
+        .map(|command_buffer| vk::CommandBufferSubmitInfo {
+            command_buffer,
+            ..Default::default()
+        })
+        .collect();
     let semaphore_signals = queue_ctx
         .binary_signals
         .iter()
@@ -426,15 +434,8 @@ pub(crate) fn flush_system_graph<const Q: char>(
                     flags: vk::SubmitFlags::empty(),
                     wait_semaphore_info_count: semaphore_waits.len() as u32,
                     p_wait_semaphore_infos: semaphore_waits.as_ptr(),
-                    command_buffer_info_count: if command_buffer == vk::CommandBuffer::null() {
-                        0
-                    } else {
-                        1
-                    },
-                    p_command_buffer_infos: &vk::CommandBufferSubmitInfoKHR {
-                        command_buffer: command_buffer,
-                        ..Default::default()
-                    },
+                    command_buffer_info_count: command_buffer.len() as u32,
+                    p_command_buffer_infos: command_buffer.as_ptr(),
                     signal_semaphore_info_count: semaphore_signals.len() as u32,
                     p_signal_semaphore_infos: semaphore_signals.as_ptr(),
                     ..Default::default()

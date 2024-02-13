@@ -6,9 +6,9 @@ mod instance;
 mod physical_device;
 mod plugin;
 mod queue;
+mod semaphore;
 mod surface;
 mod swapchain;
-mod semaphore;
 
 pub mod utils;
 

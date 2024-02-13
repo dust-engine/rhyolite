@@ -1,6 +1,5 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use ash::vk;
 use bevy_ecs::{
     schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
     system::{BoxedSystem, IntoSystem, System},
@@ -13,8 +12,12 @@ use bevy_utils::petgraph::{
 
 use crate::{
     ecs::{
-        BinarySemaphoreOp, QueueSystemDependencyConfig, QueueSystemInitialState, RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker, TimelineSemaphoreOp
-    }, queue::{QueueRef, QueuesRouter}, semaphore::TimelineSemaphore, Device, QueueType
+        BinarySemaphoreOp, QueueSystemDependencyConfig, QueueSystemInitialState,
+        RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker, TimelineSemaphoreOp,
+    },
+    queue::{QueueRef, QueuesRouter},
+    semaphore::TimelineSemaphore,
+    Device, QueueType,
 };
 
 use super::RenderSystemConfig;
@@ -463,10 +466,12 @@ impl ScheduleBuildPass for RenderSystemPass {
                             access: edge.config.signal.clone(),
                         })
                     }
-                    QueueGraphEdgeSemaphoreType::Timeline(u32) => signals.push(TimelineSemaphoreOp {
-                        semaphore: timeline_semaphores[*u32 as usize].clone(),
-                        access: edge.config.signal.clone(),
-                    }),
+                    QueueGraphEdgeSemaphoreType::Timeline(u32) => {
+                        signals.push(TimelineSemaphoreOp {
+                            semaphore: timeline_semaphores[*u32 as usize].clone(),
+                            access: edge.config.signal.clone(),
+                        })
+                    }
                 });
             let mut waits: Vec<TimelineSemaphoreOp> = Vec::new();
             let mut binary_waits: Vec<BinarySemaphoreOp> = Vec::new();
@@ -486,39 +491,39 @@ impl ScheduleBuildPass for RenderSystemPass {
                         });
                     }
                 });
-                for i in queue_node.nodes.iter() {
-                    if *i == queue_node.queue_node_index {
-                        continue;
-                    }
-                    if signals.is_empty() {
-                        // Make sure we signal at least one timeline semaphore.
-                        let device = world.resource::<Device>();
-                        signals.push(TimelineSemaphoreOp {
-                            access: Default::default(),
-                            semaphore: Arc::new(TimelineSemaphore::new(device.clone()).unwrap())
-                        })
-                    }
-                    // Set config for all nodes in system
-                    let node = &mut graph.systems[*i];
-                    node
-                    .get_mut()
-                    .unwrap()
-                    .configurate(&mut RenderSystemInitialState {
-                        queue: queue_node.selected_queue,
-                        timeline_signal: signals[0].semaphore.clone()
-                    }, world);
+            for i in queue_node.nodes.iter() {
+                if *i == queue_node.queue_node_index {
+                    continue;
                 }
-    let system = &mut graph.systems[queue_node.queue_node_index];
-    system
-        .get_mut()
-        .unwrap()
-        .configurate(&mut QueueSystemInitialState {
-            queue: queue_node.selected_queue,
-            timeline_signals: signals,
-            timeline_waits: waits,
-            binary_signals,
-            binary_waits,
-        }, world);
+                if signals.is_empty() {
+                    // Make sure we signal at least one timeline semaphore.
+                    let device = world.resource::<Device>();
+                    signals.push(TimelineSemaphoreOp {
+                        access: Default::default(),
+                        semaphore: Arc::new(TimelineSemaphore::new(device.clone()).unwrap()),
+                    })
+                }
+                // Set config for all nodes in system
+                let node = &mut graph.systems[*i];
+                node.get_mut().unwrap().configurate(
+                    &mut RenderSystemInitialState {
+                        queue: queue_node.selected_queue,
+                        timeline_signal: signals[0].semaphore.clone(),
+                    },
+                    world,
+                );
+            }
+            let system = &mut graph.systems[queue_node.queue_node_index];
+            system.get_mut().unwrap().configurate(
+                &mut QueueSystemInitialState {
+                    queue: queue_node.selected_queue,
+                    timeline_signals: signals,
+                    timeline_waits: waits,
+                    binary_signals,
+                    binary_waits,
+                },
+                world,
+            );
         }
         let device: &Device = world.resource();
         let binary_semaphores =
