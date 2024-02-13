@@ -492,6 +492,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                     }
                     if signals.is_empty() {
                         // Make sure we signal at least one timeline semaphore.
+                        let device = world.resource::<Device>();
                         signals.push(TimelineSemaphoreOp {
                             access: Default::default(),
                             semaphore: Arc::new(TimelineSemaphore::new(device.clone()).unwrap())
@@ -502,22 +503,22 @@ impl ScheduleBuildPass for RenderSystemPass {
                     node
                     .get_mut()
                     .unwrap()
-                    .set_configs(Box::new(RenderSystemInitialState {
+                    .configurate(&mut RenderSystemInitialState {
                         queue: queue_node.selected_queue,
                         timeline_signal: signals[0].semaphore.clone()
-                    }));
+                    }, world);
                 }
     let system = &mut graph.systems[queue_node.queue_node_index];
     system
         .get_mut()
         .unwrap()
-        .set_configs(Box::new(QueueSystemInitialState {
+        .configurate(&mut QueueSystemInitialState {
             queue: queue_node.selected_queue,
             timeline_signals: signals,
             timeline_waits: waits,
             binary_signals,
             binary_waits,
-        }));
+        }, world);
         }
         let device: &Device = world.resource();
         let binary_semaphores =

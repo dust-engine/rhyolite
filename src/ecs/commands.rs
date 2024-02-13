@@ -22,7 +22,7 @@ use std::{any::Any, collections::BTreeMap, sync::{atomic::AtomicU64, Arc}};
 use ash::vk::{self, Handle};
 use bevy_ecs::{
     component::ComponentId,
-    system::{Res, ResMut, Resource, SystemParam},
+    system::{lifetimeless::SRes, Res, ResMut, Resource, SystemParam},
     world::World,
 };
 use queue_cap::*;
@@ -31,17 +31,35 @@ use crate::{
     command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType, semaphore::TimelineSemaphore, Device, HasDevice, QueueRef, QueuesRouter
 };
 
-use super::{Access, RenderSystemConfig};
+use super::{Access, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemConfig};
 
 /// A wrapper to produce multiple [`RecordingCommandBuffer`] variants based on the queue type it supports.
 #[derive(Resource)]
 struct RecordingCommandBufferWrapper<const Q: char>(RecordingCommandBuffer);
+impl<const Q: char> PerFrameResource for RecordingCommandBufferWrapper<Q> {
+    type Params = (SRes::<Device>, SRes::<QueuesRouter>);
+
+    fn create((device, router): bevy_ecs::system::SystemParamItem<'_, '_, Self::Params>) -> Self {
+        let queue_family = router.queue_family_of_type(match Q {
+            'g' => QueueType::Graphics,
+            'c' => QueueType::Compute,
+            't' => QueueType::Transfer,
+            _ => panic!(),
+        });
+        let pool = RecordingCommandBuffer::new(device.clone(), queue_family);
+        Self(pool)
+    }
+    fn reset(&mut self, _: bevy_ecs::system::SystemParamItem<'_, '_, Self::Params>) {
+        self.0.pool.reset().unwrap();
+        assert_eq!(self.0.command_buffer, vk::CommandBuffer::null());
+    }
+}
 
 pub struct RenderCommands<'w, const Q: char>
 where
     (): IsQueueCap<Q>,
 {
-    recording_cmd_buf: ResMut<'w, RecordingCommandBufferWrapper<Q>>,
+    recording_cmd_buf: PerFrameMut<'w, RecordingCommandBufferWrapper<Q>>,
 }
 
 impl<'w, const Q: char> RenderCommands<'w, Q>
@@ -57,17 +75,15 @@ where
     }
 }
 
-pub struct RenderCommandState {
-    recording_cmd_buf_component_id: ComponentId,
-    semaphores_to_signal: Option<Arc<TimelineSemaphore>>,
-    frame_index: u64,
+pub struct RenderCommandState<const Q: char> {
+    recording_cmd_buf: PerFrameState<RecordingCommandBufferWrapper<Q>>,
 }
 
 unsafe impl<'a, const Q: char> SystemParam for RenderCommands<'a, Q>
 where
     (): IsQueueCap<Q>,
 {
-    type State = RenderCommandState;
+    type State = RenderCommandState::<Q>;
 
     type Item<'world, 'state> = RenderCommands<'world, Q>;
 
@@ -75,27 +91,10 @@ where
         world: &mut World,
         system_meta: &mut bevy_ecs::system::SystemMeta,
     ) -> Self::State {
-        let recording_cmd_buf_component_id =
-            ResMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
-        if world
-            .get_resource_by_id(recording_cmd_buf_component_id)
-            .is_none()
-        {
-            let device = world.resource::<Device>().clone();
-            let router = world.resource::<QueuesRouter>();
-            let queue_family = router.queue_family_of_type(match Q {
-                'g' => QueueType::Graphics,
-                'c' => QueueType::Compute,
-                't' => QueueType::Transfer,
-                _ => panic!(),
-            });
-            let pool = RecordingCommandBuffer::new(device, queue_family);
-            world.insert_resource(RecordingCommandBufferWrapper::<Q>(pool));
-        }
+        let recording_cmd_buf =
+            PerFrameMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
         RenderCommandState {
-            recording_cmd_buf_component_id,
-            semaphores_to_signal: None,
-            frame_index: 0,
+            recording_cmd_buf,
         }
     }
     fn default_configs(config: &mut bevy_utils::ConfigMap) {
@@ -108,33 +107,14 @@ where
         let config = config.entry::<RenderSystemConfig>().or_default();
         config.queue = flags;
     }
-    fn set_configs(state: &mut Self::State, config: &mut Option<Box<dyn Any>>) {
-        let Some(c) = config else {
-            return;
-        };
-        if c.is::<RenderSystemInitialState>() {
-            let config = config.take().unwrap();
-            let initial_state: Box<RenderSystemInitialState> = config.downcast().unwrap();
-            state.semaphores_to_signal = Some(initial_state.timeline_signal);
-            return;
-        }
-    }
-
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
         system_meta: &bevy_ecs::system::SystemMeta,
         world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy_ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        state.frame_index += 1;
-        let num_frame_in_flight = 3;
-        if let Some(semaphore) = &state.semaphores_to_signal {
-            if state.frame_index > num_frame_in_flight {
-                semaphore.wait_blocked(state.frame_index - num_frame_in_flight, !0).unwrap()
-            }
-        }
-        let recording_cmd_buf = ResMut::<RecordingCommandBufferWrapper<Q>>::get_param(
-            &mut state.recording_cmd_buf_component_id,
+        let recording_cmd_buf = PerFrameMut::<RecordingCommandBufferWrapper<Q>>::get_param(
+            &mut state.recording_cmd_buf,
             system_meta,
             world,
             change_tick,
@@ -306,18 +286,14 @@ where
         config.queue = flags;
         config.is_queue_op = true;
     }
-    fn set_configs(state: &mut Self::State, config: &mut Option<Box<dyn Any>>) {
-        let Some(c) = config else {
-            return;
-        };
-        if c.is::<QueueSystemInitialState>() {
-            let config = config.take().unwrap();
-            let initial_state: Box<QueueSystemInitialState> = config.downcast().unwrap();
+    fn configurate(state: &mut Self::State, config: &mut dyn Any, world: &mut World) {
+        if config.is::<QueueSystemInitialState>() {
+            let initial_state: &mut QueueSystemInitialState = config.downcast_mut().unwrap();
             state.queue = initial_state.queue;
-            state.timeline_signals = initial_state.timeline_signals;
-            state.timeline_waits = initial_state.timeline_waits;
-            state.binary_signals = initial_state.binary_signals;
-            state.binary_waits = initial_state.binary_waits;
+            state.timeline_signals = std::mem::take(&mut initial_state.timeline_signals);
+            state.timeline_waits = std::mem::take(&mut initial_state.timeline_waits);
+            state.binary_signals = std::mem::take(&mut initial_state.binary_signals);
+            state.binary_waits = std::mem::take(&mut initial_state.binary_waits);
             return;
         }
     }

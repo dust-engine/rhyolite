@@ -62,7 +62,7 @@ impl Drop for CommandPool {
 pub struct RecordingCommandBuffer {
     pub(crate) pool: CommandPool,
     /// The currently recording command buffer. May be null.
-    command_buffer: vk::CommandBuffer,
+    pub(crate) command_buffer: vk::CommandBuffer,
 }
 impl RecordingCommandBuffer {
     pub fn new(device: Device, queue_family_index: u32) -> Self {
