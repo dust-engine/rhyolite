@@ -42,6 +42,13 @@ fn main() {
     app.run();
 }
 
+
+// Solution: Each render system will be told the transitions to perform.
+// However, only one of them will actually perform the transitions, based on
+// runtime scheduling behavior.
+// Some systems will have a final "transition out". This "transition out" will be performed
+// by the "flush" system.
+
 fn clear_main_window_color(
     mut commands: RenderCommands<'g'>,
     windows: Query<RenderComponent<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
@@ -50,14 +57,14 @@ fn clear_main_window_color(
         return;
     };
     commands.record_commands().pipeline_barrier(
-        vk::PipelineStageFlags::TRANSFER,
-        vk::PipelineStageFlags::TRANSFER,
         vk::DependencyFlags::empty(),
         &[],
         &[],
-        &[vk::ImageMemoryBarrier {
-            src_access_mask: vk::AccessFlags::empty(),
-            dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+        &[vk::ImageMemoryBarrier2 {
+            src_stage_mask: vk::PipelineStageFlags2::CLEAR, // Last time this image was touched by a CLEAR.
+            dst_stage_mask: vk::PipelineStageFlags2::CLEAR,
+            src_access_mask: vk::AccessFlags2::empty(),
+            dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
             old_layout: vk::ImageLayout::UNDEFINED,
             new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             image: swapchain_image.inner.image,
@@ -86,14 +93,14 @@ fn clear_main_window_color(
         }],
     );
     commands.record_commands().pipeline_barrier(
-        vk::PipelineStageFlags::TRANSFER,
-        vk::PipelineStageFlags::TRANSFER,
         vk::DependencyFlags::empty(),
         &[],
         &[],
-        &[vk::ImageMemoryBarrier {
-            src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-            dst_access_mask: vk::AccessFlags::empty(),
+        &[vk::ImageMemoryBarrier2 {
+            src_stage_mask: vk::PipelineStageFlags2::CLEAR,
+            dst_stage_mask: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+            src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+            dst_access_mask: vk::AccessFlags2::empty(),
             old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
             image: swapchain_image.inner.image,
