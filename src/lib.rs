@@ -1,3 +1,5 @@
+#![feature(associated_type_defaults)]
+
 mod command_pool;
 mod commands;
 mod device;
@@ -9,6 +11,7 @@ mod queue;
 mod semaphore;
 mod surface;
 mod swapchain;
+mod future;
 
 pub mod utils;
 
@@ -20,3 +23,4 @@ pub use plugin::RhyolitePlugin;
 pub use queue::*;
 pub use surface::*;
 pub use swapchain::*;
+pub use future::*;

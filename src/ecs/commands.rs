@@ -20,22 +20,20 @@ pub mod queue_cap {
 use std::{
     any::Any,
     collections::BTreeMap,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{atomic::AtomicU64, Arc, Barrier},
 };
 
 use ash::vk::{self, Handle};
 use bevy_ecs::{
-    system::{lifetimeless::SRes, Res, Resource, SystemParam},
-    world::World,
+    archetype::ArchetypeComponentId, component::ComponentId, system::{lifetimeless::SRes, Local, Res, ResMut, Resource, System, SystemMeta, SystemParam}, world::World
 };
 use queue_cap::*;
 
 use crate::{
-    command_pool::RecordingCommandBuffer, commands::CommandRecorder, queue::QueueType,
-    semaphore::TimelineSemaphore, Device, HasDevice, QueueRef, QueuesRouter,
+    command_pool::RecordingCommandBuffer, commands::CommandRecorder, ecs::Barriers, queue::QueueType, semaphore::TimelineSemaphore, Device, HasDevice, QueueRef, QueuesRouter
 };
 
-use super::{Access, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemConfig};
+use super::{Access, BoxedBarrierProducer, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemConfig};
 
 /// A wrapper to produce multiple [`RecordingCommandBuffer`] variants based on the queue type it supports.
 #[derive(Resource)]
@@ -445,6 +443,145 @@ pub(crate) fn flush_system_graph<const Q: char>(
             .unwrap();
     }
 }
+
+
+
+struct ResourceState {
+    access: Access,
+    img_layout: vk::ImageLayout,
+}
+
+pub(crate) struct InsertPipelineBarrier {
+    barrier_producers: Vec<BoxedBarrierProducer>,
+    component_access: bevy_ecs::query::Access::<ComponentId>,
+    archetype_component_access: bevy_ecs::query::Access::<ArchetypeComponentId>,
+    last_run: bevy_ecs::component::Tick
+}
+impl InsertPipelineBarrier {
+    pub(crate) fn new() -> Self {
+        InsertPipelineBarrier {
+            barrier_producers: Vec::new(),
+            component_access: bevy_ecs::query::Access::new(),
+            archetype_component_access: bevy_ecs::query::Access::new(),
+            last_run: bevy_ecs::component::Tick::new(0)
+        }
+    }
+}
+impl System for InsertPipelineBarrier {
+    type In = ();
+
+    type Out = ();
+
+    fn name(&self) -> std::borrow::Cow<'static, str> {
+        std::any::type_name::<InsertPipelineBarrier>().into()
+    }
+
+    fn type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<InsertPipelineBarrier>()
+    }
+
+    fn component_access(&self) -> &bevy_ecs::query::Access<ComponentId> {
+        &self.component_access
+    }
+
+    fn archetype_component_access(&self) -> &bevy_ecs::query::Access<ArchetypeComponentId> {
+        &self.archetype_component_access
+    }
+
+    fn is_send(&self) -> bool {
+        let mut is_send: bool = true;
+        for i in self.barrier_producers.iter() {
+            if !i.is_send() {
+                is_send = false;
+            }
+        }
+        is_send
+    }
+
+    fn is_exclusive(&self) -> bool {
+        let mut is_exclusive = false;
+        for i in self.barrier_producers.iter() {
+            is_exclusive |= i.has_deferred();
+        }
+        is_exclusive
+    }
+
+    fn has_deferred(&self) -> bool {
+        let mut has_deferred = false;
+        for i in self.barrier_producers.iter() {
+            has_deferred |= i.has_deferred();
+        }
+        has_deferred
+    }
+
+    unsafe fn run_unsafe(&mut self, input: Self::In, world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell) -> Self::Out {
+        let mut image_barriers = Vec::new();
+        let mut buffer_barriers = Vec::new();
+        let mut memory_barriers = Vec::new();
+        let change_tick = world.increment_change_tick();
+        for i in self.barrier_producers.iter_mut() {
+            let barrier = Barriers {
+                image_barriers: &mut image_barriers,
+                buffer_barriers: &mut buffer_barriers,
+                memory_barriers: &mut memory_barriers,
+            };
+            i.run_unsafe(barrier, world)
+        }
+
+        self.last_run = change_tick;
+    }
+
+    fn apply_deferred(&mut self, world: &mut World) {
+        for i in self.barrier_producers.iter_mut() {
+            i.apply_deferred(world);
+        }
+    }
+
+    fn initialize(&mut self, world: &mut World) {
+        for i in self.barrier_producers.iter_mut() {
+            i.initialize(world);
+        }
+    }
+
+    fn update_archetype_component_access(&mut self, world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell) {
+        for i in self.barrier_producers.iter_mut() {
+            i.update_archetype_component_access(world);
+        }
+        let mut archetype_component_access: bevy_ecs::query::Access<ArchetypeComponentId> = bevy_ecs::query::Access::<ArchetypeComponentId>::new();
+        for p in self.barrier_producers.iter() {
+            archetype_component_access.extend(p.archetype_component_access());
+        }
+        self.archetype_component_access = archetype_component_access;
+    }
+
+    fn check_change_tick(&mut self, change_tick: bevy_ecs::component::Tick) {
+    }
+
+    fn get_last_run(&self) -> bevy_ecs::component::Tick {
+        self.last_run
+    }
+
+    fn set_last_run(&mut self, last_run: bevy_ecs::component::Tick) {
+        self.last_run = last_run;
+    }
+    fn configurate(&mut self, config: &mut dyn Any, world: &mut World) {
+        let systems: &mut Vec<BoxedBarrierProducer> = config.downcast_mut().unwrap();
+        let systems = std::mem::take(systems);
+        assert!(self.barrier_producers.is_empty());
+        self.barrier_producers = systems;
+
+        
+        let mut component_access = bevy_ecs::query::Access::<ComponentId>::new();
+        let mut archetype_component_access: bevy_ecs::query::Access<ArchetypeComponentId> = bevy_ecs::query::Access::<ArchetypeComponentId>::new();
+        for p in self.barrier_producers.iter() {
+            component_access.extend(p.component_access());
+            archetype_component_access.extend(p.archetype_component_access());
+        }
+        self.component_access = component_access;
+        self.archetype_component_access = archetype_component_access;
+    }
+}
+
 
 pub struct RecycledBinarySemaphore {
     semaphore: vk::Semaphore,

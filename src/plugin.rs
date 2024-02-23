@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-    ecs::{RenderResRegistry, RenderSystemPass},
+    ecs::{RenderSystemPass},
     Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
     QueuesRouter, Version,
 };
@@ -241,7 +241,6 @@ impl Plugin for RhyolitePlugin {
             .unwrap()
             .add_build_pass(RenderSystemPass::new())
             .before::<bevy_ecs::schedule::passes::AutoInsertApplyDeferredPass>();
-        app.init_resource::<RenderResRegistry>();
 
         // Required features
         app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore);
