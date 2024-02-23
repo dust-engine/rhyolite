@@ -138,8 +138,7 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
         );
         let num_frame_in_flight = 3;
         if state.frame_index > num_frame_in_flight {
-            let value = num_frame_in_flight - 3;
-
+            let value = state.frame_index - 3;
             let semaphores = res.semaphores.iter().map(|s| (s.as_ref(), value));
             TimelineSemaphore::wait_all_blocked(semaphores, !0).unwrap();
         }

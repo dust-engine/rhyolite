@@ -106,6 +106,9 @@ where
         let config = config.entry::<RenderSystemConfig>().or_default();
         config.queue = flags;
     }
+    fn configurate(state: &mut Self::State, config: &mut dyn Any, world: &mut World) {
+        PerFrameMut::configurate(&mut state.recording_cmd_buf, config, world)
+    }
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
         system_meta: &bevy_ecs::system::SystemMeta,
