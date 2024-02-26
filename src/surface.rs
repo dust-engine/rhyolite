@@ -18,7 +18,7 @@ impl Default for SurfacePlugin {
 
 impl Plugin for SurfacePlugin {
     fn build(&self, app: &mut App) {
-        app.add_instance_extension(ash::extensions::khr::Surface::name())
+        app.add_instance_extension::<ash::extensions::khr::Surface>()
             .unwrap();
 
         if let Some(event_loop) = app
@@ -28,32 +28,32 @@ impl Plugin for SurfacePlugin {
             match event_loop.raw_display_handle() {
                 #[cfg(target_os = "windows")]
                 RawDisplayHandle::Windows(_) => {
-                    app.add_instance_extension(ash::extensions::khr::Win32Surface::name())
+                    app.add_instance_extension::<ash::extensions::khr::Win32Surface>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Xlib(_) => {
-                    app.add_instance_extension(ash::extensions::khr::XlibSurface::name())
+                    app.add_instance_extension::<ash::extensions::khr::XlibSurface>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Xcb(_) => {
-                    app.add_instance_extension(ash::extensions::khr::XcbSurface::name())
+                    app.add_instance_extension::<ash::extensions::khr::XcbSurface>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Wayland(_) => {
-                    app.add_instance_extension(ash::extensions::khr::WaylandSurface::name())
+                    app.add_instance_extension::<ash::extensions::khr::WaylandSurface>()
                         .unwrap();
                 }
                 #[cfg(target_os = "android")]
                 RawDisplayHandle::Android(_) => {
-                    app.add_instance_extension(ash::extensions::khr::AndroidSurface::name())
+                    app.add_instance_extension::<ash::extensions::khr::AndroidSurface>()
                         .unwrap();
                 }
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 RawDisplayHandle::UiKit(_) | RawDisplayHandle::AppKit(_) => {
-                    app.add_instance_extension(ash::extensions::ext::MetalSurface::name())
+                    app.add_instance_extension::<ash::extensions::ext::MetalSurface>()
                         .unwrap();
                 }
                 _ => tracing::warn!("Your display is not supported."),

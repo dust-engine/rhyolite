@@ -540,10 +540,6 @@ where
             world,
             change_tick,
         );
-        println!(
-            "Recording barriers: {:?} {:?} {:?}",
-            image_barriers, buffer_barriers, global_barriers
-        );
         self.system_meta.last_run = change_tick;
     }
 

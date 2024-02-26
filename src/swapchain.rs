@@ -12,7 +12,7 @@ use crate::{
     ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
-    Device, HasDevice, ImageLike, PhysicalDevice, QueueType, QueuesRouter, Surface,
+    Device, HasDevice, ImageLike, PhysicalDevice, QueueType, QueuesRouter, ResourceState, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -29,7 +29,7 @@ impl Default for SwapchainPlugin {
 
 impl Plugin for SwapchainPlugin {
     fn build(&self, app: &mut App) {
-        app.add_device_extension(ash::extensions::khr::Swapchain::name())
+        app.add_device_extension::<ash::extensions::khr::Swapchain>()
             .unwrap();
 
         app.add_systems(
@@ -602,6 +602,8 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     }
     let image = swapchain.0.images[indice as usize];
     unsafe {
+        swapchain_image.res.state = ResourceState::default();
+        swapchain_image.layout = vk::ImageLayout::UNDEFINED;
         let swapchain_image = swapchain_image.get_mut();
         swapchain_image.image = image;
         swapchain_image.indice = indice;

@@ -1,7 +1,9 @@
-use crate::cstr;
+use crate::{cstr, plugin::InstanceMetaBuilder};
 use ash::{prelude::VkResult, vk};
 use bevy_ecs::system::Resource;
+use bevy_utils::hashbrown::HashMap;
 use std::{
+    any::{Any, TypeId},
     ffi::{c_char, CStr},
     fmt::Debug,
     ops::Deref,
@@ -14,6 +16,7 @@ pub struct Instance(Arc<InstanceInner>);
 struct InstanceInner {
     entry: Arc<ash::Entry>,
     instance: ash::Instance,
+    metas: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 #[derive(Clone, Copy)]
@@ -79,6 +82,7 @@ pub struct InstanceCreateInfo<'a> {
     pub api_version: Version,
     pub enabled_layer_names: &'a [*const c_char],
     pub enabled_extension_names: &'a [*const c_char],
+    pub meta_builders: Vec<InstanceMetaBuilder>,
 }
 
 const DEFAULT_INSTANCE_EXTENSIONS: &[*const c_char] =
@@ -93,12 +97,13 @@ impl<'a> Default for InstanceCreateInfo<'a> {
             api_version: Version::new(0, 1, 3, 0),
             enabled_layer_names: Default::default(),
             enabled_extension_names: DEFAULT_INSTANCE_EXTENSIONS,
+            meta_builders: Default::default(),
         }
     }
 }
 
 impl Instance {
-    pub fn create(entry: Arc<ash::Entry>, info: &InstanceCreateInfo) -> VkResult<Self> {
+    pub fn create(entry: Arc<ash::Entry>, info: InstanceCreateInfo) -> VkResult<Self> {
         let application_info = vk::ApplicationInfo {
             p_application_name: info.application_name.as_ptr(),
             application_version: info.application_version.0,
@@ -107,7 +112,7 @@ impl Instance {
             api_version: info.api_version.0,
             ..Default::default()
         };
-        let info = vk::InstanceCreateInfo {
+        let create_info = vk::InstanceCreateInfo {
             p_application_info: &application_info,
             enabled_layer_count: info.enabled_layer_names.len() as u32,
             pp_enabled_layer_names: info.enabled_layer_names.as_ptr(),
@@ -116,8 +121,20 @@ impl Instance {
             ..Default::default()
         };
         // Safety: No Host Syncronization rules for vkCreateInstance.
-        let instance = unsafe { entry.create_instance(&info, None)? };
-        Ok(Instance(Arc::new(InstanceInner { entry, instance })))
+        let instance = unsafe { entry.create_instance(&create_info, None)? };
+        let metas: HashMap<TypeId, _> = info
+            .meta_builders
+            .into_iter()
+            .map(|builder| {
+                let item = builder(&entry, &instance);
+                (item.type_id(), item)
+            })
+            .collect();
+        Ok(Instance(Arc::new(InstanceInner {
+            entry,
+            instance,
+            metas,
+        })))
     }
     pub fn entry(&self) -> &Arc<ash::Entry> {
         &self.0.entry

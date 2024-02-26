@@ -1,11 +1,14 @@
-use ash::prelude::VkResult;
-use ash::vk;
-use bevy_ecs::system::Resource;
-
+use crate::plugin::DeviceMetaBuilder;
 use crate::Instance;
 use crate::PhysicalDevice;
 use crate::QueueRef;
+use ash::prelude::VkResult;
+use ash::vk;
+use bevy_ecs::system::Resource;
+use bevy_utils::hashbrown::HashMap;
 
+use std::any::Any;
+use std::any::TypeId;
 use std::ffi::c_char;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -27,17 +30,19 @@ pub struct DeviceInner {
     physical_device: PhysicalDevice,
     device: ash::Device,
     queues: Vec<vk::Queue>,
+    metas: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 impl Device {
     pub(crate) fn get_raw_queue(&self, queue: QueueRef) -> vk::Queue {
         self.0.queues[queue.0 as usize]
     }
-    pub fn create(
+    pub(crate) fn create(
         physical_device: PhysicalDevice,
         queues: &[vk::DeviceQueueCreateInfo],
         extensions: &[*const c_char],
         features: &vk::PhysicalDeviceFeatures2,
+        meta: Vec<DeviceMetaBuilder>,
     ) -> VkResult<Self> {
         let create_info = vk::DeviceCreateInfo {
             p_next: features as *const vk::PhysicalDeviceFeatures2 as *const _,
@@ -59,10 +64,18 @@ impl Device {
                     .map(|i| device.get_device_queue(queue_info.queue_family_index, i))
             })
             .collect::<Vec<_>>();
+        let metas: HashMap<TypeId, Box<dyn Any + Send + Sync>> = meta
+            .into_iter()
+            .map(|builder| {
+                let item = builder(&physical_device.instance(), &device);
+                (item.type_id(), item)
+            })
+            .collect();
         Ok(Self(Arc::new(DeviceInner {
             physical_device,
             queues: queues_created,
             device,
+            metas,
         })))
     }
     pub fn instance(&self) -> &Instance {

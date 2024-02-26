@@ -5,6 +5,7 @@ use ash::{
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use std::{
+    any::Any,
     collections::BTreeMap,
     ffi::{c_char, CStr, CString},
     ops::Deref,
@@ -12,8 +13,10 @@ use std::{
 };
 
 use crate::{
-    ecs::RenderSystemPass, Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures,
-    PhysicalDeviceProperties, QueuesRouter, Version,
+    ecs::RenderSystemPass,
+    extensions::{DeviceExtension, InstanceExtension},
+    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, PhysicalDeviceProperties,
+    QueuesRouter, Version,
 };
 use cstr::cstr;
 
@@ -63,11 +66,15 @@ impl Default for VulkanEntry {
         Self(Arc::new(unsafe { ash::Entry::load().unwrap() }))
     }
 }
-
+pub(crate) type InstanceMetaBuilder =
+    Box<dyn FnOnce(&ash::Entry, &ash::Instance) -> Box<dyn Any + Send + Sync> + Send + Sync>;
+pub(crate) type DeviceMetaBuilder =
+    Box<dyn FnOnce(&ash::Instance, &ash::Device) -> Box<dyn Any + Send + Sync> + Send + Sync>;
 #[derive(Resource)]
 struct DeviceExtensions {
     available_extensions: BTreeMap<CString, Version>,
     enabled_extensions: Vec<*const c_char>,
+    meta_builders: Vec<DeviceMetaBuilder>,
 }
 impl DeviceExtensions {
     fn new(pdevice: &PhysicalDevice) -> VkResult<Self> {
@@ -92,6 +99,7 @@ impl DeviceExtensions {
         Ok(Self {
             available_extensions: extension_names,
             enabled_extensions: Vec::new(),
+            meta_builders: Vec::new(),
         })
     }
 }
@@ -102,6 +110,7 @@ unsafe impl Sync for DeviceExtensions {}
 struct InstanceExtensions {
     available_extensions: BTreeMap<CString, Version>,
     enabled_extensions: Vec<*const c_char>,
+    meta_builders: Vec<InstanceMetaBuilder>,
 }
 impl FromWorld for InstanceExtensions {
     fn from_world(world: &mut World) -> Self {
@@ -127,6 +136,7 @@ impl FromWorld for InstanceExtensions {
         Self {
             available_extensions,
             enabled_extensions: Vec::new(),
+            meta_builders: Vec::new(),
         }
     }
 }
@@ -186,12 +196,16 @@ unsafe impl Sync for InstanceLayers {}
 
 impl Plugin for RhyolitePlugin {
     fn build(&self, app: &mut App) {
-        let instance_extensions = app.world.remove_resource::<InstanceExtensions>();
+        let mut instance_extensions = app.world.remove_resource::<InstanceExtensions>();
         let instance_layers = app.world.remove_resource::<InstanceLayers>();
         let entry: &VulkanEntry = &app.world.get_resource_or_insert_with(VulkanEntry::default);
+        let meta_builders = instance_extensions
+            .as_mut()
+            .map(|a| std::mem::take(&mut a.meta_builders))
+            .unwrap_or_default();
         let instance = Instance::create(
             entry.0.clone(),
-            &crate::InstanceCreateInfo {
+            crate::InstanceCreateInfo {
                 enabled_extension_names: instance_extensions
                     .as_ref()
                     .map(|f| f.enabled_extensions.as_slice())
@@ -205,6 +219,7 @@ impl Plugin for RhyolitePlugin {
                 engine_version: self.engine_version,
                 application_name: self.application_name.as_c_str(),
                 application_version: self.application_version,
+                meta_builders,
             },
         )
         .unwrap();
@@ -259,6 +274,7 @@ impl Plugin for RhyolitePlugin {
             &queues_router.create_infos(),
             &extension_settings.enabled_extensions,
             features.pdevice_features2(),
+            extension_settings.meta_builders,
         )
         .unwrap();
         app.insert_resource(device);
@@ -268,11 +284,19 @@ impl Plugin for RhyolitePlugin {
 pub trait RhyoliteApp {
     /// Called in the [Plugin::build] phase of device plugins.
     /// Device plugins must be added after [RhyolitePlugin].
-    fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version>;
+    fn add_device_extension<T: DeviceExtension>(&mut self) -> Option<Version>;
 
     /// Called in the [Plugin::build] phase of instance plugins.
     /// Instance plugins must be added after [RhyolitePlugin].
-    fn add_instance_extension(&mut self, extension: &'static CStr) -> Option<Version>;
+    fn add_instance_extension<T: InstanceExtension>(&mut self) -> Option<Version>;
+
+    /// Called in the [Plugin::build] phase of device plugins.
+    /// Device plugins must be added after [RhyolitePlugin].
+    fn add_device_extension_named(&mut self, extension: &'static CStr) -> Option<Version>;
+
+    /// Called in the [Plugin::build] phase of instance plugins.
+    /// Instance plugins must be added after [RhyolitePlugin].
+    fn add_instance_extension_named(&mut self, extension: &'static CStr) -> Option<Version>;
 
     /// Called in the [Plugin::build] phase of instance plugins.
     /// Instance plugins must be added after [RhyolitePlugin].
@@ -287,7 +311,53 @@ pub trait RhyoliteApp {
 }
 
 impl RhyoliteApp for App {
-    fn add_device_extension(&mut self, extension: &'static CStr) -> Option<Version> {
+    fn add_device_extension<T: DeviceExtension>(&mut self) -> Option<Version> {
+        let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
+            panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
+        };
+        if let Some(v) = extension_settings.available_extensions.get(T::name()) {
+            let v = *v;
+            extension_settings
+                .enabled_extensions
+                .push(T::name().as_ptr());
+            extension_settings
+                .meta_builders
+                .push(Box::new(|instance, device| {
+                    Box::new(T::new(instance, device))
+                }));
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    fn add_instance_extension<T: InstanceExtension>(&mut self) -> Option<Version> {
+        let extension_settings = self.world.get_resource_mut::<InstanceExtensions>();
+        let mut extension_settings = match extension_settings {
+            Some(extension_settings) => extension_settings,
+            None => {
+                let extension_settings = InstanceExtensions::from_world(&mut self.world);
+                self.world.insert_resource(extension_settings);
+                self.world.resource_mut::<InstanceExtensions>()
+            }
+        };
+        if let Some(v) = extension_settings.available_extensions.get(T::name()) {
+            let v = *v;
+            extension_settings
+                .enabled_extensions
+                .push(T::name().as_ptr());
+
+            extension_settings
+                .meta_builders
+                .push(Box::new(|entry, instance| {
+                    Box::new(T::new(entry, instance))
+                }));
+            Some(v)
+        } else {
+            None
+        }
+    }
+    fn add_device_extension_named(&mut self, extension: &'static CStr) -> Option<Version> {
         let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
             panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
         };
@@ -301,7 +371,7 @@ impl RhyoliteApp for App {
             None
         }
     }
-    fn add_instance_extension(&mut self, extension: &'static CStr) -> Option<Version> {
+    fn add_instance_extension_named(&mut self, extension: &'static CStr) -> Option<Version> {
         let extension_settings = self.world.get_resource_mut::<InstanceExtensions>();
         let mut extension_settings = match extension_settings {
             Some(extension_settings) => extension_settings,

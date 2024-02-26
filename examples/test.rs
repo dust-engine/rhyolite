@@ -59,33 +59,24 @@ impl RenderSystem for ClearMainWindowColor {
     fn system(&self) -> bevy_ecs::schedule::SystemConfigs {
         fn clear_main_window_color(
             mut commands: RenderCommands<'g'>,
-            windows: Query<&RenderImage<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
+            mut windows: Query<&mut RenderImage<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
         ) {
-            let Ok(swapchain_image) = windows.get_single() else {
+            let Ok(mut swapchain_image) = windows.get_single_mut() else {
                 return;
             };
-            commands.record_commands().pipeline_barrier(
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[vk::ImageMemoryBarrier2 {
-                    src_stage_mask: vk::PipelineStageFlags2::CLEAR, // Last time this image was touched by a CLEAR.
-                    dst_stage_mask: vk::PipelineStageFlags2::CLEAR,
-                    src_access_mask: vk::AccessFlags2::empty(),
-                    dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
-                    old_layout: vk::ImageLayout::UNDEFINED,
-                    new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    image: swapchain_image.image,
-                    subresource_range: vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
+
+            commands
+                .record_commands()
+                .transition_resources()
+                .image(
+                    &mut swapchain_image,
+                    Access {
+                        stage: vk::PipelineStageFlags2::CLEAR,
+                        access: vk::AccessFlags2::TRANSFER_WRITE,
                     },
-                    ..Default::default()
-                }],
-            );
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                )
+                .end();
             commands.record_commands().clear_color_image(
                 swapchain_image.image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -100,28 +91,18 @@ impl RenderSystem for ClearMainWindowColor {
                     layer_count: 1,
                 }],
             );
-            commands.record_commands().pipeline_barrier(
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[vk::ImageMemoryBarrier2 {
-                    src_stage_mask: vk::PipelineStageFlags2::CLEAR,
-                    dst_stage_mask: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-                    src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
-                    dst_access_mask: vk::AccessFlags2::empty(),
-                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                    image: swapchain_image.image,
-                    subresource_range: vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
+            commands
+                .record_commands()
+                .transition_resources()
+                .image(
+                    &mut swapchain_image,
+                    Access {
+                        stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+                        access: vk::AccessFlags2::empty(),
                     },
-                    ..Default::default()
-                }],
-            );
+                    vk::ImageLayout::PRESENT_SRC_KHR,
+                )
+                .end();
         }
         clear_main_window_color.into_configs()
     }

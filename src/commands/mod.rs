@@ -34,6 +34,16 @@ where
             )
         }
     }
+    pub fn transition_resources(&mut self) -> ResourceTransitionCommandRecorder<'w> {
+        ResourceTransitionCommandRecorder {
+            device: self.device,
+            cmd_buf: self.cmd_buf,
+            global_barriers: vk::MemoryBarrier2::default(),
+            image_barriers: Vec::new(),
+            buffer_barriers: Vec::new(),
+            dependency_flags: vk::DependencyFlags::empty(),
+        }
+    }
 }
 
 pub struct ResourceTransitionCommandRecorder<'w> {
@@ -74,6 +84,20 @@ impl<'w> ResourceTransitionCommandRecorder<'w> {
             self.global_barriers.src_access_mask |= barrier.src_access_mask;
             self.global_barriers.dst_access_mask |= barrier.dst_access_mask;
         } else {
+            println!(
+                "{:?}",
+                vk::ImageMemoryBarrier2 {
+                    src_stage_mask: barrier.src_stage_mask,
+                    dst_stage_mask: barrier.dst_stage_mask,
+                    src_access_mask: barrier.src_access_mask,
+                    dst_access_mask: barrier.dst_access_mask,
+                    old_layout: image.layout,
+                    new_layout: layout,
+                    image: image.raw_image(),
+                    subresource_range: image.subresource_range(),
+                    ..Default::default()
+                }
+            );
             image.layout = layout;
             self.image_barriers.push(vk::ImageMemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
