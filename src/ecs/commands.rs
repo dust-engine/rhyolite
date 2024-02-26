@@ -25,15 +25,21 @@ use std::{
 
 use ash::vk::{self, Handle};
 use bevy_ecs::{
-    archetype::ArchetypeComponentId, component::ComponentId, system::{lifetimeless::SRes, Local, Res, ResMut, Resource, System, SystemMeta, SystemParam}, world::World
+    archetype::ArchetypeComponentId,
+    component::ComponentId,
+    system::{lifetimeless::SRes, Local, Res, ResMut, Resource, System, SystemMeta, SystemParam},
+    world::World,
 };
 use queue_cap::*;
 
 use crate::{
-    command_pool::RecordingCommandBuffer, commands::CommandRecorder, ecs::Barriers, queue::QueueType, semaphore::TimelineSemaphore, Device, HasDevice, QueueRef, QueuesRouter
+    command_pool::RecordingCommandBuffer, commands::CommandRecorder, ecs::Barriers,
+    queue::QueueType, semaphore::TimelineSemaphore, Device, HasDevice, QueueRef, QueuesRouter,
 };
 
-use super::{BoxedBarrierProducer, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemConfig};
+use super::{
+    BoxedBarrierProducer, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemConfig,
+};
 use crate::Access;
 
 /// A wrapper to produce multiple [`RecordingCommandBuffer`] variants based on the queue type it supports.
@@ -448,8 +454,6 @@ pub(crate) fn flush_system_graph<const Q: char>(
     }
 }
 
-
-
 struct ResourceState {
     access: Access,
     img_layout: vk::ImageLayout,
@@ -469,7 +473,10 @@ impl<const Q: char> InsertPipelineBarrier<Q> {
         }
     }
 }
-impl<const Q: char> System for InsertPipelineBarrier<Q> where (): IsQueueCap<Q> {
+impl<const Q: char> System for InsertPipelineBarrier<Q>
+where
+    (): IsQueueCap<Q>,
+{
     type In = ();
 
     type Out = ();
@@ -506,7 +513,11 @@ impl<const Q: char> System for InsertPipelineBarrier<Q> where (): IsQueueCap<Q> 
         self.system_meta.has_deferred()
     }
 
-    unsafe fn run_unsafe(&mut self, input: Self::In, world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell) -> Self::Out {
+    unsafe fn run_unsafe(
+        &mut self,
+        input: Self::In,
+        world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell,
+    ) -> Self::Out {
         let mut image_barriers = Vec::new();
         let mut buffer_barriers = Vec::new();
         let mut global_barriers = vk::MemoryBarrier2::default();
@@ -523,8 +534,16 @@ impl<const Q: char> System for InsertPipelineBarrier<Q> where (): IsQueueCap<Q> 
             assert!(dropped);
         }
 
-        let render_commands = RenderCommands::<Q>::get_param(self.render_command_state.as_mut().unwrap(), &self.system_meta, world, change_tick);
-        println!("Recording barriers: {:?} {:?} {:?}", image_barriers, buffer_barriers, global_barriers);
+        let render_commands = RenderCommands::<Q>::get_param(
+            self.render_command_state.as_mut().unwrap(),
+            &self.system_meta,
+            world,
+            change_tick,
+        );
+        println!(
+            "Recording barriers: {:?} {:?} {:?}",
+            image_barriers, buffer_barriers, global_barriers
+        );
         self.system_meta.last_run = change_tick;
     }
 
@@ -538,22 +557,28 @@ impl<const Q: char> System for InsertPipelineBarrier<Q> where (): IsQueueCap<Q> 
         for i in self.barrier_producers.iter_mut() {
             i.initialize(world);
         }
-        self.render_command_state = Some(RenderCommands::<Q>::init_state(world, &mut self.system_meta));
+        self.render_command_state = Some(RenderCommands::<Q>::init_state(
+            world,
+            &mut self.system_meta,
+        ));
     }
 
-    fn update_archetype_component_access(&mut self, world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell) {
+    fn update_archetype_component_access(
+        &mut self,
+        world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell,
+    ) {
         for i in self.barrier_producers.iter_mut() {
             i.update_archetype_component_access(world);
         }
-        let mut archetype_component_access: bevy_ecs::query::Access<ArchetypeComponentId> = bevy_ecs::query::Access::<ArchetypeComponentId>::new();
+        let mut archetype_component_access: bevy_ecs::query::Access<ArchetypeComponentId> =
+            bevy_ecs::query::Access::<ArchetypeComponentId>::new();
         for p in self.barrier_producers.iter() {
             archetype_component_access.extend(p.archetype_component_access());
         }
         self.system_meta.archetype_component_access = archetype_component_access;
     }
 
-    fn check_change_tick(&mut self, change_tick: bevy_ecs::component::Tick) {
-    }
+    fn check_change_tick(&mut self, change_tick: bevy_ecs::component::Tick) {}
 
     fn get_last_run(&self) -> bevy_ecs::component::Tick {
         self.system_meta.last_run
@@ -567,23 +592,27 @@ impl<const Q: char> System for InsertPipelineBarrier<Q> where (): IsQueueCap<Q> 
             let systems = std::mem::take(systems);
             assert!(self.barrier_producers.is_empty());
             self.barrier_producers = systems;
-    
-            
+
             let mut component_access = bevy_ecs::query::Access::<ComponentId>::new();
-            let mut archetype_component_access: bevy_ecs::query::Access<ArchetypeComponentId> = bevy_ecs::query::Access::<ArchetypeComponentId>::new();
+            let mut archetype_component_access: bevy_ecs::query::Access<ArchetypeComponentId> =
+                bevy_ecs::query::Access::<ArchetypeComponentId>::new();
             for p in self.barrier_producers.iter() {
                 component_access.extend(p.component_access());
                 archetype_component_access.extend(p.archetype_component_access());
             }
-            self.system_meta.component_access_set.extend_combined_access(&component_access);
+            self.system_meta
+                .component_access_set
+                .extend_combined_access(&component_access);
             self.system_meta.archetype_component_access = archetype_component_access;
         } else {
-            RenderCommands::<Q>::configurate(self.render_command_state.as_mut().unwrap(), config, world);
+            RenderCommands::<Q>::configurate(
+                self.render_command_state.as_mut().unwrap(),
+                config,
+                world,
+            );
         }
-
     }
 }
-
 
 pub struct RecycledBinarySemaphore {
     semaphore: vk::Semaphore,

@@ -1,13 +1,19 @@
 use ash::vk;
 use bevy_app::Update;
-use bevy_ecs::{entity::Entity, query::With, schedule::{IntoSystemConfigs, IntoSystemSet}, system::{In, IntoSystem, Query}};
-use bevy_window::PrimaryWindow;
-use rhyolite::{
-    acquire_swapchain_image, ecs::{
-        Barriers, RenderApp, RenderCommands, RenderImage, RenderRes, RenderSystem}, present, Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage, SwapchainPlugin
+use bevy_ecs::{
+    entity::Entity,
+    query::With,
+    schedule::{IntoSystemConfigs, IntoSystemSet},
+    system::{In, IntoSystem, Query},
 };
+use bevy_window::PrimaryWindow;
 use rhyolite::ecs::IntoRenderSystemConfigs;
-
+use rhyolite::{
+    acquire_swapchain_image,
+    ecs::{Barriers, RenderApp, RenderCommands, RenderImage, RenderRes, RenderSystem},
+    present, Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage,
+    SwapchainPlugin,
+};
 
 fn main() {
     let mut app = bevy_app::App::new();
@@ -42,13 +48,11 @@ fn main() {
     app.run();
 }
 
-
 // Solution: Each render system will be told the transitions to perform.
 // However, only one of them will actually perform the transitions, based on
 // runtime scheduling behavior.
 // Some systems will have a final "transition out". This "transition out" will be performed
 // by the "flush" system.
-
 
 struct ClearMainWindowColor;
 impl RenderSystem for ClearMainWindowColor {
@@ -119,7 +123,7 @@ impl RenderSystem for ClearMainWindowColor {
                 }],
             );
         }
-        clear_main_window_color.into_configs()        
+        clear_main_window_color.into_configs()
     }
 
     fn barriers(&self) -> rhyolite::ecs::BoxedBarrierProducer {
@@ -130,12 +134,15 @@ impl RenderSystem for ClearMainWindowColor {
             let Ok(mut swapchain_image) = windows.get_single_mut() else {
                 return;
             };
-            barriers.transition_image(&mut *swapchain_image, Access {
-                stage: vk::PipelineStageFlags2::CLEAR,
-                access: vk::AccessFlags2::TRANSFER_WRITE,
-            }, vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            barriers.transition_image(
+                &mut *swapchain_image,
+                Access {
+                    stage: vk::PipelineStageFlags2::CLEAR,
+                    access: vk::AccessFlags2::TRANSFER_WRITE,
+                },
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            )
         }
         Box::new(IntoSystem::into_system(barrier))
     }
 }
-

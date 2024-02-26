@@ -3,7 +3,6 @@ pub use ctx::*;
 
 use std::{pin::Pin, task::Poll};
 
-
 pub trait GPUFuture {
     type Output;
 

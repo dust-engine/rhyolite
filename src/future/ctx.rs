@@ -1,8 +1,5 @@
 use ash::vk;
 
-pub struct StageContext {
-}
+pub struct StageContext {}
 
-pub struct CommandBufferRecordContext{
-
-}
+pub struct CommandBufferRecordContext {}

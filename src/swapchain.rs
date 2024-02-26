@@ -9,9 +9,10 @@ use bevy_ecs::{
 use bevy_window::{PrimaryWindow, Window};
 
 use crate::{
-    ecs::{
-        QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker
-    }, plugin::RhyoliteApp, utils::{ColorSpace, SharingMode}, Device, HasDevice, ImageLike, PhysicalDevice, QueueType, QueuesRouter, Surface
+    ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
+    plugin::RhyoliteApp,
+    utils::{ColorSpace, SharingMode},
+    Device, HasDevice, ImageLike, PhysicalDevice, QueueType, QueuesRouter, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -532,7 +533,10 @@ impl ImageLike for SwapchainImage {
     }
 
     fn extent(&self) -> vk::Extent3D {
-        let swapchain = self.swapchain.as_ref().expect("Swapchain image used before it was first acquired");
+        let swapchain = self
+            .swapchain
+            .as_ref()
+            .expect("Swapchain image used before it was first acquired");
         vk::Extent3D {
             width: swapchain.0.extent.width,
             height: swapchain.0.extent.width,
@@ -541,7 +545,10 @@ impl ImageLike for SwapchainImage {
     }
 
     fn format(&self) -> vk::Format {
-        let swapchain = self.swapchain.as_ref().expect("Swapchain image used before it was first acquired");
+        let swapchain = self
+            .swapchain
+            .as_ref()
+            .expect("Swapchain image used before it was first acquired");
         swapchain.0.format
     }
 }

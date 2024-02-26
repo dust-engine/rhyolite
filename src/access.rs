@@ -20,11 +20,10 @@ pub struct MemoryBarrier {
 
 impl Access {
     pub fn is_writeonly(&self) -> bool {
-    
         // Clear all the write bits. If nothing is left, that means there's no read bits.
         self.access & !utils::ALL_WRITE_BITS == vk::AccessFlags2::NONE
     }
-    
+
     pub fn is_readonly(&self) -> bool {
         // Clear all the read bits. If nothing is left, that means there's no write bits.
         self.access & !utils::ALL_READ_BITS == vk::AccessFlags2::NONE
@@ -34,7 +33,7 @@ impl Access {
 #[derive(Clone, Default)]
 pub struct ResourceState {
     read: Access,
-    write: Access
+    write: Access,
 }
 impl ResourceState {
     pub fn transition(&mut self, next: Access) -> MemoryBarrier {
@@ -81,48 +80,51 @@ impl ResourceState {
 pub mod utils {
     use ash::vk;
     use std::cmp::Ordering;
-    pub const ALL_WRITE_BITS: vk::AccessFlags2 = vk::AccessFlags2::from_raw( vk::AccessFlags2::SHADER_WRITE.as_raw()
-    | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE.as_raw()
-    | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE.as_raw()
-    | vk::AccessFlags2::TRANSFER_WRITE.as_raw()
-    | vk::AccessFlags2::HOST_WRITE.as_raw()
-    | vk::AccessFlags2::MEMORY_WRITE.as_raw()
-    | vk::AccessFlags2::SHADER_STORAGE_WRITE.as_raw()
-    | vk::AccessFlags2::VIDEO_DECODE_WRITE_KHR.as_raw()
-    | vk::AccessFlags2::VIDEO_ENCODE_WRITE_KHR.as_raw()
-    | vk::AccessFlags2::TRANSFORM_FEEDBACK_WRITE_EXT.as_raw()
-    | vk::AccessFlags2::TRANSFORM_FEEDBACK_COUNTER_WRITE_EXT.as_raw()
-    | vk::AccessFlags2::COMMAND_PREPROCESS_WRITE_NV.as_raw()
-    | vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR.as_raw()
-    | vk::AccessFlags2::MICROMAP_WRITE_EXT.as_raw()
-    | vk::AccessFlags2::OPTICAL_FLOW_WRITE_NV.as_raw());
+    pub const ALL_WRITE_BITS: vk::AccessFlags2 = vk::AccessFlags2::from_raw(
+        vk::AccessFlags2::SHADER_WRITE.as_raw()
+            | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE.as_raw()
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE.as_raw()
+            | vk::AccessFlags2::TRANSFER_WRITE.as_raw()
+            | vk::AccessFlags2::HOST_WRITE.as_raw()
+            | vk::AccessFlags2::MEMORY_WRITE.as_raw()
+            | vk::AccessFlags2::SHADER_STORAGE_WRITE.as_raw()
+            | vk::AccessFlags2::VIDEO_DECODE_WRITE_KHR.as_raw()
+            | vk::AccessFlags2::VIDEO_ENCODE_WRITE_KHR.as_raw()
+            | vk::AccessFlags2::TRANSFORM_FEEDBACK_WRITE_EXT.as_raw()
+            | vk::AccessFlags2::TRANSFORM_FEEDBACK_COUNTER_WRITE_EXT.as_raw()
+            | vk::AccessFlags2::COMMAND_PREPROCESS_WRITE_NV.as_raw()
+            | vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR.as_raw()
+            | vk::AccessFlags2::MICROMAP_WRITE_EXT.as_raw()
+            | vk::AccessFlags2::OPTICAL_FLOW_WRITE_NV.as_raw(),
+    );
     pub const ALL_READ_BITS: vk::AccessFlags2 = vk::AccessFlags2::from_raw(
         vk::AccessFlags2::INDIRECT_COMMAND_READ.as_raw()
-    | vk::AccessFlags2::INDEX_READ.as_raw()
-    | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ.as_raw()
-    | vk::AccessFlags2::UNIFORM_READ.as_raw()
-    | vk::AccessFlags2::INPUT_ATTACHMENT_READ.as_raw()
-    | vk::AccessFlags2::SHADER_READ.as_raw()
-    | vk::AccessFlags2::COLOR_ATTACHMENT_READ.as_raw()
-    | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ.as_raw()
-    | vk::AccessFlags2::TRANSFER_READ.as_raw()
-    | vk::AccessFlags2::HOST_READ.as_raw()
-    | vk::AccessFlags2::MEMORY_READ.as_raw()
-    | vk::AccessFlags2::SHADER_SAMPLED_READ.as_raw()
-    | vk::AccessFlags2::SHADER_STORAGE_READ.as_raw()
-    | vk::AccessFlags2::VIDEO_DECODE_READ_KHR.as_raw()
-    | vk::AccessFlags2::VIDEO_ENCODE_READ_KHR.as_raw()
-    | vk::AccessFlags2::TRANSFORM_FEEDBACK_COUNTER_READ_EXT.as_raw()
-    | vk::AccessFlags2::CONDITIONAL_RENDERING_READ_EXT.as_raw()
-    | vk::AccessFlags2::COMMAND_PREPROCESS_READ_NV.as_raw()
-    | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR.as_raw()
-    | vk::AccessFlags2::FRAGMENT_DENSITY_MAP_READ_EXT.as_raw()
-    | vk::AccessFlags2::COLOR_ATTACHMENT_READ_NONCOHERENT_EXT.as_raw()
-    | vk::AccessFlags2::DESCRIPTOR_BUFFER_READ_EXT.as_raw()
-    | vk::AccessFlags2::INVOCATION_MASK_READ_HUAWEI.as_raw()
-    | vk::AccessFlags2::SHADER_BINDING_TABLE_READ_KHR.as_raw()
-    | vk::AccessFlags2::MICROMAP_READ_EXT.as_raw()
-    | vk::AccessFlags2::OPTICAL_FLOW_READ_NV.as_raw());
+            | vk::AccessFlags2::INDEX_READ.as_raw()
+            | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ.as_raw()
+            | vk::AccessFlags2::UNIFORM_READ.as_raw()
+            | vk::AccessFlags2::INPUT_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags2::SHADER_READ.as_raw()
+            | vk::AccessFlags2::COLOR_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags2::TRANSFER_READ.as_raw()
+            | vk::AccessFlags2::HOST_READ.as_raw()
+            | vk::AccessFlags2::MEMORY_READ.as_raw()
+            | vk::AccessFlags2::SHADER_SAMPLED_READ.as_raw()
+            | vk::AccessFlags2::SHADER_STORAGE_READ.as_raw()
+            | vk::AccessFlags2::VIDEO_DECODE_READ_KHR.as_raw()
+            | vk::AccessFlags2::VIDEO_ENCODE_READ_KHR.as_raw()
+            | vk::AccessFlags2::TRANSFORM_FEEDBACK_COUNTER_READ_EXT.as_raw()
+            | vk::AccessFlags2::CONDITIONAL_RENDERING_READ_EXT.as_raw()
+            | vk::AccessFlags2::COMMAND_PREPROCESS_READ_NV.as_raw()
+            | vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR.as_raw()
+            | vk::AccessFlags2::FRAGMENT_DENSITY_MAP_READ_EXT.as_raw()
+            | vk::AccessFlags2::COLOR_ATTACHMENT_READ_NONCOHERENT_EXT.as_raw()
+            | vk::AccessFlags2::DESCRIPTOR_BUFFER_READ_EXT.as_raw()
+            | vk::AccessFlags2::INVOCATION_MASK_READ_HUAWEI.as_raw()
+            | vk::AccessFlags2::SHADER_BINDING_TABLE_READ_KHR.as_raw()
+            | vk::AccessFlags2::MICROMAP_READ_EXT.as_raw()
+            | vk::AccessFlags2::OPTICAL_FLOW_READ_NV.as_raw(),
+    );
     const GRAPHICS_PIPELINE_ORDER: [vk::PipelineStageFlags2; 13] = [
         vk::PipelineStageFlags2::DRAW_INDIRECT,
         vk::PipelineStageFlags2::INDEX_INPUT,
@@ -170,7 +172,10 @@ pub mod utils {
     /// Compare two pipeline stages. Returns [`Some(Ordering::Less)`] if `a` is earlier than `b`,
     /// [`Ordering::Equal`] if they are the same, [`Ordering::Greater`] if `a` is later than `b`,
     /// and [`None`] if they are not in the same time and are not mutually ordered.
-    pub fn compare_pipeline_stages(a: vk::PipelineStageFlags2, b: vk::PipelineStageFlags2) -> Option<Ordering> {
+    pub fn compare_pipeline_stages(
+        a: vk::PipelineStageFlags2,
+        b: vk::PipelineStageFlags2,
+    ) -> Option<Ordering> {
         if a == b {
             return Some(std::cmp::Ordering::Equal);
         }
@@ -185,7 +190,10 @@ pub mod utils {
         }
         None
     }
-    pub fn earlier_stage(a: vk::PipelineStageFlags2, b: vk::PipelineStageFlags2) -> vk::PipelineStageFlags2 {
+    pub fn earlier_stage(
+        a: vk::PipelineStageFlags2,
+        b: vk::PipelineStageFlags2,
+    ) -> vk::PipelineStageFlags2 {
         if let Some(ordering) = compare_pipeline_stages(a, b) {
             if ordering.is_le() {
                 a
@@ -196,7 +204,10 @@ pub mod utils {
             a | b
         }
     }
-    pub fn later_stage(a: vk::PipelineStageFlags2, b: vk::PipelineStageFlags2) -> vk::PipelineStageFlags2 {
+    pub fn later_stage(
+        a: vk::PipelineStageFlags2,
+        b: vk::PipelineStageFlags2,
+    ) -> vk::PipelineStageFlags2 {
         if let Some(ordering) = compare_pipeline_stages(a, b) {
             if ordering.is_ge() {
                 a
@@ -209,27 +220,83 @@ pub mod utils {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::utils::*;
+    use super::*;
     #[test]
     fn test_earlier_stage() {
-        assert_eq!(earlier_stage(vk::PipelineStageFlags2::INDEX_INPUT, vk::PipelineStageFlags2::INDEX_INPUT), vk::PipelineStageFlags2::INDEX_INPUT);
-        assert_eq!(earlier_stage(vk::PipelineStageFlags2::VERTEX_SHADER, vk::PipelineStageFlags2::FRAGMENT_SHADER), vk::PipelineStageFlags2::VERTEX_SHADER);
-        assert_eq!(earlier_stage(vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS, vk::PipelineStageFlags2::FRAGMENT_SHADER), vk::PipelineStageFlags2::FRAGMENT_SHADER);
-        assert_eq!(earlier_stage(vk::PipelineStageFlags2::VERTEX_SHADER, vk::PipelineStageFlags2::TRANSFER), vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::TRANSFER);
+        assert_eq!(
+            earlier_stage(
+                vk::PipelineStageFlags2::INDEX_INPUT,
+                vk::PipelineStageFlags2::INDEX_INPUT
+            ),
+            vk::PipelineStageFlags2::INDEX_INPUT
+        );
+        assert_eq!(
+            earlier_stage(
+                vk::PipelineStageFlags2::VERTEX_SHADER,
+                vk::PipelineStageFlags2::FRAGMENT_SHADER
+            ),
+            vk::PipelineStageFlags2::VERTEX_SHADER
+        );
+        assert_eq!(
+            earlier_stage(
+                vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                vk::PipelineStageFlags2::FRAGMENT_SHADER
+            ),
+            vk::PipelineStageFlags2::FRAGMENT_SHADER
+        );
+        assert_eq!(
+            earlier_stage(
+                vk::PipelineStageFlags2::VERTEX_SHADER,
+                vk::PipelineStageFlags2::TRANSFER
+            ),
+            vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::TRANSFER
+        );
     }
     #[test]
     fn test_compare_pipeline_stages() {
-        assert!(compare_pipeline_stages(vk::PipelineStageFlags2::INDEX_INPUT, vk::PipelineStageFlags2::INDEX_INPUT).unwrap().is_eq());
-        assert!(compare_pipeline_stages(vk::PipelineStageFlags2::INDEX_INPUT, vk::PipelineStageFlags2::FRAGMENT_SHADER).unwrap().is_lt());
-        assert!(compare_pipeline_stages(vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS, vk::PipelineStageFlags2::FRAGMENT_SHADER).unwrap().is_lt());
-        assert!(compare_pipeline_stages(vk::PipelineStageFlags2::FRAGMENT_SHADER, vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS).unwrap().is_lt());
-        assert!(compare_pipeline_stages(vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS, vk::PipelineStageFlags2::FRAGMENT_SHADER).unwrap().is_gt());
-        assert!(compare_pipeline_stages(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR, vk::PipelineStageFlags2::FRAGMENT_SHADER).is_none());
-        assert!(compare_pipeline_stages(vk::PipelineStageFlags2::TASK_SHADER_EXT, vk::PipelineStageFlags2::VERTEX_SHADER).is_none());
+        assert!(compare_pipeline_stages(
+            vk::PipelineStageFlags2::INDEX_INPUT,
+            vk::PipelineStageFlags2::INDEX_INPUT
+        )
+        .unwrap()
+        .is_eq());
+        assert!(compare_pipeline_stages(
+            vk::PipelineStageFlags2::INDEX_INPUT,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER
+        )
+        .unwrap()
+        .is_lt());
+        assert!(compare_pipeline_stages(
+            vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER
+        )
+        .unwrap()
+        .is_lt());
+        assert!(compare_pipeline_stages(
+            vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS
+        )
+        .unwrap()
+        .is_lt());
+        assert!(compare_pipeline_stages(
+            vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER
+        )
+        .unwrap()
+        .is_gt());
+        assert!(compare_pipeline_stages(
+            vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER
+        )
+        .is_none());
+        assert!(compare_pipeline_stages(
+            vk::PipelineStageFlags2::TASK_SHADER_EXT,
+            vk::PipelineStageFlags2::VERTEX_SHADER
+        )
+        .is_none());
     }
 
     /// Write - Read - Read, reads are ordered-later
@@ -245,25 +312,30 @@ mod tests {
             stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
             access: vk::AccessFlags2::SHADER_READ,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            dst_access_mask: vk::AccessFlags2::SHADER_READ,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                dst_access_mask: vk::AccessFlags2::SHADER_READ,
+            }
+        );
         let barrier = access.transition(Access {
             stage: vk::PipelineStageFlags2::VERTEX_SHADER,
             access: vk::AccessFlags2::SHADER_READ,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            src_access_mask: vk::AccessFlags2::empty(),
-            dst_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
-            dst_access_mask: vk::AccessFlags2::empty(),
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                src_access_mask: vk::AccessFlags2::empty(),
+                dst_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
+                dst_access_mask: vk::AccessFlags2::empty(),
+            }
+        );
     }
 
-    
     /// Write - Read - Read, reads are ordered-earlier
     #[test]
     fn test_wrr2() {
@@ -277,12 +349,15 @@ mod tests {
             stage: vk::PipelineStageFlags2::VERTEX_SHADER,
             access: vk::AccessFlags2::SHADER_READ,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
-            dst_access_mask: vk::AccessFlags2::SHADER_READ,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
+                dst_access_mask: vk::AccessFlags2::SHADER_READ,
+            }
+        );
         let barrier = access.transition(Access {
             stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
             access: vk::AccessFlags2::SHADER_READ,
@@ -308,12 +383,15 @@ mod tests {
             stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
             access: vk::AccessFlags2::SHADER_READ,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            dst_access_mask: vk::AccessFlags2::SHADER_READ,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                dst_access_mask: vk::AccessFlags2::SHADER_READ,
+            }
+        );
         let barrier = access.transition(Access {
             stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
             access: vk::AccessFlags2::SHADER_READ,
@@ -334,22 +412,28 @@ mod tests {
             stage: vk::PipelineStageFlags2::VERTEX_SHADER,
             access: vk::AccessFlags2::SHADER_READ,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
-            dst_access_mask: vk::AccessFlags2::SHADER_READ,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
+                dst_access_mask: vk::AccessFlags2::SHADER_READ,
+            }
+        );
         let barrier = access.transition(Access {
             stage: vk::PipelineStageFlags2::TASK_SHADER_EXT,
             access: vk::AccessFlags2::SHADER_READ,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::TASK_SHADER_EXT,
-            dst_access_mask: vk::AccessFlags2::SHADER_READ,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::TASK_SHADER_EXT,
+                dst_access_mask: vk::AccessFlags2::SHADER_READ,
+            }
+        );
         let barrier = access.transition(Access {
             stage: vk::PipelineStageFlags2::MESH_SHADER_EXT,
             access: vk::AccessFlags2::SHADER_READ,
@@ -357,7 +441,6 @@ mod tests {
         assert_eq!(barrier, MemoryBarrier::default());
     }
 
-    
     #[test]
     fn test_wrw() {
         let mut access = ResourceState::default();
@@ -370,25 +453,30 @@ mod tests {
             stage: vk::PipelineStageFlags2::VERTEX_SHADER,
             access: vk::AccessFlags2::SHADER_READ,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
-            dst_access_mask: vk::AccessFlags2::SHADER_READ,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
+                dst_access_mask: vk::AccessFlags2::SHADER_READ,
+            }
+        );
         let barrier = access.transition(Access {
             stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
             access: vk::AccessFlags2::SHADER_WRITE,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
-            src_access_mask: vk::AccessFlags2::empty(),
-            dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            dst_access_mask: vk::AccessFlags2::empty(),
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::VERTEX_SHADER,
+                src_access_mask: vk::AccessFlags2::empty(),
+                dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                dst_access_mask: vk::AccessFlags2::empty(),
+            }
+        );
     }
 
-    
     #[test]
     fn test_wrw2() {
         let mut access = ResourceState::default();
@@ -401,24 +489,30 @@ mod tests {
             stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
             access: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            src_access_mask: vk::AccessFlags2::SHADER_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                src_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
+            }
+        );
         let barrier = access.transition(Access {
             stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
             access: vk::AccessFlags2::SHADER_WRITE,
         });
         // We need to wait on the read from the second operation to finish.
         // We also need to wait on the write from the first operation but this is done through an indirect barrier.
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags2::empty(),
-            dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
-            dst_access_mask: vk::AccessFlags2::empty(),
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::empty(),
+                dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                dst_access_mask: vk::AccessFlags2::empty(),
+            }
+        );
     }
 
     #[test]
@@ -433,23 +527,29 @@ mod tests {
             stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
             access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
         });
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            src_access_mask: vk::AccessFlags2::SHADER_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                src_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            }
+        );
         let barrier = access.transition(Access {
             stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
             access: vk::AccessFlags2::SHADER_WRITE,
         });
         // We need to wait on the read from the second operation to finish.
         // We also need to wait on the write from the first operation but this is done through an indirect barrier.
-        assert_eq!(barrier, MemoryBarrier {
-            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
-            dst_access_mask: vk::AccessFlags2::SHADER_WRITE,
-        });
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                dst_access_mask: vk::AccessFlags2::SHADER_WRITE,
+            }
+        );
     }
 }

@@ -1,6 +1,11 @@
 use ash::vk;
 use bevy_app::{App, Update};
-use bevy_ecs::{schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfig, SystemConfigs, SystemSet}, system::{BoxedSystem, IntoSystem, ReadOnlySystem}};
+use bevy_ecs::{
+    schedule::{
+        Condition, IntoSystemConfigs, IntoSystemSet, SystemConfig, SystemConfigs, SystemSet,
+    },
+    system::{BoxedSystem, IntoSystem, ReadOnlySystem},
+};
 
 use crate::{queue::QueueType, Access, BufferLike, ImageLike};
 
@@ -11,7 +16,7 @@ pub struct RenderSystemConfig {
     pub queue: QueueType,
     pub force_binary_semaphore: bool,
     pub is_queue_op: bool,
-    pub barrier_producer: Option<BoxedBarrierProducer>
+    pub barrier_producer: Option<BoxedBarrierProducer>,
 }
 impl Default for RenderSystemConfig {
     fn default() -> Self {
@@ -44,7 +49,6 @@ impl Default for QueueSystemDependencyConfig {
     }
 }
 
-
 /// GAT limitation. All references contained herein are valid for the duration of the system call.
 pub struct Barriers {
     pub(crate) image_barriers: *mut Vec<vk::ImageMemoryBarrier2>,
@@ -69,7 +73,12 @@ impl Barriers {
         global_barriers.src_access_mask |= barrier.src_access_mask;
         global_barriers.dst_access_mask |= barrier.dst_access_mask;
     }
-    pub fn transition_image<T: ImageLike>(&mut self, image: &mut RenderImage<T>, access: Access, layout: vk::ImageLayout) {
+    pub fn transition_image<T: ImageLike>(
+        &mut self,
+        image: &mut RenderImage<T>,
+        access: Access,
+        layout: vk::ImageLayout,
+    ) {
         let image_barriers = unsafe { &mut *self.image_barriers };
         let global_barriers = unsafe { &mut *self.global_barriers };
         let barrier = image.res.state.transition(access);
@@ -93,7 +102,6 @@ impl Barriers {
                 ..Default::default()
             });
         }
-
     }
     pub fn transition_buffer<T: BufferLike>(&mut self, buffer: &mut RenderRes<T>, access: Access) {
         todo!()
@@ -140,10 +148,12 @@ where
         RenderSystemConfigs(self.into_configs().ambiguous_with_all())
     }
     fn on_queue<M>(self, queue_type: QueueType) -> RenderSystemConfigs {
-        let this = self.into_configs().with_option::<RenderSystemPass>(|entry| {
-            let config = entry.or_default();
-            config.queue = queue_type;
-        });
+        let this = self
+            .into_configs()
+            .with_option::<RenderSystemPass>(|entry| {
+                let config = entry.or_default();
+                config.queue = queue_type;
+            });
         RenderSystemConfigs(this)
     }
 }
@@ -170,5 +180,4 @@ impl RenderApp for App {
         self.add_systems(Update, render_system.into_configs());
         self
     }
-
 }

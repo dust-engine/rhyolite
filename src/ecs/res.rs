@@ -1,4 +1,7 @@
-use std::{collections::{BTreeMap, BTreeSet}, ops::Deref};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Deref,
+};
 
 use ash::vk;
 use bevy_ecs::{
@@ -53,7 +56,7 @@ impl<T> RenderImage<T> {
     pub fn new(inner: T) -> Self {
         Self {
             res: RenderRes::new(inner),
-            layout: vk::ImageLayout::UNDEFINED
+            layout: vk::ImageLayout::UNDEFINED,
         }
     }
     pub unsafe fn get_mut(&mut self) -> &mut T {

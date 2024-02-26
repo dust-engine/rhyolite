@@ -1,10 +1,19 @@
-use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use bevy_ecs::{
-    query::Access, schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode}, system::{BoxedSystem, IntoSystem, System}, world::World
+    query::Access,
+    schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
+    system::{BoxedSystem, IntoSystem, System},
+    world::World,
 };
 use bevy_utils::petgraph::{
-    graph::DiGraph, graphmap::DiGraphMap, visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker}, Direction::{Incoming, Outgoing}
+    graph::DiGraph,
+    graphmap::DiGraphMap,
+    visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
+    Direction::{Incoming, Outgoing},
 };
 
 use crate::{
@@ -111,13 +120,13 @@ impl ScheduleBuildPass for RenderSystemPass {
             force_binary_semaphore: bool,
             is_queue_op: bool,
 
-
             selected_queue: QueueRef,
             stage_index: u32,
             queue_graph_node: u32,
             queue_type: QueueType,
         }
-        let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> = (0..graph.systems.len()).map(|_| None).collect();
+        let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> =
+            (0..graph.systems.len()).map(|_| None).collect();
         let queue_router = world.resource::<QueuesRouter>();
 
         // Step 1: Queue coloring.
@@ -549,9 +558,15 @@ impl ScheduleBuildPass for RenderSystemPass {
                     }
                 }
             }
-            let mut heap: Vec<usize> = queue_node_graph.nodes().filter(|node| {
-                queue_node_graph.neighbors_directed(*node, Incoming).next().is_none()
-            }).collect();
+            let mut heap: Vec<usize> = queue_node_graph
+                .nodes()
+                .filter(|node| {
+                    queue_node_graph
+                        .neighbors_directed(*node, Incoming)
+                        .next()
+                        .is_none()
+                })
+                .collect();
             let mut current_access = Access::new();
             let mut next_stage_heap: Vec<usize> = Vec::new();
             let mut current_stage: Vec<usize> = Vec::new();
@@ -561,11 +576,13 @@ impl ScheduleBuildPass for RenderSystemPass {
                 let access = system.archetype_component_access();
                 if current_access.is_compatible(access) {
                     current_access.extend(access);
-                    let revealed_nodes = queue_node_graph.neighbors_directed(node, Outgoing).filter(|node| {
-                        let mut iter = queue_node_graph.neighbors_directed(*node, Incoming);
-                        iter.next().unwrap();
-                        iter.next().is_none()
-                    });
+                    let revealed_nodes = queue_node_graph
+                        .neighbors_directed(node, Outgoing)
+                        .filter(|node| {
+                            let mut iter = queue_node_graph.neighbors_directed(*node, Incoming);
+                            iter.next().unwrap();
+                            iter.next().is_none()
+                        });
                     heap.extend(revealed_nodes);
                     queue_node_graph.remove_node(node);
                     current_stage.push(node);
@@ -602,9 +619,18 @@ impl ScheduleBuildPass for RenderSystemPass {
                     _ => unimplemented!(),
                 };
 
-                let mut barrier_producers: Vec<_> = stage.iter().map(|&i| {
-                    graph.systems[i].config.get_mut::<RenderSystemConfig>().unwrap().barrier_producer.take().unwrap()
-                }).collect();
+                let mut barrier_producers: Vec<_> = stage
+                    .iter()
+                    .map(|&i| {
+                        graph.systems[i]
+                            .config
+                            .get_mut::<RenderSystemConfig>()
+                            .unwrap()
+                            .barrier_producer
+                            .take()
+                            .unwrap()
+                    })
+                    .collect();
                 system.configurate(&mut barrier_producers, world);
                 assert!(barrier_producers.is_empty());
                 system.initialize(world);
