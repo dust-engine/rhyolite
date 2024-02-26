@@ -12,6 +12,9 @@ mod semaphore;
 mod surface;
 mod swapchain;
 mod future;
+mod image;
+mod buffer;
+mod access;
 
 pub mod utils;
 
@@ -24,3 +27,6 @@ pub use queue::*;
 pub use surface::*;
 pub use swapchain::*;
 pub use future::*;
+pub use image::*;
+pub use buffer::*;
+pub use access::*;

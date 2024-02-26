@@ -589,16 +589,25 @@ impl ScheduleBuildPass for RenderSystemPass {
                 // Create a pipeline flush system
                 let id_num = graph.systems.len();
                 let id = NodeId::System(id_num);
-                let mut system: BoxedSystem = Box::new(IntoSystem::into_system(
-                    crate::ecs::InsertPipelineBarrier::new()
-                ));
+                let mut system: BoxedSystem = match queue_node.queue_type {
+                    QueueType::Graphics => Box::new(IntoSystem::into_system(
+                        crate::ecs::InsertPipelineBarrier::<'g'>::new(),
+                    )),
+                    QueueType::Compute => Box::new(IntoSystem::into_system(
+                        crate::ecs::InsertPipelineBarrier::<'c'>::new(),
+                    )),
+                    QueueType::Transfer => Box::new(IntoSystem::into_system(
+                        crate::ecs::InsertPipelineBarrier::<'t'>::new(),
+                    )),
+                    _ => unimplemented!(),
+                };
 
                 let mut barrier_producers: Vec<_> = stage.iter().map(|&i| {
                     graph.systems[i].config.get_mut::<RenderSystemConfig>().unwrap().barrier_producer.take().unwrap()
                 }).collect();
                 system.configurate(&mut barrier_producers, world);
-                system.initialize(world);
                 assert!(barrier_producers.is_empty());
+                system.initialize(world);
                 graph
                     .systems
                     .push(SystemNode::new(system, Default::default()));

@@ -1,10 +1,10 @@
 use ash::vk;
 use bevy_app::{App, Update};
-use bevy_ecs::{schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfig, SystemConfigs, SystemSet}, system::{IntoSystem, ReadOnlySystem}};
+use bevy_ecs::{schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfig, SystemConfigs, SystemSet}, system::{BoxedSystem, IntoSystem, ReadOnlySystem}};
 
-use crate::queue::QueueType;
+use crate::{queue::QueueType, Access, BufferLike, ImageLike};
 
-use super::RenderSystemPass;
+use super::{RenderImage, RenderRes, RenderSystemPass};
 
 pub struct RenderSystemConfig {
     /// The render system must be assigned onto a queue supporting these feature flags.
@@ -22,12 +22,6 @@ impl Default for RenderSystemConfig {
             barrier_producer: None,
         }
     }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Access {
-    pub stage: vk::PipelineStageFlags2,
-    pub access: vk::AccessFlags2,
 }
 
 #[derive(Debug, Clone)]
@@ -55,10 +49,58 @@ impl Default for QueueSystemDependencyConfig {
 pub struct Barriers {
     pub(crate) image_barriers: *mut Vec<vk::ImageMemoryBarrier2>,
     pub(crate) buffer_barriers: *mut Vec<vk::BufferMemoryBarrier2>,
-    pub(crate) memory_barriers: *mut Vec<vk::MemoryBarrier2>
+    pub(crate) global_barriers: *mut vk::MemoryBarrier2,
+    pub(crate) dropped: *mut bool,
+}
+impl Drop for Barriers {
+    fn drop(&mut self) {
+        unsafe {
+            *self.dropped = true;
+        }
+    }
 }
 
-pub type BoxedBarrierProducer = Box<dyn ReadOnlySystem<In = Barriers, Out = ()>>;
+impl Barriers {
+    pub fn transition_resource<T>(&mut self, res: &mut RenderRes<T>, access: Access) {
+        let global_barriers = unsafe { &mut *self.global_barriers };
+        let barrier = res.state.transition(access);
+        global_barriers.src_stage_mask |= barrier.src_stage_mask;
+        global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
+        global_barriers.src_access_mask |= barrier.src_access_mask;
+        global_barriers.dst_access_mask |= barrier.dst_access_mask;
+    }
+    pub fn transition_image<T: ImageLike>(&mut self, image: &mut RenderImage<T>, access: Access, layout: vk::ImageLayout) {
+        let image_barriers = unsafe { &mut *self.image_barriers };
+        let global_barriers = unsafe { &mut *self.global_barriers };
+        let barrier = image.res.state.transition(access);
+
+        if image.layout == layout {
+            global_barriers.src_stage_mask |= barrier.src_stage_mask;
+            global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
+            global_barriers.src_access_mask |= barrier.src_access_mask;
+            global_barriers.dst_access_mask |= barrier.dst_access_mask;
+        } else {
+            image.layout = layout;
+            image_barriers.push(vk::ImageMemoryBarrier2 {
+                src_stage_mask: barrier.src_stage_mask,
+                dst_stage_mask: barrier.dst_stage_mask,
+                src_access_mask: barrier.src_access_mask,
+                dst_access_mask: barrier.dst_access_mask,
+                old_layout: image.layout,
+                new_layout: layout,
+                image: image.raw_image(),
+                subresource_range: image.subresource_range(),
+                ..Default::default()
+            });
+        }
+
+    }
+    pub fn transition_buffer<T: BufferLike>(&mut self, buffer: &mut RenderRes<T>, access: Access) {
+        todo!()
+    }
+}
+
+pub type BoxedBarrierProducer = BoxedSystem<Barriers, ()>;
 
 pub trait RenderSystem {
     fn system(&self) -> SystemConfigs;

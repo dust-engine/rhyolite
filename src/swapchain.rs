@@ -10,12 +10,8 @@ use bevy_window::{PrimaryWindow, Window};
 
 use crate::{
     ecs::{
-        QueueContext, RenderComponent, RenderComponentMut, RenderSystemPass,
-        RenderSystemsBinarySemaphoreTracker,
-    },
-    plugin::RhyoliteApp,
-    utils::{ColorSpace, SharingMode},
-    Device, HasDevice, PhysicalDevice, QueueType, QueuesRouter, Surface,
+        QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker
+    }, plugin::RhyoliteApp, utils::{ColorSpace, SharingMode}, Device, HasDevice, ImageLike, PhysicalDevice, QueueType, QueuesRouter, Surface
 };
 
 pub struct SwapchainPlugin {
@@ -83,6 +79,13 @@ impl HasDevice for SwapchainLoader {
 
 #[derive(Component, Clone)]
 pub struct Swapchain(Arc<SwapchainInner>);
+impl PartialEq for Swapchain {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Swapchain {}
+
 struct SwapchainInner {
     loader: SwapchainLoader,
     surface: Surface,
@@ -321,10 +324,11 @@ pub(super) fn extract_swapchains(
         commands
             .entity(create_event.window)
             .insert(new_swapchain)
-            .insert(SwapchainImage {
+            .insert(RenderImage::new(SwapchainImage {
                 image: vk::Image::null(),
                 indice: u32::MAX,
-            });
+                swapchain: None,
+            }));
     }
 }
 
@@ -509,6 +513,37 @@ fn get_surface_preferred_format(
 pub struct SwapchainImage {
     pub image: vk::Image,
     indice: u32,
+    swapchain: Option<Swapchain>,
+}
+
+impl ImageLike for SwapchainImage {
+    fn raw_image(&self) -> vk::Image {
+        self.image
+    }
+
+    fn subresource_range(&self) -> vk::ImageSubresourceRange {
+        vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        }
+    }
+
+    fn extent(&self) -> vk::Extent3D {
+        let swapchain = self.swapchain.as_ref().expect("Swapchain image used before it was first acquired");
+        vk::Extent3D {
+            width: swapchain.0.extent.width,
+            height: swapchain.0.extent.width,
+            depth: 1,
+        }
+    }
+
+    fn format(&self) -> vk::Format {
+        let swapchain = self.swapchain.as_ref().expect("Swapchain image used before it was first acquired");
+        swapchain.0.format
+    }
 }
 
 /// Acquires the next image from the swapchain by calling [`ash::extensions::khr::Swapchain::acquire_next_image`].
@@ -520,7 +555,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     mut query: Query<
         (
             &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
-            RenderComponentMut<SwapchainImage>,
+            &mut RenderImage<SwapchainImage>,
         ),
         Filter,
     >,
@@ -560,7 +595,12 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     }
     let image = swapchain.0.images[indice as usize];
     unsafe {
-        *swapchain_image.get_on_host_mut() = SwapchainImage { image, indice };
+        let swapchain_image = swapchain_image.get_mut();
+        swapchain_image.image = image;
+        swapchain_image.indice = indice;
+        if swapchain_image.swapchain.as_ref() != Some(&*swapchain) {
+            swapchain_image.swapchain = Some(swapchain.clone());
+        }
     }
 }
 
@@ -569,7 +609,7 @@ pub fn present(
     swapchain_loader: Res<SwapchainLoader>,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
-    mut query: Query<(&mut Swapchain, RenderComponent<SwapchainImage>)>,
+    mut query: Query<(&mut Swapchain, &RenderImage<SwapchainImage>)>,
     binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
 ) {
     assert!(queue_ctx.timeline_signals.is_empty());
@@ -585,10 +625,8 @@ pub fn present(
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
     for (swapchain, swapchain_image) in query.iter_mut() {
         swapchains.push(swapchain.0.inner);
-        unsafe {
-            // Safety: we're only getting the indice of the image and we're not actually reading / writing to it.
-            swapchain_image_indices.push(swapchain_image.get_on_host().indice);
-        }
+        // Safety: we're only getting the indice of the image and we're not actually reading / writing to it.
+        swapchain_image_indices.push(swapchain_image.indice);
     }
     if swapchains.is_empty() {
         // A bit of a special case: we can't call `queue_present` with an empty swapchain list.

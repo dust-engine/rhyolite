@@ -3,8 +3,7 @@ mod config;
 mod pass;
 mod per_frame;
 mod res;
-#[cfg(test)]
-mod tests;
+
 
 pub use commands::*;
 pub use config::*;

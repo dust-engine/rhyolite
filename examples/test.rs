@@ -3,9 +3,8 @@ use bevy_app::Update;
 use bevy_ecs::{entity::Entity, query::With, schedule::{IntoSystemConfigs, IntoSystemSet}, system::{In, IntoSystem, Query}};
 use bevy_window::PrimaryWindow;
 use rhyolite::{
-    acquire_swapchain_image,
-    ecs::{Barriers, RenderApp, RenderCommands, RenderComponent, RenderSystem},
-    present, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage, SwapchainPlugin,
+    acquire_swapchain_image, ecs::{
+        Barriers, RenderApp, RenderCommands, RenderImage, RenderRes, RenderSystem}, present, Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage, SwapchainPlugin
 };
 use rhyolite::ecs::IntoRenderSystemConfigs;
 
@@ -56,7 +55,7 @@ impl RenderSystem for ClearMainWindowColor {
     fn system(&self) -> bevy_ecs::schedule::SystemConfigs {
         fn clear_main_window_color(
             mut commands: RenderCommands<'g'>,
-            windows: Query<RenderComponent<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
+            windows: Query<&RenderImage<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
         ) {
             let Ok(swapchain_image) = windows.get_single() else {
                 return;
@@ -72,7 +71,7 @@ impl RenderSystem for ClearMainWindowColor {
                     dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
                     old_layout: vk::ImageLayout::UNDEFINED,
                     new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    image: swapchain_image.inner.image,
+                    image: swapchain_image.image,
                     subresource_range: vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         base_mip_level: 0,
@@ -84,7 +83,7 @@ impl RenderSystem for ClearMainWindowColor {
                 }],
             );
             commands.record_commands().clear_color_image(
-                swapchain_image.inner.image,
+                swapchain_image.image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &vk::ClearColorValue {
                     float32: [0.0, 0.0, 1.0, 1.0],
@@ -108,7 +107,7 @@ impl RenderSystem for ClearMainWindowColor {
                     dst_access_mask: vk::AccessFlags2::empty(),
                     old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                    image: swapchain_image.inner.image,
+                    image: swapchain_image.image,
                     subresource_range: vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         base_mip_level: 0,
@@ -124,10 +123,19 @@ impl RenderSystem for ClearMainWindowColor {
     }
 
     fn barriers(&self) -> rhyolite::ecs::BoxedBarrierProducer {
-        fn empty(In(input): In<Barriers>) {
-            println!("lalala pipeline barrier");
+        fn barrier(
+            In(mut barriers): In<Barriers>,
+            mut windows: Query<&mut RenderImage<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
+        ) {
+            let Ok(mut swapchain_image) = windows.get_single_mut() else {
+                return;
+            };
+            barriers.transition_image(&mut *swapchain_image, Access {
+                stage: vk::PipelineStageFlags2::CLEAR,
+                access: vk::AccessFlags2::TRANSFER_WRITE,
+            }, vk::ImageLayout::TRANSFER_DST_OPTIMAL)
         }
-        Box::new(IntoSystem::into_system(empty))
+        Box::new(IntoSystem::into_system(barrier))
     }
 }
 
