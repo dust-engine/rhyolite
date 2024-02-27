@@ -1,4 +1,4 @@
-use std::{borrow::BorrowMut, ops::Deref, sync::Arc};
+use std::{borrow::BorrowMut, ops::{Deref, DerefMut}, sync::Arc};
 
 use ash::{extensions::khr, prelude::VkResult, vk};
 use bevy_app::{App, Plugin, Update};
@@ -52,20 +52,16 @@ impl Plugin for SwapchainPlugin {
     }
 }
 
-#[derive(Component, Clone)]
-pub struct Swapchain(Arc<SwapchainInner>);
-impl PartialEq for Swapchain {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
+#[derive(Component)]
+pub struct Swapchain {
+    inner: Arc<SwapchainInner>,
+    images: Vec<Option<RenderImage<SwapchainImageInner>>>,
 }
-impl Eq for Swapchain {}
 
 struct SwapchainInner {
     device: Device,
     surface: Surface,
     inner: vk::SwapchainKHR,
-    images: Vec<vk::Image>,
     format: vk::Format,
     generation: u64,
 
@@ -144,14 +140,21 @@ impl Swapchain {
                 device,
                 surface,
                 inner: swapchain,
-                images,
                 generation: 0,
                 extent: info.image_extent,
                 layer_count: info.image_array_layers,
                 format: info.image_format,
                 color_space: info.image_color_space.into(),
             };
-            Ok(Swapchain(Arc::new(swapchain)))
+            let inner = Arc::new(swapchain);
+            Ok(Swapchain {
+                images: images.into_iter().enumerate().map(|(i, image)| Some(RenderImage::new(SwapchainImageInner {
+                    image,
+                    indice: i as u32,
+                    swapchain: inner.clone(),
+                }))).collect(),
+                inner,
+            })
         }
     }
 
@@ -166,7 +169,7 @@ impl Swapchain {
         unsafe {
             let mut create_info = vk::SwapchainCreateInfoKHR {
                 flags: info.flags,
-                surface: self.0.surface.raw(),
+                surface: self.inner.surface.raw(),
                 min_image_count: info.min_image_count,
                 image_format: info.image_format,
                 image_color_space: info.image_color_space,
@@ -178,7 +181,7 @@ impl Swapchain {
                 composite_alpha: info.composite_alpha,
                 present_mode: info.present_mode,
                 clipped: info.clipped.into(),
-                old_swapchain: self.0.inner,
+                old_swapchain: self.inner.inner,
                 ..Default::default()
             };
             match &info.image_sharing_mode {
@@ -191,29 +194,33 @@ impl Swapchain {
                 }
             }
             let new_swapchain = self
-                .0
+                .inner
                 .device
                 .extension::<khr::Swapchain>()
                 .create_swapchain(&create_info, None)?;
 
             let images = self
-                .0
+                .inner
                 .device
                 .extension::<khr::Swapchain>()
                 .get_swapchain_images(new_swapchain)?;
 
             let inner = SwapchainInner {
-                device: self.0.device.clone(),
-                surface: self.0.surface.clone(),
+                device: self.inner.device.clone(),
+                surface: self.inner.surface.clone(),
                 inner: new_swapchain,
-                images,
-                generation: self.0.generation.wrapping_add(1),
+                generation: self.inner.generation.wrapping_add(1),
                 extent: info.image_extent,
                 layer_count: info.image_array_layers,
                 format: info.image_format,
                 color_space: info.image_color_space.into(),
             };
-            self.0 = Arc::new(inner);
+            self.inner = Arc::new(inner);
+            self.images = images.into_iter().enumerate().map(|(i, image)| Some(RenderImage::new(SwapchainImageInner {
+                image,
+                indice: i as u32,
+                swapchain: self.inner.clone(),
+            }))).collect();
         }
         Ok(())
     }
@@ -299,11 +306,7 @@ pub(super) fn extract_swapchains(
         commands
             .entity(create_event.window)
             .insert(new_swapchain)
-            .insert(RenderImage::new(SwapchainImage {
-                image: vk::Image::null(),
-                indice: u32::MAX,
-                swapchain: None,
-            }));
+            .insert(SwapchainImage(None));
     }
 }
 
@@ -485,13 +488,27 @@ fn get_surface_preferred_format(
 }
 
 #[derive(Component)]
-pub struct SwapchainImage {
-    pub image: vk::Image,
-    indice: u32,
-    swapchain: Option<Swapchain>,
+pub struct SwapchainImage(Option<RenderImage<SwapchainImageInner>>);
+impl Deref for SwapchainImage {
+    type Target = RenderImage<SwapchainImageInner>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("Use of SwapchainImage before it has been acquired")
+    }
+}
+impl DerefMut for SwapchainImage {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("Use of SwapchainImage before it has been acquired")
+    }
 }
 
-impl ImageLike for SwapchainImage {
+pub struct SwapchainImageInner {
+    pub image: vk::Image,
+    indice: u32,
+    swapchain: Arc<SwapchainInner>,
+}
+
+impl ImageLike for SwapchainImageInner {
     fn raw_image(&self) -> vk::Image {
         self.image
     }
@@ -507,23 +524,15 @@ impl ImageLike for SwapchainImage {
     }
 
     fn extent(&self) -> vk::Extent3D {
-        let swapchain = self
-            .swapchain
-            .as_ref()
-            .expect("Swapchain image used before it was first acquired");
         vk::Extent3D {
-            width: swapchain.0.extent.width,
-            height: swapchain.0.extent.width,
+            width: self.swapchain.extent.width,
+            height: self.swapchain.extent.width,
             depth: 1,
         }
     }
 
     fn format(&self) -> vk::Format {
-        let swapchain = self
-            .swapchain
-            .as_ref()
-            .expect("Swapchain image used before it was first acquired");
-        swapchain.0.format
+        self.swapchain.format
     }
 }
 
@@ -536,7 +545,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     mut query: Query<
         (
             &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
-            &mut RenderImage<SwapchainImage>,
+            &mut SwapchainImage,
         ),
         Filter,
     >,
@@ -566,34 +575,25 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         let fence = queue_ctx.fence_to_wait();
         let swapchain = swapchain.borrow_mut();
         swapchain
-            .0
+            .inner
             .device
             .extension::<khr::Swapchain>()
-            .acquire_next_image(swapchain.0.inner, !0, semaphore, fence)
+            .acquire_next_image(swapchain.inner.inner, !0, semaphore, fence)
     }
     .unwrap();
     if suboptimal {
         tracing::warn!("Suboptimal swapchain");
     }
-    let image = swapchain.0.images[indice as usize];
-    unsafe {
-        swapchain_image.res.state = ResourceState::default();
-        swapchain_image.res.state.write.stage = vk::PipelineStageFlags2::CLEAR;
-        swapchain_image.layout = vk::ImageLayout::UNDEFINED;
-        let swapchain_image = swapchain_image.get_mut();
-        swapchain_image.image = image;
-        swapchain_image.indice = indice;
-        if swapchain_image.swapchain.as_ref() != Some(&*swapchain) {
-            swapchain_image.swapchain = Some(swapchain.clone());
-        }
-    }
+    let image = swapchain.images[indice as usize].take().expect("Acquiring image that hasn't been presented");
+    assert!(swapchain_image.0.is_none(), "Must present the current image before acquiring a new one");
+    swapchain_image.0 = Some(image);
 }
 
 pub fn present(
     mut queue_ctx: QueueContext<'g'>,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
-    mut query: Query<(&mut Swapchain, &RenderImage<SwapchainImage>)>,
+    mut query: Query<(&mut Swapchain, &mut SwapchainImage)>,
     binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
 ) {
     assert!(queue_ctx.timeline_signals.is_empty());
@@ -607,10 +607,15 @@ pub fn present(
 
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
-    for (swapchain, swapchain_image) in query.iter_mut() {
-        swapchains.push(swapchain.0.inner);
+    for (mut swapchain, mut swapchain_image) in query.iter_mut() {
+        let Some(swapchain_image) = swapchain_image.0.take() else {
+            continue;
+        };
+        swapchains.push(swapchain.inner.inner);
         // Safety: we're only getting the indice of the image and we're not actually reading / writing to it.
-        swapchain_image_indices.push(swapchain_image.indice);
+        let indice = swapchain_image.indice;
+        swapchain_image_indices.push(indice);
+        swapchain.images[indice as usize] = Some(swapchain_image);
     }
     if swapchains.is_empty() {
         // A bit of a special case: we can't call `queue_present` with an empty swapchain list.

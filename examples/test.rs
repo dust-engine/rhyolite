@@ -60,7 +60,7 @@ impl RenderSystem for ClearMainWindowColor {
     fn system(&self) -> bevy_ecs::schedule::SystemConfigs {
         fn clear_main_window_color(
             mut commands: RenderCommands<'g'>,
-            mut windows: Query<&mut RenderImage<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
+            mut windows: Query<&mut SwapchainImage, With<bevy_window::PrimaryWindow>>,
         ) {
             let Ok(mut swapchain_image) = windows.get_single_mut() else {
                 return;
@@ -111,8 +111,9 @@ impl RenderSystem for ClearMainWindowColor {
     fn barriers(&self) -> rhyolite::ecs::BoxedBarrierProducer {
         fn barrier(
             In(mut barriers): In<Barriers>,
-            mut windows: Query<&mut RenderImage<SwapchainImage>, With<bevy_window::PrimaryWindow>>,
+            mut windows: Query<&mut SwapchainImage, With<bevy_window::PrimaryWindow>>,
         ) {
+            return;
             let Ok(mut swapchain_image) = windows.get_single_mut() else {
                 return;
             };
