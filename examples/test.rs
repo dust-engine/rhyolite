@@ -7,7 +7,7 @@ use bevy_ecs::{
     system::{In, IntoSystem, Query},
 };
 use bevy_window::PrimaryWindow;
-use rhyolite::ecs::IntoRenderSystemConfigs;
+use rhyolite::{debug::DebugUtilsPlugin, ecs::IntoRenderSystemConfigs};
 use rhyolite::{
     acquire_swapchain_image,
     ecs::{Barriers, RenderApp, RenderCommands, RenderImage, RenderRes, RenderSystem},
@@ -22,6 +22,7 @@ fn main() {
         .add_plugins(bevy_winit::WinitPlugin::default())
         .add_plugins(bevy_input::InputPlugin::default())
         .add_plugins(SurfacePlugin::default())
+        .add_plugins(DebugUtilsPlugin::default())
         .add_plugins(RhyolitePlugin::default())
         .add_plugins(SwapchainPlugin::default());
 

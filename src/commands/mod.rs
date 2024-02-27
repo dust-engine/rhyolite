@@ -98,7 +98,6 @@ impl<'w> ResourceTransitionCommandRecorder<'w> {
                     ..Default::default()
                 }
             );
-            image.layout = layout;
             self.image_barriers.push(vk::ImageMemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
                 dst_stage_mask: barrier.dst_stage_mask,
@@ -110,6 +109,7 @@ impl<'w> ResourceTransitionCommandRecorder<'w> {
                 subresource_range: image.subresource_range(),
                 ..Default::default()
             });
+            image.layout = layout;
         }
         self
     }

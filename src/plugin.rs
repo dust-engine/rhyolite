@@ -282,6 +282,8 @@ impl Plugin for RhyolitePlugin {
 }
 
 pub trait RhyoliteApp {
+    fn add_device_meta(&mut self, builder: DeviceMetaBuilder);
+    fn add_instance_meta(&mut self, builder: InstanceMetaBuilder);
     /// Called in the [Plugin::build] phase of device plugins.
     /// Device plugins must be added after [RhyolitePlugin].
     fn add_device_extension<T: DeviceExtension>(&mut self) -> Option<Version>;
@@ -311,6 +313,24 @@ pub trait RhyoliteApp {
 }
 
 impl RhyoliteApp for App {
+    fn add_device_meta(&mut self, builder: DeviceMetaBuilder) {
+        let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
+            panic!("Device metas may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
+        };
+        extension_settings.meta_builders.push(builder);
+    }
+    fn add_instance_meta(&mut self, builder: InstanceMetaBuilder) {
+        let extension_settings = self.world.get_resource_mut::<InstanceExtensions>();
+        let mut extension_settings = match extension_settings {
+            Some(extension_settings) => extension_settings,
+            None => {
+                let extension_settings = InstanceExtensions::from_world(&mut self.world);
+                self.world.insert_resource(extension_settings);
+                self.world.resource_mut::<InstanceExtensions>()
+            }
+        };
+        extension_settings.meta_builders.push(builder);
+    }
     fn add_device_extension<T: DeviceExtension>(&mut self) -> Option<Version> {
         let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
             panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
