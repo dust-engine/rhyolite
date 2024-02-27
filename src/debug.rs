@@ -1,8 +1,8 @@
 use ash::extensions::ext;
 use ash::{prelude::VkResult, vk};
 use bevy_app::Plugin;
-use std::ffi::{CStr, CString};
-use std::pin::Pin;
+use std::ffi::CStr;
+
 use std::sync::RwLock;
 
 use crate::plugin::RhyoliteApp;
@@ -14,7 +14,9 @@ impl Plugin for DebugUtilsPlugin {
     fn build(&self, app: &mut bevy_app::App) {
         app.add_instance_extension_named(ash::extensions::ext::DebugUtils::name())
             .unwrap();
-        app.add_instance_meta(Box::new(|entry, instance| Box::new(DebugUtilsMessenger::new(entry, instance))));
+        app.add_instance_meta(Box::new(|entry, instance| {
+            Box::new(DebugUtilsMessenger::new(entry, instance))
+        }));
     }
     fn finish(&self, _app: &mut bevy_app::App) {}
 }

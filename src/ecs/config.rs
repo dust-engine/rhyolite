@@ -1,10 +1,8 @@
 use ash::vk;
 use bevy_app::{App, Update};
 use bevy_ecs::{
-    schedule::{
-        Condition, IntoSystemConfigs, IntoSystemSet, SystemConfig, SystemConfigs, SystemSet,
-    },
-    system::{BoxedSystem, IntoSystem, ReadOnlySystem},
+    schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfigs, SystemSet},
+    system::BoxedSystem,
 };
 
 use crate::{queue::QueueType, Access, BufferLike, ImageLike};
@@ -103,7 +101,11 @@ impl Barriers {
             });
         }
     }
-    pub fn transition_buffer<T: BufferLike>(&mut self, buffer: &mut RenderRes<T>, access: Access) {
+    pub fn transition_buffer<T: BufferLike>(
+        &mut self,
+        _buffer: &mut RenderRes<T>,
+        _access: Access,
+    ) {
         todo!()
     }
 }

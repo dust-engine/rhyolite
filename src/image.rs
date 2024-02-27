@@ -1,5 +1,4 @@
-use ash::{prelude::VkResult, vk};
-use std::{ops::DerefMut, sync::Arc};
+use ash::vk;
 
 pub trait ImageLike {
     fn raw_image(&self) -> vk::Image;

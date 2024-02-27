@@ -1,19 +1,9 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Deref,
-};
+use std::ops::Deref;
 
 use ash::vk;
-use bevy_ecs::{
-    archetype::{ArchetypeComponentId, ArchetypeGeneration},
-    component::{Component, ComponentId},
-    query::{QueryData, ReadOnlyQueryData, WorldQuery},
-    system::{Res, ResMut, Resource, SystemParam},
-    world::{unsafe_world_cell::UnsafeWorldCell, Mut},
-};
-use bevy_utils::ConfigMap;
+use bevy_ecs::{component::Component, system::Resource};
 
-use crate::{Access, ResourceState};
+use crate::ResourceState;
 
 pub enum State {
     None,

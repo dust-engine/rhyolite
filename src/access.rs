@@ -2,8 +2,6 @@ use ash::vk;
 
 use crate::access::utils::compare_pipeline_stages;
 
-use self::utils::ALL_WRITE_BITS;
-
 #[derive(Debug, Clone, Default)]
 pub struct Access {
     pub stage: vk::PipelineStageFlags2,
@@ -43,7 +41,9 @@ impl ResourceState {
             dst_stage_mask: next.stage,
             dst_access_mask: next.access,
         };
-        if self.write.access == vk::AccessFlags2::empty() && self.write.stage == vk::PipelineStageFlags2::empty() {
+        if self.write.access == vk::AccessFlags2::empty()
+            && self.write.stage == vk::PipelineStageFlags2::empty()
+        {
             // Resource was never accessed before.
             barrier = MemoryBarrier::default();
         } else if next.is_readonly() {

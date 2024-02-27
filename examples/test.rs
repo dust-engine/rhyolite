@@ -1,19 +1,19 @@
 use ash::vk;
-use bevy_app::Update;
+
 use bevy_ecs::{
     entity::Entity,
     query::With,
-    schedule::{IntoSystemConfigs, IntoSystemSet},
+    schedule::IntoSystemConfigs,
     system::{In, IntoSystem, Query},
 };
 use bevy_window::PrimaryWindow;
-use rhyolite::{debug::DebugUtilsPlugin, ecs::IntoRenderSystemConfigs};
 use rhyolite::{
     acquire_swapchain_image,
-    ecs::{Barriers, RenderApp, RenderCommands, RenderImage, RenderRes, RenderSystem},
+    ecs::{Barriers, RenderApp, RenderCommands, RenderImage, RenderSystem},
     present, Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage,
     SwapchainPlugin,
 };
+use rhyolite::{debug::DebugUtilsPlugin, ecs::IntoRenderSystemConfigs};
 
 fn main() {
     let mut app = bevy_app::App::new();

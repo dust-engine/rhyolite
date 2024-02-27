@@ -116,8 +116,8 @@ impl<'w> ResourceTransitionCommandRecorder<'w> {
     #[must_use]
     pub fn transition_resource<T: BufferLike>(
         &mut self,
-        buffer: &mut RenderRes<T>,
-        access: Access,
+        _buffer: &mut RenderRes<T>,
+        _access: Access,
     ) {
         todo!()
     }

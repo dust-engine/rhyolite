@@ -20,14 +20,14 @@ pub mod queue_cap {
 use std::{
     any::Any,
     collections::BTreeMap,
-    sync::{atomic::AtomicU64, Arc, Barrier},
+    sync::{atomic::AtomicU64, Arc},
 };
 
 use ash::vk::{self, Handle};
 use bevy_ecs::{
     archetype::ArchetypeComponentId,
     component::ComponentId,
-    system::{lifetimeless::SRes, Local, Res, ResMut, Resource, System, SystemMeta, SystemParam},
+    system::{lifetimeless::SRes, Res, Resource, System, SystemMeta, SystemParam},
     world::World,
 };
 use queue_cap::*;
@@ -295,7 +295,7 @@ where
         config.queue = flags;
         config.is_queue_op = true;
     }
-    fn configurate(state: &mut Self::State, config: &mut dyn Any, world: &mut World) {
+    fn configurate(state: &mut Self::State, config: &mut dyn Any, _world: &mut World) {
         if config.is::<QueueSystemInitialState>() {
             let initial_state: &mut QueueSystemInitialState = config.downcast_mut().unwrap();
             state.queue = initial_state.queue;
@@ -515,7 +515,7 @@ where
 
     unsafe fn run_unsafe(
         &mut self,
-        input: Self::In,
+        _input: Self::In,
         world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell,
     ) -> Self::Out {
         let mut image_barriers = Vec::new();
@@ -534,7 +534,7 @@ where
             assert!(dropped);
         }
 
-        let render_commands = RenderCommands::<Q>::get_param(
+        let _render_commands = RenderCommands::<Q>::get_param(
             self.render_command_state.as_mut().unwrap(),
             &self.system_meta,
             world,
@@ -574,7 +574,7 @@ where
         self.system_meta.archetype_component_access = archetype_component_access;
     }
 
-    fn check_change_tick(&mut self, change_tick: bevy_ecs::component::Tick) {}
+    fn check_change_tick(&mut self, _change_tick: bevy_ecs::component::Tick) {}
 
     fn get_last_run(&self) -> bevy_ecs::component::Tick {
         self.system_meta.last_run

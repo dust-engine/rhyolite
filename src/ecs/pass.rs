@@ -10,7 +10,6 @@ use bevy_ecs::{
     world::World,
 };
 use bevy_utils::petgraph::{
-    graph::DiGraph,
     graphmap::DiGraphMap,
     visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
     Direction::{Incoming, Outgoing},
