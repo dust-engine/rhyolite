@@ -152,6 +152,7 @@ impl Deref for Instance {
 impl Drop for InstanceInner {
     fn drop(&mut self) {
         tracing::info!(instance = ?self.instance.handle(), "drop instance");
+        self.metas.clear();
         // Safety: Host Syncronization rule for vkDestroyInstance:
         // - Host access to instance must be externally synchronized.
         // - Host access to all VkPhysicalDevice objects enumerated from instance must be externally synchronized.

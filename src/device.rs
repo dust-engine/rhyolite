@@ -97,6 +97,7 @@ impl Deref for Device {
 impl Drop for DeviceInner {
     fn drop(&mut self) {
         tracing::info!(device = ?self.device.handle(), "drop device");
+        self.metas.clear();
         // Safety: Host Syncronization rule for vkDestroyDevice:
         // - Host access to device must be externally synchronized.
         // - Host access to all VkQueue objects created from device must be externally synchronized

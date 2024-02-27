@@ -32,8 +32,8 @@ impl Access {
 
 #[derive(Clone, Default)]
 pub struct ResourceState {
-    read: Access,
-    write: Access,
+    pub(crate) read: Access,
+    pub(crate) write: Access,
 }
 impl ResourceState {
     pub fn transition(&mut self, next: Access) -> MemoryBarrier {
@@ -43,7 +43,7 @@ impl ResourceState {
             dst_stage_mask: next.stage,
             dst_access_mask: next.access,
         };
-        if self.write.access == vk::AccessFlags2::empty() {
+        if self.write.access == vk::AccessFlags2::empty() && self.write.stage == vk::PipelineStageFlags2::empty() {
             // Resource was never accessed before.
             barrier = MemoryBarrier::default();
         } else if next.is_readonly() {
