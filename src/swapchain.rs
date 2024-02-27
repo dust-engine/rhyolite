@@ -1,6 +1,6 @@
 use std::{borrow::BorrowMut, ops::Deref, sync::Arc};
 
-use ash::{prelude::VkResult, vk};
+use ash::{extensions::khr, prelude::VkResult, vk};
 use bevy_app::{App, Plugin, Update};
 use bevy_ecs::{
     prelude::*,
@@ -50,32 +50,6 @@ impl Plugin for SwapchainPlugin {
             ),
         );
     }
-    fn finish(&self, app: &mut App) {
-        let device: &Device = app.world.resource();
-        let swapchain_loader = ash::extensions::khr::Swapchain::new(device.instance(), device);
-        app.insert_resource(SwapchainLoader(Arc::new(SwapchainLoaderInner {
-            device: device.clone(),
-            loader: swapchain_loader,
-        })));
-    }
-}
-
-#[derive(Resource, Clone)]
-pub struct SwapchainLoader(Arc<SwapchainLoaderInner>);
-struct SwapchainLoaderInner {
-    device: Device,
-    loader: ash::extensions::khr::Swapchain,
-}
-impl Deref for SwapchainLoader {
-    type Target = ash::extensions::khr::Swapchain;
-    fn deref(&self) -> &Self::Target {
-        &self.0.loader
-    }
-}
-impl HasDevice for SwapchainLoader {
-    fn device(&self) -> &Device {
-        &self.0.device
-    }
 }
 
 #[derive(Component, Clone)]
@@ -88,7 +62,7 @@ impl PartialEq for Swapchain {
 impl Eq for Swapchain {}
 
 struct SwapchainInner {
-    loader: SwapchainLoader,
+    device: Device,
     surface: Surface,
     inner: vk::SwapchainKHR,
     images: Vec<vk::Image>,
@@ -103,7 +77,9 @@ struct SwapchainInner {
 impl Drop for SwapchainInner {
     fn drop(&mut self) {
         unsafe {
-            self.loader.destroy_swapchain(self.inner, None);
+            self.device
+                .extension::<khr::Swapchain>()
+                .destroy_swapchain(self.inner, None);
         }
     }
 }
@@ -127,12 +103,7 @@ pub struct SwapchainCreateInfo<'a> {
 impl Swapchain {
     /// # Safety
     /// <https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkCreateSwapchainKHR.html>
-    pub fn create(
-        swapchain_loader: SwapchainLoader,
-        surface: Surface,
-        _device: &Device,
-        info: &SwapchainCreateInfo,
-    ) -> VkResult<Self> {
+    pub fn create(device: Device, surface: Surface, info: &SwapchainCreateInfo) -> VkResult<Self> {
         tracing::info!(
             width = %info.image_extent.width,
             height = %info.image_extent.height,
@@ -140,6 +111,7 @@ impl Swapchain {
             color_space = ?info.image_color_space,
             "Creating swapchain"
         );
+        let swapchain_loader = device.extension::<khr::Swapchain>();
         unsafe {
             let mut create_info = vk::SwapchainCreateInfoKHR {
                 flags: info.flags,
@@ -169,7 +141,7 @@ impl Swapchain {
             let swapchain = swapchain_loader.create_swapchain(&create_info, None)?;
             let images = swapchain_loader.get_swapchain_images(swapchain)?;
             let swapchain = SwapchainInner {
-                loader: swapchain_loader,
+                device,
                 surface,
                 inner: swapchain,
                 images,
@@ -218,12 +190,20 @@ impl Swapchain {
                     create_info.p_queue_family_indices = queue_family_indices.as_ptr();
                 }
             }
-            let new_swapchain = self.0.loader.create_swapchain(&create_info, None)?;
+            let new_swapchain = self
+                .0
+                .device
+                .extension::<khr::Swapchain>()
+                .create_swapchain(&create_info, None)?;
 
-            let images = self.0.loader.get_swapchain_images(new_swapchain)?;
+            let images = self
+                .0
+                .device
+                .extension::<khr::Swapchain>()
+                .get_swapchain_images(new_swapchain)?;
 
             let inner = SwapchainInner {
-                loader: self.0.loader.clone(),
+                device: self.0.device.clone(),
                 surface: self.0.surface.clone(),
                 inner: new_swapchain,
                 images,
@@ -289,7 +269,6 @@ impl Default for SwapchainConfig {
 pub(super) fn extract_swapchains(
     mut commands: Commands,
     device: Res<Device>,
-    swapchain_loader: Res<SwapchainLoader>,
     mut window_created_events: EventReader<bevy_window::WindowCreated>,
     mut window_resized_events: EventReader<bevy_window::WindowResized>,
     mut query: Query<(
@@ -315,13 +294,8 @@ pub(super) fn extract_swapchains(
         let swapchain_config = config.unwrap_or(&default_config);
         let create_info =
             get_create_info(surface, device.physical_device(), window, swapchain_config);
-        let new_swapchain = Swapchain::create(
-            swapchain_loader.clone(),
-            surface.clone(),
-            device.deref(),
-            &create_info,
-        )
-        .unwrap();
+        let new_swapchain =
+            Swapchain::create(device.clone(), surface.clone(), &create_info).unwrap();
         commands
             .entity(create_event.window)
             .insert(new_swapchain)
@@ -593,7 +567,8 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         let swapchain = swapchain.borrow_mut();
         swapchain
             .0
-            .loader
+            .device
+            .extension::<khr::Swapchain>()
             .acquire_next_image(swapchain.0.inner, !0, semaphore, fence)
     }
     .unwrap();
@@ -603,6 +578,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     let image = swapchain.0.images[indice as usize];
     unsafe {
         swapchain_image.res.state = ResourceState::default();
+        swapchain_image.res.state.write.stage = vk::PipelineStageFlags2::CLEAR;
         swapchain_image.layout = vk::ImageLayout::UNDEFINED;
         let swapchain_image = swapchain_image.get_mut();
         swapchain_image.image = image;
@@ -615,7 +591,6 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
 
 pub fn present(
     mut queue_ctx: QueueContext<'g'>,
-    swapchain_loader: Res<SwapchainLoader>,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
     mut query: Query<(&mut Swapchain, &RenderImage<SwapchainImage>)>,
@@ -682,7 +657,8 @@ pub fn present(
         })
         .collect();
     unsafe {
-        swapchain_loader
+        device
+            .extension::<khr::Swapchain>()
             .queue_present(
                 queue,
                 &vk::PresentInfoKHR {

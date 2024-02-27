@@ -1,3 +1,4 @@
+use crate::extensions::DeviceExtension;
 use crate::plugin::DeviceMetaBuilder;
 use crate::Instance;
 use crate::PhysicalDevice;
@@ -30,7 +31,7 @@ pub struct DeviceInner {
     physical_device: PhysicalDevice,
     device: ash::Device,
     queues: Vec<vk::Queue>,
-    metas: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 impl Device {
@@ -64,18 +65,18 @@ impl Device {
                     .map(|i| device.get_device_queue(queue_info.queue_family_index, i))
             })
             .collect::<Vec<_>>();
-        let metas: HashMap<TypeId, Box<dyn Any + Send + Sync>> = meta
+        let extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>> = meta
             .into_iter()
             .map(|builder| {
                 let item = builder(&physical_device.instance(), &device);
-                (item.type_id(), item)
+                (item.as_ref().type_id(), item)
             })
             .collect();
         Ok(Self(Arc::new(DeviceInner {
             physical_device,
             queues: queues_created,
             device,
-            metas,
+            extensions,
         })))
     }
     pub fn instance(&self) -> &Instance {
@@ -83,6 +84,22 @@ impl Device {
     }
     pub fn physical_device(&self) -> &PhysicalDevice {
         &self.0.physical_device
+    }
+
+    pub fn get_extension<T: DeviceExtension>(&self) -> Option<&T> {
+        self.0
+            .extensions
+            .get(&TypeId::of::<T>())
+            .map(|item| item.downcast_ref::<T>().unwrap())
+    }
+    pub fn extension<T: DeviceExtension>(&self) -> &T {
+        let Some(extension) = self.get_extension::<T>() else {
+            panic!(
+                "InstanceExtension {:?} not found",
+                std::any::type_name::<T>()
+            );
+        };
+        extension
     }
 }
 
@@ -97,7 +114,7 @@ impl Deref for Device {
 impl Drop for DeviceInner {
     fn drop(&mut self) {
         tracing::info!(device = ?self.device.handle(), "drop device");
-        self.metas.clear();
+        self.extensions.clear();
         // Safety: Host Syncronization rule for vkDestroyDevice:
         // - Host access to device must be externally synchronized.
         // - Host access to all VkQueue objects created from device must be externally synchronized

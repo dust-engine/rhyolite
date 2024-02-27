@@ -74,7 +74,7 @@ pub(crate) type DeviceMetaBuilder =
 struct DeviceExtensions {
     available_extensions: BTreeMap<CString, Version>,
     enabled_extensions: Vec<*const c_char>,
-    meta_builders: Vec<DeviceMetaBuilder>,
+    extension_builders: Vec<DeviceMetaBuilder>,
 }
 impl DeviceExtensions {
     fn new(pdevice: &PhysicalDevice) -> VkResult<Self> {
@@ -99,7 +99,7 @@ impl DeviceExtensions {
         Ok(Self {
             available_extensions: extension_names,
             enabled_extensions: Vec::new(),
-            meta_builders: Vec::new(),
+            extension_builders: Vec::new(),
         })
     }
 }
@@ -110,7 +110,7 @@ unsafe impl Sync for DeviceExtensions {}
 struct InstanceExtensions {
     available_extensions: BTreeMap<CString, Version>,
     enabled_extensions: Vec<*const c_char>,
-    meta_builders: Vec<InstanceMetaBuilder>,
+    extension_builders: Vec<InstanceMetaBuilder>,
 }
 impl FromWorld for InstanceExtensions {
     fn from_world(world: &mut World) -> Self {
@@ -136,7 +136,7 @@ impl FromWorld for InstanceExtensions {
         Self {
             available_extensions,
             enabled_extensions: Vec::new(),
-            meta_builders: Vec::new(),
+            extension_builders: Vec::new(),
         }
     }
 }
@@ -201,7 +201,7 @@ impl Plugin for RhyolitePlugin {
         let entry: &VulkanEntry = &app.world.get_resource_or_insert_with(VulkanEntry::default);
         let meta_builders = instance_extensions
             .as_mut()
-            .map(|a| std::mem::take(&mut a.meta_builders))
+            .map(|a| std::mem::take(&mut a.extension_builders))
             .unwrap_or_default();
         let instance = Instance::create(
             entry.0.clone(),
@@ -274,7 +274,7 @@ impl Plugin for RhyolitePlugin {
             &queues_router.create_infos(),
             &extension_settings.enabled_extensions,
             features.pdevice_features2(),
-            extension_settings.meta_builders,
+            extension_settings.extension_builders,
         )
         .unwrap();
         app.insert_resource(device);
@@ -317,7 +317,7 @@ impl RhyoliteApp for App {
         let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
             panic!("Device metas may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
         };
-        extension_settings.meta_builders.push(builder);
+        extension_settings.extension_builders.push(builder);
     }
     fn add_instance_meta(&mut self, builder: InstanceMetaBuilder) {
         let extension_settings = self.world.get_resource_mut::<InstanceExtensions>();
@@ -329,7 +329,7 @@ impl RhyoliteApp for App {
                 self.world.resource_mut::<InstanceExtensions>()
             }
         };
-        extension_settings.meta_builders.push(builder);
+        extension_settings.extension_builders.push(builder);
     }
     fn add_device_extension<T: DeviceExtension>(&mut self) -> Option<Version> {
         let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
@@ -341,7 +341,7 @@ impl RhyoliteApp for App {
                 .enabled_extensions
                 .push(T::name().as_ptr());
             extension_settings
-                .meta_builders
+                .extension_builders
                 .push(Box::new(|instance, device| {
                     Box::new(T::new(instance, device))
                 }));
@@ -368,7 +368,7 @@ impl RhyoliteApp for App {
                 .push(T::name().as_ptr());
 
             extension_settings
-                .meta_builders
+                .extension_builders
                 .push(Box::new(|entry, instance| {
                     Box::new(T::new(entry, instance))
                 }));

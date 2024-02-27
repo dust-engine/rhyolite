@@ -1,24 +1,26 @@
 use ash::extensions::ext;
 use ash::{prelude::VkResult, vk};
 use bevy_app::Plugin;
-use std::ffi::CStr;
+use bevy_ecs::system::Resource;
+use std::ffi::{CStr, CString};
 
 use std::sync::RwLock;
 
 use crate::plugin::RhyoliteApp;
+use crate::Instance;
 
 #[derive(Default)]
 pub struct DebugUtilsPlugin;
 
 impl Plugin for DebugUtilsPlugin {
     fn build(&self, app: &mut bevy_app::App) {
-        app.add_instance_extension_named(ash::extensions::ext::DebugUtils::name())
+        app.add_instance_extension::<ash::extensions::ext::DebugUtils>()
             .unwrap();
-        app.add_instance_meta(Box::new(|entry, instance| {
-            Box::new(DebugUtilsMessenger::new(entry, instance))
-        }));
     }
-    fn finish(&self, _app: &mut bevy_app::App) {}
+    fn finish(&self, app: &mut bevy_app::App) {
+        let instance: Instance = app.world.resource::<Instance>().clone();
+        app.insert_resource(DebugUtilsMessenger::new(instance).unwrap());
+    }
 }
 
 pub type DebugUtilsMessengerCallback = fn(
@@ -43,58 +45,64 @@ pub struct DebugUtilsMessengerCallbackData<'a> {
     pub objects: &'a [vk::DebugUtilsObjectNameInfoEXT],
 }
 
-pub struct DebugUtilsMessenger {
-    pub(crate) debug_utils: ext::DebugUtils,
-    pub(crate) messenger: vk::DebugUtilsMessengerEXT,
+#[derive(Resource)]
+pub struct DebugUtilsMessenger(Box<DebugUtilsMessengerInner>);
+
+struct DebugUtilsMessengerInner {
+    instance: Instance,
+    messenger: vk::DebugUtilsMessengerEXT,
     callbacks: RwLock<Vec<DebugUtilsMessengerCallback>>,
 }
 impl Drop for DebugUtilsMessenger {
     fn drop(&mut self) {
         unsafe {
-            self.debug_utils
-                .destroy_debug_utils_messenger(self.messenger, None);
+            self.0
+                .instance
+                .extension::<ext::DebugUtils>()
+                .destroy_debug_utils_messenger(self.0.messenger, None);
         }
     }
 }
 
 impl DebugUtilsMessenger {
-    pub fn new(entry: &ash::Entry, instance: &ash::Instance) -> VkResult<Box<Self>> {
-        let debug_utils = ext::DebugUtils::new(entry, instance);
-
-        let mut this = Box::new(Self {
-            debug_utils,
+    pub fn new(instance: Instance) -> VkResult<Self> {
+        let mut this = Box::new(DebugUtilsMessengerInner {
+            instance,
             messenger: vk::DebugUtilsMessengerEXT::default(),
             callbacks: RwLock::new(vec![default_callback]),
         });
         let messenger = unsafe {
-            let p_user_data = this.as_mut() as *mut Self as *mut std::ffi::c_void;
+            let p_user_data =
+                this.as_mut() as *mut DebugUtilsMessengerInner as *mut std::ffi::c_void;
             // Safety:
             // The application must ensure that vkCreateDebugUtilsMessengerEXT is not executed in parallel
             // with any Vulkan command that is also called with instance or child of instance as the dispatchable argument.
             // We do this by taking a mutable reference to Instance.
-            this.debug_utils.create_debug_utils_messenger(
-                &vk::DebugUtilsMessengerCreateInfoEXT {
-                    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
-                    message_type: vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-                    pfn_user_callback: Some(debug_utils_callback),
-                    // This is self-referencing: Self contains `vk::DebugUtilsMessengerEXT` which then
-                    // contains a pointer to Self. It's fine because Self was boxed.
-                    p_user_data,
-                    ..Default::default()
-                },
-                None,
-            )?
+            this.instance
+                .extension::<ext::DebugUtils>()
+                .create_debug_utils_messenger(
+                    &vk::DebugUtilsMessengerCreateInfoEXT {
+                        message_severity: vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+                        message_type: vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                            | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                        pfn_user_callback: Some(debug_utils_callback),
+                        // This is self-referencing: Self contains `vk::DebugUtilsMessengerEXT` which then
+                        // contains a pointer to Self. It's fine because Self was boxed.
+                        p_user_data,
+                        ..Default::default()
+                    },
+                    None,
+                )?
         };
         this.messenger = messenger;
-        Ok(this)
+        Ok(Self(this))
     }
     pub fn add_callback(&self, callback: DebugUtilsMessengerCallback) {
-        let mut callbacks = self.callbacks.write().unwrap();
+        let mut callbacks = self.0.callbacks.write().unwrap();
         callbacks.push(callback);
     }
 }
@@ -105,8 +113,8 @@ unsafe extern "system" fn debug_utils_callback(
     callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     user_data: *mut std::ffi::c_void,
 ) -> vk::Bool32 {
-    let this: &DebugUtilsMessenger =
-        &*(user_data as *mut DebugUtilsMessenger as *const DebugUtilsMessenger);
+    let this: &DebugUtilsMessengerInner =
+        &*(user_data as *mut DebugUtilsMessengerInner as *const DebugUtilsMessengerInner);
     let callback_data_raw = &*callback_data;
     let callback_data = DebugUtilsMessengerCallbackData {
         message_id_number: callback_data_raw.message_id_number,
@@ -173,7 +181,6 @@ fn default_callback(
     };
 }
 
-/*
 /// Vulkan Object that can be associated with a name and/or a tag.
 pub trait DebugObject: crate::HasDevice {
     fn object_handle(&mut self) -> u64;
@@ -184,8 +191,7 @@ pub trait DebugObject: crate::HasDevice {
             let object_handle = self.object_handle();
             self.device()
                 .instance()
-                .debug_utils()
-                .debug_utils
+                .extension::<ext::DebugUtils>()
                 .set_debug_utils_object_name(
                     raw_device,
                     &vk::DebugUtilsObjectNameInfoEXT {
@@ -216,8 +222,7 @@ pub trait DebugObject: crate::HasDevice {
             let object_handle = self.object_handle();
             self.device()
                 .instance()
-                .debug_utils()
-                .debug_utils
+                .extension::<ext::DebugUtils>()
                 .set_debug_utils_object_name(
                     raw_device,
                     &vk::DebugUtilsObjectNameInfoEXT {
@@ -231,4 +236,3 @@ pub trait DebugObject: crate::HasDevice {
         }
     }
 }
-*/

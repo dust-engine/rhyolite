@@ -1,6 +1,6 @@
 use std::{ops::Deref, sync::Arc};
 
-use ash::{prelude::VkResult, vk};
+use ash::{extensions::khr, prelude::VkResult, vk};
 use bevy_app::{App, Plugin, Update};
 use bevy_ecs::prelude::*;
 use bevy_window::{RawHandleWrapper, Window};
@@ -70,61 +70,41 @@ impl Plugin for SurfacePlugin {
     fn finish(&self, app: &mut App) {
         let instance: &Instance = app.world.resource();
         let surface_loader = ash::extensions::khr::Surface::new(&instance.entry(), instance);
-        app.insert_resource(SurfaceLoader(Arc::new(SurfaceLoaderInner {
-            instance: instance.clone(),
-            loader: surface_loader,
-        })));
-    }
-}
-
-#[derive(Resource, Clone)]
-pub struct SurfaceLoader(Arc<SurfaceLoaderInner>);
-struct SurfaceLoaderInner {
-    instance: Instance,
-    loader: ash::extensions::khr::Surface,
-}
-impl SurfaceLoader {
-    pub fn instance(&self) -> &Instance {
-        &self.0.instance
-    }
-}
-impl Deref for SurfaceLoader {
-    type Target = ash::extensions::khr::Surface;
-    fn deref(&self) -> &Self::Target {
-        &self.0.loader
     }
 }
 
 #[derive(Component, Clone)]
 pub struct Surface(Arc<SurfaceInner>);
 struct SurfaceInner {
-    loader: SurfaceLoader,
+    instance: Instance,
     inner: vk::SurfaceKHR,
 }
 impl Drop for SurfaceInner {
     fn drop(&mut self) {
         unsafe {
-            self.loader.destroy_surface(self.inner, None);
+            self.instance
+                .extension::<khr::Surface>()
+                .destroy_surface(self.inner, None);
         }
     }
 }
 impl Surface {
     pub fn create(
-        loader: SurfaceLoader,
+        instance: Instance,
         window_handle: &impl raw_window_handle::HasRawWindowHandle,
         display_handle: &impl raw_window_handle::HasRawDisplayHandle,
     ) -> VkResult<Surface> {
         let surface = unsafe {
             ash_window::create_surface(
-                loader.instance().entry(),
-                loader.instance(),
+                instance.entry(),
+                &instance,
                 display_handle.raw_display_handle(),
                 window_handle.raw_window_handle(),
                 None,
             )?
         };
         Ok(Surface(Arc::new(SurfaceInner {
-            loader,
+            instance,
             inner: surface,
         })))
     }
@@ -141,7 +121,8 @@ impl PhysicalDevice {
         unsafe {
             surface
                 .0
-                .loader
+                .instance
+                .extension::<khr::Surface>()
                 .get_physical_device_surface_capabilities(self.raw(), surface.0.inner)
         }
     }
@@ -149,7 +130,8 @@ impl PhysicalDevice {
         unsafe {
             surface
                 .0
-                .loader
+                .instance
+                .extension::<khr::Surface>()
                 .get_physical_device_surface_formats(self.raw(), surface.0.inner)
         }
     }
@@ -160,24 +142,29 @@ impl PhysicalDevice {
         unsafe {
             surface
                 .0
-                .loader
+                .instance
+                .extension::<khr::Surface>()
                 .get_physical_device_surface_present_modes(self.raw(), surface.0.inner)
         }
     }
     pub fn supports_surface(&self, surface: &Surface, queue_family_index: u32) -> VkResult<bool> {
         unsafe {
-            surface.0.loader.get_physical_device_surface_support(
-                self.raw(),
-                queue_family_index,
-                surface.0.inner,
-            )
+            surface
+                .0
+                .instance
+                .extension::<khr::Surface>()
+                .get_physical_device_surface_support(
+                    self.raw(),
+                    queue_family_index,
+                    surface.0.inner,
+                )
         }
     }
 }
 
 pub(super) fn extract_surfaces(
     mut commands: Commands,
-    loader: Res<SurfaceLoader>,
+    instance: Res<Instance>,
     mut window_created_events: EventReader<bevy_window::WindowCreated>,
     query: Query<(&RawHandleWrapper, Option<&Surface>), With<Window>>,
 ) {
@@ -185,7 +172,7 @@ pub(super) fn extract_surfaces(
         let (raw_handle, surface) = query.get(create_event.window).unwrap();
         let raw_handle = unsafe { raw_handle.get_handle() };
         assert!(surface.is_none());
-        let new_surface = Surface::create(loader.clone(), &raw_handle, &raw_handle).unwrap();
+        let new_surface = Surface::create(instance.clone(), &raw_handle, &raw_handle).unwrap();
         commands.entity(create_event.window).insert(new_surface);
     }
 }

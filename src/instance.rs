@@ -1,4 +1,4 @@
-use crate::{cstr, plugin::InstanceMetaBuilder};
+use crate::{cstr, extensions::InstanceExtension, plugin::InstanceMetaBuilder};
 use ash::{prelude::VkResult, vk};
 use bevy_ecs::system::Resource;
 use bevy_utils::hashbrown::HashMap;
@@ -16,7 +16,7 @@ pub struct Instance(Arc<InstanceInner>);
 struct InstanceInner {
     entry: Arc<ash::Entry>,
     instance: ash::Instance,
-    metas: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 #[derive(Clone, Copy)]
@@ -122,22 +122,37 @@ impl Instance {
         };
         // Safety: No Host Syncronization rules for vkCreateInstance.
         let instance = unsafe { entry.create_instance(&create_info, None)? };
-        let metas: HashMap<TypeId, _> = info
+        let extensions: HashMap<TypeId, _> = info
             .meta_builders
             .into_iter()
             .map(|builder| {
                 let item = builder(&entry, &instance);
-                (item.type_id(), item)
+                (item.as_ref().type_id(), item)
             })
             .collect();
         Ok(Instance(Arc::new(InstanceInner {
             entry,
             instance,
-            metas,
+            extensions,
         })))
     }
     pub fn entry(&self) -> &Arc<ash::Entry> {
         &self.0.entry
+    }
+    pub fn get_extension<T: InstanceExtension>(&self) -> Option<&T> {
+        self.0
+            .extensions
+            .get(&TypeId::of::<T>())
+            .map(|item| item.downcast_ref::<T>().unwrap())
+    }
+    pub fn extension<T: InstanceExtension>(&self) -> &T {
+        let Some(extension) = self.get_extension::<T>() else {
+            panic!(
+                "InstanceExtension {:?} not found",
+                std::any::type_name::<T>()
+            );
+        };
+        extension
     }
 }
 
@@ -152,7 +167,7 @@ impl Deref for Instance {
 impl Drop for InstanceInner {
     fn drop(&mut self) {
         tracing::info!(instance = ?self.instance.handle(), "drop instance");
-        self.metas.clear();
+        self.extensions.clear();
         // Safety: Host Syncronization rule for vkDestroyInstance:
         // - Host access to instance must be externally synchronized.
         // - Host access to all VkPhysicalDevice objects enumerated from instance must be externally synchronized.
