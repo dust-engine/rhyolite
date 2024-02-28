@@ -65,19 +65,6 @@ impl RenderSystem for ClearMainWindowColor {
             let Ok(mut swapchain_image) = windows.get_single_mut() else {
                 return;
             };
-
-            commands
-                .record_commands()
-                .transition_resources()
-                .image(
-                    &mut swapchain_image,
-                    Access {
-                        stage: vk::PipelineStageFlags2::CLEAR,
-                        access: vk::AccessFlags2::TRANSFER_WRITE,
-                    },
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                )
-                .end();
             commands.record_commands().clear_color_image(
                 swapchain_image.image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -113,7 +100,6 @@ impl RenderSystem for ClearMainWindowColor {
             In(mut barriers): In<Barriers>,
             mut windows: Query<&mut SwapchainImage, With<bevy_window::PrimaryWindow>>,
         ) {
-            return;
             let Ok(mut swapchain_image) = windows.get_single_mut() else {
                 return;
             };

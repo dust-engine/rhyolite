@@ -49,9 +49,9 @@ where
 pub struct ResourceTransitionCommandRecorder<'w> {
     device: &'w Device,
     cmd_buf: vk::CommandBuffer,
-    global_barriers: vk::MemoryBarrier2,
-    image_barriers: Vec<vk::ImageMemoryBarrier2>,
-    buffer_barriers: Vec<vk::BufferMemoryBarrier2>,
+    pub(crate) global_barriers: vk::MemoryBarrier2,
+    pub(crate) image_barriers: Vec<vk::ImageMemoryBarrier2>,
+    pub(crate) buffer_barriers: Vec<vk::BufferMemoryBarrier2>,
     dependency_flags: vk::DependencyFlags,
 }
 impl<'w> ResourceTransitionCommandRecorder<'w> {
@@ -84,20 +84,6 @@ impl<'w> ResourceTransitionCommandRecorder<'w> {
             self.global_barriers.src_access_mask |= barrier.src_access_mask;
             self.global_barriers.dst_access_mask |= barrier.dst_access_mask;
         } else {
-            println!(
-                "{:?}",
-                vk::ImageMemoryBarrier2 {
-                    src_stage_mask: barrier.src_stage_mask,
-                    dst_stage_mask: barrier.dst_stage_mask,
-                    src_access_mask: barrier.src_access_mask,
-                    dst_access_mask: barrier.dst_access_mask,
-                    old_layout: image.layout,
-                    new_layout: layout,
-                    image: image.raw_image(),
-                    subresource_range: image.subresource_range(),
-                    ..Default::default()
-                }
-            );
             self.image_barriers.push(vk::ImageMemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
                 dst_stage_mask: barrier.dst_stage_mask,

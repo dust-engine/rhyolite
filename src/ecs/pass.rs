@@ -12,7 +12,7 @@ use bevy_ecs::{
 use bevy_utils::petgraph::{
     graphmap::DiGraphMap,
     visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
-    Direction::{Incoming, Outgoing},
+    Direction::{self, Incoming, Outgoing},
 };
 
 use crate::{
@@ -599,8 +599,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             if !current_stage.is_empty() {
                 all_stages.push(std::mem::take(&mut current_stage));
             }
-            println!("{:?}", all_stages);
-            let mut prev_stage: Vec<usize> = Vec::new();
             for stage in all_stages.into_iter() {
                 // Create a pipeline flush system
                 let id_num = graph.systems.len();
@@ -639,13 +637,12 @@ impl ScheduleBuildPass for RenderSystemPass {
                 graph.system_conditions.push(Vec::new());
                 graph.ambiguous_with_all.insert(id);
 
-                for i in prev_stage.iter() {
-                    dependency_flattened.add_edge(NodeId::System(*i), id, ());
-                }
                 for i in stage.iter() {
+                    for parent in dependency_flattened.neighbors_directed(NodeId::System(*i), Direction::Incoming).collect::<Vec<_>>() {
+                        dependency_flattened.add_edge(parent, id, ());
+                    }
                     dependency_flattened.add_edge(id, NodeId::System(*i), ());
                 }
-                let _ = std::mem::replace(&mut prev_stage, stage);
             }
         }
         Ok(())

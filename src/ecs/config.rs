@@ -87,7 +87,6 @@ impl Barriers {
             global_barriers.src_access_mask |= barrier.src_access_mask;
             global_barriers.dst_access_mask |= barrier.dst_access_mask;
         } else {
-            image.layout = layout;
             image_barriers.push(vk::ImageMemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
                 dst_stage_mask: barrier.dst_stage_mask,
@@ -99,6 +98,7 @@ impl Barriers {
                 subresource_range: image.subresource_range(),
                 ..Default::default()
             });
+            image.layout = layout;
         }
     }
     pub fn transition_buffer<T: BufferLike>(

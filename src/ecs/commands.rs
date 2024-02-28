@@ -534,12 +534,17 @@ where
             assert!(dropped);
         }
 
-        let _render_commands = RenderCommands::<Q>::get_param(
+        let mut render_commands = RenderCommands::<Q>::get_param(
             self.render_command_state.as_mut().unwrap(),
             &self.system_meta,
             world,
             change_tick,
         );
+        let mut barriers = render_commands.record_commands().transition_resources();
+        barriers.global_barriers = global_barriers;
+        barriers.image_barriers = image_barriers;
+        barriers.buffer_barriers = buffer_barriers;
+        barriers.end();
         self.system_meta.last_run = change_tick;
     }
 
