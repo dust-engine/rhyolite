@@ -1,10 +1,12 @@
-use std::{ops::Deref, sync::Arc};
+use std::{sync::Arc};
 
 use ash::{extensions::khr, prelude::VkResult, vk};
-use bevy_app::{App, Plugin, Update};
+use bevy_app::{App, Plugin, PostUpdate};
 use bevy_ecs::prelude::*;
 use bevy_window::{RawHandleWrapper, Window};
-use raw_window_handle::{HasRawDisplayHandle, RawDisplayHandle};
+use raw_window_handle::{
+    DisplayHandle, HasDisplayHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
+};
 
 use crate::{plugin::RhyoliteApp, HasDevice, Instance, PhysicalDevice};
 
@@ -25,7 +27,7 @@ impl Plugin for SurfacePlugin {
             .world
             .get_non_send_resource::<winit::event_loop::EventLoop<()>>()
         {
-            match event_loop.raw_display_handle() {
+            match event_loop.display_handle().unwrap().as_raw() {
                 #[cfg(target_os = "windows")]
                 RawDisplayHandle::Windows(_) => {
                     app.add_instance_extension::<ash::extensions::khr::Win32Surface>()
@@ -63,13 +65,9 @@ impl Plugin for SurfacePlugin {
         };
 
         app.add_systems(
-            Update,
+            PostUpdate,
             extract_surfaces.run_if(|e: EventReader<bevy_window::WindowCreated>| !e.is_empty()),
         );
-    }
-    fn finish(&self, app: &mut App) {
-        let instance: &Instance = app.world.resource();
-        let surface_loader = ash::extensions::khr::Surface::new(&instance.entry(), instance);
     }
 }
 
@@ -91,16 +89,14 @@ impl Drop for SurfaceInner {
 impl Surface {
     pub fn create(
         instance: Instance,
-        window_handle: &impl raw_window_handle::HasRawWindowHandle,
-        display_handle: &impl raw_window_handle::HasRawDisplayHandle,
+        window_handle: &impl raw_window_handle::HasWindowHandle,
+        display_handle: &impl raw_window_handle::HasDisplayHandle,
     ) -> VkResult<Surface> {
         let surface = unsafe {
-            ash_window::create_surface(
-                instance.entry(),
+            create_surface(
                 &instance,
-                display_handle.raw_display_handle(),
-                window_handle.raw_window_handle(),
-                None,
+                display_handle.display_handle().unwrap(),
+                window_handle.window_handle().unwrap(),
             )?
         };
         Ok(Surface(Arc::new(SurfaceInner {
@@ -174,5 +170,97 @@ pub(super) fn extract_surfaces(
         assert!(surface.is_none());
         let new_surface = Surface::create(instance.clone(), &raw_handle, &raw_handle).unwrap();
         commands.entity(create_event.window).insert(new_surface);
+    }
+}
+
+unsafe fn create_surface(
+    instance: &Instance,
+    display_handle: DisplayHandle,
+    window_handle: WindowHandle,
+) -> VkResult<vk::SurfaceKHR> {
+    match (display_handle.as_raw(), window_handle.as_raw()) {
+        (RawDisplayHandle::Windows(_), RawWindowHandle::Win32(window)) => instance
+            .extension::<khr::Win32Surface>()
+            .create_win32_surface(
+                &vk::Win32SurfaceCreateInfoKHR {
+                    hinstance: window.hinstance.unwrap().get() as ash::vk::HINSTANCE,
+                    hwnd: window.hwnd.get() as ash::vk::HWND,
+                    ..Default::default()
+                },
+                None,
+            ),
+
+        (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(window)) => instance
+            .extension::<khr::WaylandSurface>()
+            .create_wayland_surface(
+                &vk::WaylandSurfaceCreateInfoKHR {
+                    display: display.display.as_ptr(),
+                    surface: window.surface.as_ptr(),
+                    ..Default::default()
+                },
+                None,
+            ),
+
+        (RawDisplayHandle::Xlib(display), RawWindowHandle::Xlib(window)) => instance
+            .extension::<khr::XlibSurface>()
+            .create_xlib_surface(
+                &vk::XlibSurfaceCreateInfoKHR {
+                    dpy: display.display.unwrap().as_ptr() as *mut _,
+                    window: window.window,
+                    ..Default::default()
+                },
+                None,
+            ),
+
+        (RawDisplayHandle::Xcb(display), RawWindowHandle::Xcb(window)) => {
+            instance.extension::<khr::XcbSurface>().create_xcb_surface(
+                &vk::XcbSurfaceCreateInfoKHR {
+                    connection: display.connection.unwrap().as_ptr(),
+                    window: window.window.get(),
+                    ..Default::default()
+                },
+                None,
+            )
+        }
+
+        (RawDisplayHandle::Android(_), RawWindowHandle::AndroidNdk(window)) => instance
+            .extension::<khr::AndroidSurface>()
+            .create_android_surface(
+                &vk::AndroidSurfaceCreateInfoKHR {
+                    window: window.a_native_window.as_ptr(),
+                    ..Default::default()
+                },
+                None,
+            ),
+
+        #[cfg(target_os = "macos")]
+        (RawDisplayHandle::AppKit(_), RawWindowHandle::AppKit(window)) => {
+            use raw_window_metal::{appkit, Layer};
+
+            let layer = match appkit::metal_layer_from_handle(window) {
+                Layer::Existing(layer) | Layer::Allocated(layer) => layer as *mut _,
+                Layer::None => return Err(vk::Result::ERROR_INITIALIZATION_FAILED),
+            };
+
+            let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
+            let surface_fn = ext::MetalSurface::new(entry, instance);
+            surface_fn.create_metal_surface(&surface_desc, allocation_callbacks)
+        }
+
+        #[cfg(target_os = "ios")]
+        (RawDisplayHandle::UiKit(_), RawWindowHandle::UiKit(window)) => {
+            use raw_window_metal::{uikit, Layer};
+
+            let layer = match uikit::metal_layer_from_handle(window) {
+                Layer::Existing(layer) | Layer::Allocated(layer) => layer as *mut _,
+                Layer::None => return Err(vk::Result::ERROR_INITIALIZATION_FAILED),
+            };
+
+            let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
+            let surface_fn = ext::MetalSurface::new(entry, instance);
+            surface_fn.create_metal_surface(&surface_desc, allocation_callbacks)
+        }
+
+        _ => Err(vk::Result::ERROR_EXTENSION_NOT_PRESENT),
     }
 }

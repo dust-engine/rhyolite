@@ -638,7 +638,10 @@ impl ScheduleBuildPass for RenderSystemPass {
                 graph.ambiguous_with_all.insert(id);
 
                 for i in stage.iter() {
-                    for parent in dependency_flattened.neighbors_directed(NodeId::System(*i), Direction::Incoming).collect::<Vec<_>>() {
+                    for parent in dependency_flattened
+                        .neighbors_directed(NodeId::System(*i), Direction::Incoming)
+                        .collect::<Vec<_>>()
+                    {
                         dependency_flattened.add_edge(parent, id, ());
                     }
                     dependency_flattened.add_edge(id, NodeId::System(*i), ());

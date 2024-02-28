@@ -9,7 +9,7 @@ use bevy_ecs::{
 use bevy_window::PrimaryWindow;
 use rhyolite::{
     acquire_swapchain_image,
-    ecs::{Barriers, RenderApp, RenderCommands, RenderImage, RenderSystem},
+    ecs::{Barriers, RenderApp, RenderCommands, RenderSystem},
     present, Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage,
     SwapchainPlugin,
 };
@@ -45,7 +45,6 @@ fn main() {
             ..Default::default()
         });
 
-    //bevy_mod_debugdump::print_schedule_graph(&mut app, bevy_app::Update);
     app.run();
 }
 
@@ -89,6 +88,7 @@ impl RenderSystem for ClearMainWindowColor {
                         access: vk::AccessFlags2::empty(),
                     },
                     vk::ImageLayout::PRESENT_SRC_KHR,
+                    true,
                 )
                 .end();
         }
@@ -110,6 +110,7 @@ impl RenderSystem for ClearMainWindowColor {
                     access: vk::AccessFlags2::TRANSFER_WRITE,
                 },
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                false,
             )
         }
         Box::new(IntoSystem::into_system(barrier))

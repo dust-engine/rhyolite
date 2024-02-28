@@ -1,7 +1,11 @@
-use std::{borrow::BorrowMut, ops::{Deref, DerefMut}, sync::Arc};
+use std::{
+    borrow::BorrowMut,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use ash::{extensions::khr, prelude::VkResult, vk};
-use bevy_app::{App, Plugin, Update};
+use bevy_app::{App, Plugin, PostUpdate};
 use bevy_ecs::{
     prelude::*,
     query::{QueryFilter, QuerySingleError},
@@ -12,7 +16,7 @@ use crate::{
     ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
-    Device, HasDevice, ImageLike, PhysicalDevice, QueueType, QueuesRouter, ResourceState, Surface,
+    Device, HasDevice, ImageLike, PhysicalDevice, QueueType, QueuesRouter, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -33,7 +37,7 @@ impl Plugin for SwapchainPlugin {
             .unwrap();
 
         app.add_systems(
-            Update,
+            PostUpdate,
             (
                 extract_swapchains.after(crate::surface::extract_surfaces),
                 present.with_option::<RenderSystemPass>(|entry| {
@@ -148,11 +152,20 @@ impl Swapchain {
             };
             let inner = Arc::new(swapchain);
             Ok(Swapchain {
-                images: images.into_iter().enumerate().map(|(i, image)| Some(RenderImage::new(SwapchainImageInner {
-                    image,
-                    indice: i as u32,
-                    swapchain: inner.clone(),
-                }))).collect(),
+                images: images
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, image)| {
+                        let mut img = RenderImage::new(SwapchainImageInner {
+                            image,
+                            indice: i as u32,
+                            swapchain: inner.clone(),
+                        });
+                        img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
+                        img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
+                        Some(img)
+                    })
+                    .collect(),
                 inner,
             })
         }
@@ -216,11 +229,20 @@ impl Swapchain {
                 color_space: info.image_color_space.into(),
             };
             self.inner = Arc::new(inner);
-            self.images = images.into_iter().enumerate().map(|(i, image)| Some(RenderImage::new(SwapchainImageInner {
-                image,
-                indice: i as u32,
-                swapchain: self.inner.clone(),
-            }))).collect();
+            self.images = images
+                .into_iter()
+                .enumerate()
+                .map(|(i, image)| {
+                    let mut img = RenderImage::new(SwapchainImageInner {
+                        image,
+                        indice: i as u32,
+                        swapchain: self.inner.clone(),
+                    });
+                    img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
+                    img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
+                    Some(img)
+                })
+                .collect();
         }
         Ok(())
     }
@@ -493,12 +515,16 @@ impl Deref for SwapchainImage {
     type Target = RenderImage<SwapchainImageInner>;
 
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref().expect("Use of SwapchainImage before it has been acquired")
+        self.0
+            .as_ref()
+            .expect("Use of SwapchainImage before it has been acquired")
     }
 }
 impl DerefMut for SwapchainImage {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_mut().expect("Use of SwapchainImage before it has been acquired")
+        self.0
+            .as_mut()
+            .expect("Use of SwapchainImage before it has been acquired")
     }
 }
 
@@ -584,8 +610,13 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     if suboptimal {
         tracing::warn!("Suboptimal swapchain");
     }
-    let image = swapchain.images[indice as usize].take().expect("Acquiring image that hasn't been presented");
-    assert!(swapchain_image.0.is_none(), "Must present the current image before acquiring a new one");
+    let image = swapchain.images[indice as usize]
+        .take()
+        .expect("Acquiring image that hasn't been presented");
+    assert!(
+        swapchain_image.0.is_none(),
+        "Must present the current image before acquiring a new one"
+    );
     swapchain_image.0 = Some(image);
 }
 

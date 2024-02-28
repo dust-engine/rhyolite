@@ -120,18 +120,30 @@ unsafe extern "system" fn debug_utils_callback(
         message_id_number: callback_data_raw.message_id_number,
         message_id_name: CStr::from_ptr(callback_data_raw.p_message_id_name),
         message: CStr::from_ptr(callback_data_raw.p_message),
-        queue_labels: std::slice::from_raw_parts(
-            callback_data_raw.p_queue_labels,
-            callback_data_raw.queue_label_count as usize,
-        ),
-        cmd_buf_labels: std::slice::from_raw_parts(
-            callback_data_raw.p_cmd_buf_labels,
-            callback_data_raw.cmd_buf_label_count as usize,
-        ),
-        objects: std::slice::from_raw_parts(
-            callback_data_raw.p_objects,
-            callback_data_raw.object_count as usize,
-        ),
+        queue_labels: if callback_data_raw.queue_label_count == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(
+                callback_data_raw.p_queue_labels,
+                callback_data_raw.queue_label_count as usize,
+            )
+        },
+        cmd_buf_labels: if callback_data_raw.queue_label_count == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(
+                callback_data_raw.p_cmd_buf_labels,
+                callback_data_raw.cmd_buf_label_count as usize,
+            )
+        },
+        objects: if callback_data_raw.queue_label_count == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(
+                callback_data_raw.p_objects,
+                callback_data_raw.object_count as usize,
+            )
+        },
     };
     for callback in this.callbacks.read().unwrap().iter() {
         (callback)(severity, types, &callback_data)

@@ -250,7 +250,7 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(queue_router);
 
         // Add build pass
-        app.get_schedule_mut(Update)
+        app.get_schedule_mut(PostUpdate)
             .as_mut()
             .unwrap()
             .add_build_pass(RenderSystemPass::new())

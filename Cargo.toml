@@ -5,6 +5,11 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[workspace]
+members = [
+  "crates/*",
+]
+
 [dependencies]
 crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
@@ -16,12 +21,11 @@ bevy_winit = { path = "../bevy/crates/bevy_winit" }
 bevy_input = { path = "../bevy/crates/bevy_input" }
 bevy_app = { path = "../bevy/crates/bevy_app" }
 ash = "0.37"
-ash-window = "0.12"
 tracing = "0.1"
 cstr = "0.2"
 thread_local = "1"
 winit = { version = "0.29", default-features = false, features = ["rwh_05"] }
-raw-window-handle = "0.5"
+raw-window-handle = "0.6"
 glam = "0.24"
 arrayvec = "0.7"
 itertools = "0.12"
@@ -37,3 +41,4 @@ bevy_winit = { path = "../bevy/crates/bevy_winit" }
 bevy_input = { path = "../bevy/crates/bevy_input" }
 bevy_app = { path = "../bevy/crates/bevy_app" }
 bevy_render = { path = "../bevy/crates/bevy_render" }
+bevy_internal = { path = "../bevy/crates/bevy_internal" }

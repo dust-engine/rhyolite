@@ -1,5 +1,5 @@
 use ash::vk;
-use bevy_app::{App, Update};
+use bevy_app::{App, PostUpdate};
 use bevy_ecs::{
     schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfigs, SystemSet},
     system::BoxedSystem,
@@ -65,7 +65,7 @@ impl Drop for Barriers {
 impl Barriers {
     pub fn transition_resource<T>(&mut self, res: &mut RenderRes<T>, access: Access) {
         let global_barriers = unsafe { &mut *self.global_barriers };
-        let barrier = res.state.transition(access);
+        let barrier = res.state.transition(access, false);
         global_barriers.src_stage_mask |= barrier.src_stage_mask;
         global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
         global_barriers.src_access_mask |= barrier.src_access_mask;
@@ -76,29 +76,41 @@ impl Barriers {
         image: &mut RenderImage<T>,
         access: Access,
         layout: vk::ImageLayout,
+        retain_data: bool,
     ) {
+        if access.is_readonly() && !retain_data {
+            tracing::warn!("Transitioning an image to readonly access without retaining image data. This is likely an error.");
+        }
+        if access.is_writeonly() && retain_data {
+            tracing::warn!("Transitioning an image to writeonly access while retaining image data. This is likely inefficient.");
+        }
         let image_barriers = unsafe { &mut *self.image_barriers };
         let global_barriers = unsafe { &mut *self.global_barriers };
-        let barrier = image.res.state.transition(access);
+        let has_layout_transition = image.layout != layout;
+        let barrier = image.res.state.transition(access, has_layout_transition);
 
-        if image.layout == layout {
-            global_barriers.src_stage_mask |= barrier.src_stage_mask;
-            global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
-            global_barriers.src_access_mask |= barrier.src_access_mask;
-            global_barriers.dst_access_mask |= barrier.dst_access_mask;
-        } else {
+        if has_layout_transition {
             image_barriers.push(vk::ImageMemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
                 dst_stage_mask: barrier.dst_stage_mask,
                 src_access_mask: barrier.src_access_mask,
                 dst_access_mask: barrier.dst_access_mask,
-                old_layout: image.layout,
+                old_layout: if retain_data {
+                    image.layout
+                } else {
+                    vk::ImageLayout::UNDEFINED
+                },
                 new_layout: layout,
                 image: image.raw_image(),
                 subresource_range: image.subresource_range(),
                 ..Default::default()
             });
             image.layout = layout;
+        } else {
+            global_barriers.src_stage_mask |= barrier.src_stage_mask;
+            global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
+            global_barriers.src_access_mask |= barrier.src_access_mask;
+            global_barriers.dst_access_mask |= barrier.dst_access_mask;
         }
     }
     pub fn transition_buffer<T: BufferLike>(
@@ -179,7 +191,7 @@ pub trait RenderApp {
 }
 impl RenderApp for App {
     fn add_render_system(&mut self, render_system: impl IntoRenderSystemConfigs) -> &mut App {
-        self.add_systems(Update, render_system.into_configs());
+        self.add_systems(PostUpdate, render_system.into_configs());
         self
     }
 }

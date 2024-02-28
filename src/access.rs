@@ -34,7 +34,7 @@ pub struct ResourceState {
     pub(crate) write: Access,
 }
 impl ResourceState {
-    pub fn transition(&mut self, next: Access) -> MemoryBarrier {
+    pub fn transition(&mut self, next: Access, with_layout_transition: bool) -> MemoryBarrier {
         let mut barrier = MemoryBarrier {
             src_stage_mask: self.write.stage,
             src_access_mask: self.write.access,
@@ -45,7 +45,12 @@ impl ResourceState {
             && self.write.stage == vk::PipelineStageFlags2::empty()
         {
             // Resource was never accessed before.
-            barrier = MemoryBarrier::default();
+            if with_layout_transition {
+                barrier.src_access_mask = vk::AccessFlags2::empty();
+                barrier.src_stage_mask = vk::PipelineStageFlags2::empty();
+            } else {
+                barrier = MemoryBarrier::default();
+            }
         } else if next.is_readonly() {
             if let Some(ordering) = compare_pipeline_stages(self.read.stage, next.stage) {
                 if ordering.is_gt() {
@@ -60,10 +65,18 @@ impl ResourceState {
         } else {
             // The next stage will be writing.
             if self.read.stage != vk::PipelineStageFlags2::empty() {
-                // write after read
+                // This is a WAR hazard, which you would usually only need an execution dependency for.
+                // meaning you wouldn't need to supply any memory barriers.
                 barrier.src_stage_mask = self.read.stage;
                 barrier.src_access_mask = vk::AccessFlags2::empty();
-                barrier.dst_access_mask = vk::AccessFlags2::empty();
+                if !with_layout_transition {
+                    // When we do have a layout transition, you still need a memory barrier,
+                    // but you don't need any access types in the src access mask. The layout transition
+                    // itself is considered a write operation though, so you do need the destination
+                    // access mask to be correct - or there would be a WAW hazard between the layout
+                    // transition and the color attachment write.
+                    barrier.dst_access_mask = vk::AccessFlags2::empty();
+                }
             }
         }
         // the info is now available for all stages after next.stage, but not for stages before next.stage.
@@ -303,15 +316,21 @@ mod tests {
     #[test]
     fn test_wrr() {
         let mut access = ResourceState::default();
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -321,10 +340,13 @@ mod tests {
                 dst_access_mask: vk::AccessFlags2::SHADER_READ,
             }
         );
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::VERTEX_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::VERTEX_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -340,15 +362,21 @@ mod tests {
     #[test]
     fn test_wrr2() {
         let mut access = ResourceState::default();
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::VERTEX_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::VERTEX_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -358,31 +386,43 @@ mod tests {
                 dst_access_mask: vk::AccessFlags2::SHADER_READ,
             }
         );
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         // The fragment shader resource usage would've been synced by the previous barrier too.
         assert_eq!(barrier, MemoryBarrier::default());
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::VERTEX_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::VERTEX_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
     }
     /// Write - Read - Read, reads are ordered the same
     #[test]
     fn test_wrr3() {
         let mut access = ResourceState::default();
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -392,10 +432,13 @@ mod tests {
                 dst_access_mask: vk::AccessFlags2::SHADER_READ,
             }
         );
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         // The fragment shader resource usage would've been synced by the previous barrier too.
         assert_eq!(barrier, MemoryBarrier::default());
     }
@@ -403,15 +446,21 @@ mod tests {
     #[test]
     fn test_wrr4() {
         let mut access = ResourceState::default();
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::VERTEX_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::VERTEX_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -421,10 +470,13 @@ mod tests {
                 dst_access_mask: vk::AccessFlags2::SHADER_READ,
             }
         );
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::TASK_SHADER_EXT,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::TASK_SHADER_EXT,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -434,25 +486,34 @@ mod tests {
                 dst_access_mask: vk::AccessFlags2::SHADER_READ,
             }
         );
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::MESH_SHADER_EXT,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::MESH_SHADER_EXT,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
     }
 
     #[test]
     fn test_wrw() {
         let mut access = ResourceState::default();
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::VERTEX_SHADER,
-            access: vk::AccessFlags2::SHADER_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::VERTEX_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -462,10 +523,13 @@ mod tests {
                 dst_access_mask: vk::AccessFlags2::SHADER_READ,
             }
         );
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            access: vk::AccessFlags2::SHADER_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_WRITE,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -480,15 +544,21 @@ mod tests {
     #[test]
     fn test_wrw2() {
         let mut access = ResourceState::default();
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            access: vk::AccessFlags2::SHADER_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_WRITE,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            access: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                access: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -498,10 +568,13 @@ mod tests {
                 dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
             }
         );
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
-            access: vk::AccessFlags2::SHADER_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                access: vk::AccessFlags2::SHADER_WRITE,
+            },
+            false,
+        );
         // We need to wait on the read from the second operation to finish.
         // We also need to wait on the write from the first operation but this is done through an indirect barrier.
         assert_eq!(
@@ -518,15 +591,21 @@ mod tests {
     #[test]
     fn test_www() {
         let mut access = ResourceState::default();
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            access: vk::AccessFlags2::SHADER_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_WRITE,
+            },
+            false,
+        );
         assert_eq!(barrier, MemoryBarrier::default());
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            },
+            false,
+        );
         assert_eq!(
             barrier,
             MemoryBarrier {
@@ -536,10 +615,13 @@ mod tests {
                 dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
             }
         );
-        let barrier = access.transition(Access {
-            stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
-            access: vk::AccessFlags2::SHADER_WRITE,
-        });
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                access: vk::AccessFlags2::SHADER_WRITE,
+            },
+            false,
+        );
         // We need to wait on the read from the second operation to finish.
         // We also need to wait on the write from the first operation but this is done through an indirect barrier.
         assert_eq!(
@@ -549,6 +631,52 @@ mod tests {
                 src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                 dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
                 dst_access_mask: vk::AccessFlags2::SHADER_WRITE,
+            }
+        );
+    }
+
+    #[test]
+    fn test_wrw_layout_transition() {
+        // First draw samples a texture in the fragment shader. Second draw writes to that texture as a color attachment.
+        let mut access = ResourceState::default();
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::TRANSFER,
+                access: vk::AccessFlags2::TRANSFER_WRITE,
+            },
+            false,
+        );
+        assert_eq!(barrier, MemoryBarrier::default());
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_SAMPLED_READ,
+            },
+            false,
+        );
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+                src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                dst_access_mask: vk::AccessFlags2::SHADER_SAMPLED_READ,
+            }
+        );
+        let barrier = access.transition(
+            Access {
+                stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            },
+            true,
+        );
+        assert_eq!(
+            barrier,
+            MemoryBarrier {
+                src_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                src_access_mask: vk::AccessFlags2::empty(),
+                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
             }
         );
     }

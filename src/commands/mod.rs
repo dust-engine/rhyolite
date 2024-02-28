@@ -62,7 +62,7 @@ impl<'w> ResourceTransitionCommandRecorder<'w> {
     }
     #[must_use]
     pub fn global<T>(mut self, res: &'w mut RenderRes<T>, access: Access) -> Self {
-        let barrier = res.state.transition(access);
+        let barrier = res.state.transition(access, false);
         self.global_barriers.src_stage_mask |= barrier.src_stage_mask;
         self.global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
         self.global_barriers.src_access_mask |= barrier.src_access_mask;
@@ -76,26 +76,38 @@ impl<'w> ResourceTransitionCommandRecorder<'w> {
         image: &'w mut RenderImage<T>,
         access: Access,
         layout: vk::ImageLayout,
+        retain_data: bool,
     ) -> Self {
-        let barrier = image.res.state.transition(access);
-        if image.layout == layout {
-            self.global_barriers.src_stage_mask |= barrier.src_stage_mask;
-            self.global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
-            self.global_barriers.src_access_mask |= barrier.src_access_mask;
-            self.global_barriers.dst_access_mask |= barrier.dst_access_mask;
-        } else {
+        if access.is_readonly() && !retain_data {
+            tracing::warn!("Transitioning an image to readonly access without retaining image data. This is likely an error.");
+        }
+        if access.is_writeonly() && retain_data {
+            tracing::warn!("Transitioning an image to writeonly access while retaining image data. This is likely inefficient.");
+        }
+        let has_layout_transition = image.layout != layout;
+        let barrier = image.res.state.transition(access, has_layout_transition);
+        if has_layout_transition {
             self.image_barriers.push(vk::ImageMemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
                 dst_stage_mask: barrier.dst_stage_mask,
                 src_access_mask: barrier.src_access_mask,
                 dst_access_mask: barrier.dst_access_mask,
-                old_layout: image.layout,
+                old_layout: if retain_data {
+                    image.layout
+                } else {
+                    vk::ImageLayout::UNDEFINED
+                },
                 new_layout: layout,
                 image: image.raw_image(),
                 subresource_range: image.subresource_range(),
                 ..Default::default()
             });
             image.layout = layout;
+        } else {
+            self.global_barriers.src_stage_mask |= barrier.src_stage_mask;
+            self.global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
+            self.global_barriers.src_access_mask |= barrier.src_access_mask;
+            self.global_barriers.dst_access_mask |= barrier.dst_access_mask;
         }
         self
     }
