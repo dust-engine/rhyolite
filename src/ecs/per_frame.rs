@@ -12,12 +12,20 @@ use crate::semaphore::TimelineSemaphore;
 
 use super::RenderSystemInitialState;
 
-pub trait PerFrameResource: Resource {
+pub trait PerFrameResource: Send + Sync + 'static {
     type Params: SystemParam;
     fn reset(&mut self, _params: SystemParamItem<'_, '_, Self::Params>) {}
     fn create(params: SystemParamItem<'_, '_, Self::Params>) -> Self;
 }
+impl<T: Default + Send + Sync + 'static> PerFrameResource for T {
+    type Params = ();
 
+    fn create(_params: SystemParamItem<'_, '_, Self::Params>) -> Self {
+        Default::default()
+    }
+}
+
+/// Wraps a host-owned resource, allowing the GPU to borrow it.
 pub struct PerFrameMut<'a, T: PerFrameResource> {
     index: usize,
     items: ResMut<'a, PerFrameResourceContainer<T>>,

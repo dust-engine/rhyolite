@@ -29,6 +29,7 @@ raw-window-handle = "0.6"
 glam = "0.24"
 arrayvec = "0.7"
 itertools = "0.12"
+vk-mem = "0.3"
 
 
 [patch.crates-io]
@@ -42,3 +43,6 @@ bevy_input = { path = "../bevy/crates/bevy_input" }
 bevy_app = { path = "../bevy/crates/bevy_app" }
 bevy_render = { path = "../bevy/crates/bevy_render" }
 bevy_internal = { path = "../bevy/crates/bevy_internal" }
+
+[dev-dependencies]
+rhyolite_egui = { path = "crates/egui" }

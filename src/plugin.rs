@@ -229,12 +229,11 @@ impl Plugin for RhyolitePlugin {
             .skip(self.physical_device_index)
             .next()
             .unwrap();
-        let properties = PhysicalDeviceProperties::new(physical_device.clone());
         tracing::info!(
             "Using {:?} {:?} with memory model {:?}",
-            properties.device_type,
-            properties.device_name(),
-            properties.memory_model
+            physical_device.properties().device_type,
+            physical_device.properties().device_name(),
+            physical_device.properties().memory_model
         );
         let features = PhysicalDeviceFeatures::new(physical_device.clone());
         let extensions = DeviceExtensions::new(&physical_device).unwrap();
@@ -245,7 +244,6 @@ impl Plugin for RhyolitePlugin {
         app.insert_resource(extensions)
             .insert_resource(instance)
             .insert_resource(physical_device)
-            .insert_resource(properties)
             .insert_resource(features)
             .insert_resource(queue_router);
 
@@ -278,6 +276,9 @@ impl Plugin for RhyolitePlugin {
         )
         .unwrap();
         app.insert_resource(device);
+
+        // Add allocator
+        app.world.init_resource::<crate::Allocator>();
     }
 }
 

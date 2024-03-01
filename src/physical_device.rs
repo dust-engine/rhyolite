@@ -10,13 +10,16 @@ use std::{
     ffi::CStr,
     ops::{Deref, DerefMut},
     ptr::NonNull,
-    sync::RwLock,
+    sync::{Arc, RwLock},
 };
 
 #[derive(Clone, Resource)]
-pub struct PhysicalDevice {
+pub struct PhysicalDevice(Arc<PhysicalDeviceInner>);
+
+struct PhysicalDeviceInner {
     instance: Instance,
     physical_device: vk::PhysicalDevice,
+    properties: PhysicalDeviceProperties,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,19 +45,23 @@ impl Instance {
         &'a self,
     ) -> VkResult<impl ExactSizeIterator<Item = PhysicalDevice> + 'a> {
         let pdevices = unsafe { self.deref().enumerate_physical_devices().unwrap() };
-        Ok(pdevices.into_iter().map(|pdevice| PhysicalDevice {
-            instance: self.clone(),
-            physical_device: pdevice,
+        Ok(pdevices.into_iter().map(|pdevice| {
+            let properties = PhysicalDeviceProperties::new(self.clone(), pdevice);
+            PhysicalDevice(Arc::new( PhysicalDeviceInner{
+                instance: self.clone(),
+                physical_device: pdevice,
+                properties,
+            }))
         }))
     }
 }
 
 impl PhysicalDevice {
     pub fn instance(&self) -> &Instance {
-        &self.instance
+        &self.0.instance
     }
     pub fn raw(&self) -> vk::PhysicalDevice {
-        self.physical_device
+        self.0.physical_device
     }
     pub fn image_format_properties(
         &self,
@@ -62,8 +69,8 @@ impl PhysicalDevice {
     ) -> VkResult<Option<vk::ImageFormatProperties2>> {
         let mut out = vk::ImageFormatProperties2::default();
         unsafe {
-            match self.instance.get_physical_device_image_format_properties2(
-                self.physical_device,
+            match self.0.instance.get_physical_device_image_format_properties2(
+                self.0.physical_device,
                 format_info,
                 &mut out,
             ) {
@@ -75,9 +82,12 @@ impl PhysicalDevice {
     }
     pub(crate) fn get_queue_family_properties(&self) -> Vec<vk::QueueFamilyProperties> {
         unsafe {
-            self.instance
-                .get_physical_device_queue_family_properties(self.physical_device)
+            self.0.instance
+                .get_physical_device_queue_family_properties(self.0.physical_device)
         }
+    }
+    pub fn properties(&self) -> &PhysicalDeviceProperties {
+        &self.0.properties
     }
 }
 
@@ -87,9 +97,8 @@ pub unsafe trait PhysicalDeviceProperty: Sized + Default + 'static {
         let mut item = Self::default();
         unsafe {
             wrapper.p_next = &mut item as *mut Self as *mut c_void;
-            this.pdevice
-                .instance()
-                .get_physical_device_properties2(this.pdevice.raw(), &mut wrapper);
+            this.instance
+                .get_physical_device_properties2(this.pdevice, &mut wrapper);
         }
         item
     }
@@ -120,9 +129,10 @@ pub unsafe trait PhysicalDeviceProperty: Sized + Default + 'static {
     }
 }
 
-#[derive(Resource)]
+
 pub struct PhysicalDeviceProperties {
-    pdevice: PhysicalDevice,
+    instance: Instance,
+    pdevice: vk::PhysicalDevice,
     inner: vk::PhysicalDeviceProperties,
     memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub memory_model: PhysicalDeviceMemoryModel,
@@ -131,16 +141,14 @@ pub struct PhysicalDeviceProperties {
 unsafe impl Send for PhysicalDeviceProperties {}
 unsafe impl Sync for PhysicalDeviceProperties {}
 impl PhysicalDeviceProperties {
-    pub fn new(pdevice: PhysicalDevice) -> Self {
+    fn new(instance: Instance, pdevice: vk::PhysicalDevice) -> Self {
         let memory_properties = unsafe {
-            pdevice
-                .instance()
-                .get_physical_device_memory_properties(pdevice.raw())
+            instance
+                .get_physical_device_memory_properties(pdevice)
         };
         let pdevice_properties = unsafe {
-            pdevice
-                .instance()
-                .get_physical_device_properties(pdevice.raw())
+            instance
+                .get_physical_device_properties(pdevice)
         };
         let types =
             &memory_properties.memory_types[0..memory_properties.memory_type_count as usize];
@@ -188,6 +196,7 @@ impl PhysicalDeviceProperties {
                 }
             };
         Self {
+            instance,
             pdevice,
             properties: Default::default(),
             memory_model,

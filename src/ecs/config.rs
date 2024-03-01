@@ -115,10 +115,15 @@ impl Barriers {
     }
     pub fn transition_buffer<T: BufferLike>(
         &mut self,
-        _buffer: &mut RenderRes<T>,
-        _access: Access,
+        buffer: &mut RenderRes<T>,
+        access: Access,
     ) {
-        todo!()
+        let global_barriers = unsafe { &mut *self.global_barriers };
+        let barrier = buffer.state.transition(access, false);
+        global_barriers.src_stage_mask |= barrier.src_stage_mask;
+        global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
+        global_barriers.src_access_mask |= barrier.src_access_mask;
+        global_barriers.dst_access_mask |= barrier.dst_access_mask;
     }
 }
 

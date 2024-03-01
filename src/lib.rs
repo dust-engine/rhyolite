@@ -17,6 +17,7 @@ mod queue;
 mod semaphore;
 mod surface;
 mod swapchain;
+mod alloc;
 
 pub mod utils;
 
@@ -32,3 +33,6 @@ pub use plugin::RhyolitePlugin;
 pub use queue::*;
 pub use surface::*;
 pub use swapchain::*;
+pub use alloc::Allocator;
+
+pub use ash;

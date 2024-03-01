@@ -1,5 +1,6 @@
 use ash::vk;
 
+use bevy_app::Update;
 use bevy_ecs::{
     entity::Entity,
     query::With,
@@ -14,6 +15,7 @@ use rhyolite::{
     SwapchainPlugin,
 };
 use rhyolite::{debug::DebugUtilsPlugin, ecs::IntoRenderSystemConfigs};
+use rhyolite_egui::{egui, EguiContexts};
 
 fn main() {
     let mut app = bevy_app::App::new();
@@ -24,7 +26,10 @@ fn main() {
         .add_plugins(SurfacePlugin::default())
         .add_plugins(DebugUtilsPlugin::default())
         .add_plugins(RhyolitePlugin::default())
-        .add_plugins(SwapchainPlugin::default());
+        .add_plugins(SwapchainPlugin::default())
+        .add_plugins(rhyolite_egui::EguiPlugin::<With<PrimaryWindow>>::default());
+
+    app.add_systems(Update, ui_example_system);
 
     app.add_render_system(
         ClearMainWindowColor
@@ -48,11 +53,12 @@ fn main() {
     app.run();
 }
 
-// Solution: Each render system will be told the transitions to perform.
-// However, only one of them will actually perform the transitions, based on
-// runtime scheduling behavior.
-// Some systems will have a final "transition out". This "transition out" will be performed
-// by the "flush" system.
+
+fn ui_example_system(mut contexts: EguiContexts) {
+    egui::Window::new("Hello").show(contexts.ctx_mut(), |ui| {
+        ui.label("world");
+    });
+}
 
 struct ClearMainWindowColor;
 impl RenderSystem for ClearMainWindowColor {
