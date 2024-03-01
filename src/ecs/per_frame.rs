@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use bevy_ecs::{
+use bevy::ecs::{
     component::ComponentId,
     system::{ResMut, Resource, System, SystemParam, SystemParamItem},
 };
@@ -95,8 +95,8 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
     type Item<'world, 'state> = PerFrameMut<'world, T>;
 
     fn init_state(
-        world: &mut bevy_ecs::world::World,
-        system_meta: &mut bevy_ecs::system::SystemMeta,
+        world: &mut bevy::ecs::world::World,
+        system_meta: &mut bevy::ecs::system::SystemMeta,
     ) -> Self::State {
         let component_id = ResMut::<PerFrameResourceContainer<T>>::init_state(world, system_meta);
         let param_state = T::Params::init_state(world, system_meta);
@@ -120,7 +120,7 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
     fn configurate(
         state: &mut Self::State,
         config: &mut dyn std::any::Any,
-        world: &mut bevy_ecs::world::World,
+        world: &mut bevy::ecs::world::World,
     ) {
         if config.is::<RenderSystemInitialState>() {
             let initial_state: &mut RenderSystemInitialState = config.downcast_mut().unwrap();
@@ -133,9 +133,9 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
 
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
-        system_meta: &bevy_ecs::system::SystemMeta,
-        world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        change_tick: bevy_ecs::component::Tick,
+        system_meta: &bevy::ecs::system::SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         state.frame_index += 1;
         let mut res = ResMut::<PerFrameResourceContainer<T>>::get_param(

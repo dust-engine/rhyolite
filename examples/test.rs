@@ -1,13 +1,13 @@
 use ash::vk;
 
-use bevy_app::Update;
-use bevy_ecs::{
+use bevy::app::Update;
+use bevy::ecs::{
     entity::Entity,
     query::With,
     schedule::IntoSystemConfigs,
     system::{In, IntoSystem, Query},
 };
-use bevy_window::PrimaryWindow;
+use bevy::window::PrimaryWindow;
 use rhyolite::{
     acquire_swapchain_image,
     ecs::{Barriers, RenderApp, RenderCommands, RenderSystem},
@@ -18,11 +18,11 @@ use rhyolite::{debug::DebugUtilsPlugin, ecs::IntoRenderSystemConfigs};
 use rhyolite_egui::{egui, EguiContexts};
 
 fn main() {
-    let mut app = bevy_app::App::new();
-    app.add_plugins(bevy_window::WindowPlugin::default())
-        .add_plugins(bevy_a11y::AccessibilityPlugin)
-        .add_plugins(bevy_winit::WinitPlugin::default())
-        .add_plugins(bevy_input::InputPlugin::default())
+    let mut app = bevy::app::App::new();
+    app.add_plugins(bevy::window::WindowPlugin::default())
+        .add_plugins(bevy::a11y::AccessibilityPlugin)
+        .add_plugins(bevy::winit::WinitPlugin::default())
+        .add_plugins(bevy::input::InputPlugin::default())
         .add_plugins(SurfacePlugin::default())
         .add_plugins(DebugUtilsPlugin::default())
         .add_plugins(RhyolitePlugin::default())
@@ -62,10 +62,10 @@ fn ui_example_system(mut contexts: EguiContexts) {
 
 struct ClearMainWindowColor;
 impl RenderSystem for ClearMainWindowColor {
-    fn system(&self) -> bevy_ecs::schedule::SystemConfigs {
+    fn system(&self) -> bevy::ecs::schedule::SystemConfigs {
         fn clear_main_window_color(
             mut commands: RenderCommands<'g'>,
-            mut windows: Query<&mut SwapchainImage, With<bevy_window::PrimaryWindow>>,
+            mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
         ) {
             let Ok(mut swapchain_image) = windows.get_single_mut() else {
                 return;
@@ -104,7 +104,7 @@ impl RenderSystem for ClearMainWindowColor {
     fn barriers(&self) -> rhyolite::ecs::BoxedBarrierProducer {
         fn barrier(
             In(mut barriers): In<Barriers>,
-            mut windows: Query<&mut SwapchainImage, With<bevy_window::PrimaryWindow>>,
+            mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
         ) {
             let Ok(mut swapchain_image) = windows.get_single_mut() else {
                 return;

@@ -5,8 +5,8 @@ use crate::PhysicalDevice;
 use crate::QueueRef;
 use ash::prelude::VkResult;
 use ash::vk;
-use bevy_ecs::system::Resource;
-use bevy_utils::hashbrown::HashMap;
+use bevy::ecs::system::Resource;
+use bevy::utils::hashbrown::HashMap;
 
 use std::any::Any;
 use std::any::TypeId;

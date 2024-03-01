@@ -1,5 +1,5 @@
 use ash::vk;
-use bevy_ecs::system::Resource;
+use bevy::ecs::system::Resource;
 
 /// Index of a created queue
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]

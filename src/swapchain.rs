@@ -5,12 +5,12 @@ use std::{
 };
 
 use ash::{extensions::khr, prelude::VkResult, vk};
-use bevy_app::{App, Plugin, PostUpdate};
-use bevy_ecs::{
+use bevy::app::{App, Plugin, PostUpdate};
+use bevy::ecs::{
     prelude::*,
     query::{QueryFilter, QuerySingleError},
 };
-use bevy_window::{PrimaryWindow, Window};
+use bevy::window::{PrimaryWindow, Window};
 
 use crate::{
     ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
@@ -298,8 +298,8 @@ impl Default for SwapchainConfig {
 pub(super) fn extract_swapchains(
     mut commands: Commands,
     device: Res<Device>,
-    mut window_created_events: EventReader<bevy_window::WindowCreated>,
-    mut window_resized_events: EventReader<bevy_window::WindowResized>,
+    mut window_created_events: EventReader<bevy::window::WindowCreated>,
+    mut window_resized_events: EventReader<bevy::window::WindowResized>,
     mut query: Query<(
         &Window,
         Option<&SwapchainConfig>,
@@ -383,7 +383,7 @@ fn get_create_info<'a>(
         },
         pre_transform: config.pre_transform,
         composite_alpha: match window.composite_alpha_mode {
-            bevy_window::CompositeAlphaMode::Auto => {
+            bevy::window::CompositeAlphaMode::Auto => {
                 if surface_capabilities
                     .supported_composite_alpha
                     .contains(vk::CompositeAlphaFlagsKHR::OPAQUE)
@@ -393,24 +393,24 @@ fn get_create_info<'a>(
                     vk::CompositeAlphaFlagsKHR::INHERIT
                 }
             }
-            bevy_window::CompositeAlphaMode::Opaque => vk::CompositeAlphaFlagsKHR::OPAQUE,
-            bevy_window::CompositeAlphaMode::PreMultiplied => {
+            bevy::window::CompositeAlphaMode::Opaque => vk::CompositeAlphaFlagsKHR::OPAQUE,
+            bevy::window::CompositeAlphaMode::PreMultiplied => {
                 vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED
             }
-            bevy_window::CompositeAlphaMode::PostMultiplied => {
+            bevy::window::CompositeAlphaMode::PostMultiplied => {
                 vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED
             }
-            bevy_window::CompositeAlphaMode::Inherit => vk::CompositeAlphaFlagsKHR::INHERIT,
+            bevy::window::CompositeAlphaMode::Inherit => vk::CompositeAlphaFlagsKHR::INHERIT,
         },
         present_mode: match window.present_mode {
-            bevy_window::PresentMode::AutoVsync => {
+            bevy::window::PresentMode::AutoVsync => {
                 if supported_present_modes.contains(&vk::PresentModeKHR::FIFO_RELAXED) {
                     vk::PresentModeKHR::FIFO_RELAXED
                 } else {
                     vk::PresentModeKHR::FIFO
                 }
             }
-            bevy_window::PresentMode::AutoNoVsync => {
+            bevy::window::PresentMode::AutoNoVsync => {
                 if supported_present_modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
                     vk::PresentModeKHR::IMMEDIATE
                 } else if supported_present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
@@ -419,10 +419,10 @@ fn get_create_info<'a>(
                     vk::PresentModeKHR::FIFO
                 }
             }
-            bevy_window::PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
-            bevy_window::PresentMode::Mailbox => vk::PresentModeKHR::MAILBOX,
-            bevy_window::PresentMode::Fifo => vk::PresentModeKHR::FIFO,
-            bevy_window::PresentMode::FifoRelaxed => vk::PresentModeKHR::FIFO_RELAXED,
+            bevy::window::PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
+            bevy::window::PresentMode::Mailbox => vk::PresentModeKHR::MAILBOX,
+            bevy::window::PresentMode::Fifo => vk::PresentModeKHR::FIFO,
+            bevy::window::PresentMode::FifoRelaxed => vk::PresentModeKHR::FIFO_RELAXED,
         },
         clipped: config.clipped,
     }

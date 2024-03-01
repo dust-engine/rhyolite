@@ -1,9 +1,9 @@
 use std::{sync::Arc};
 
 use ash::{extensions::khr, prelude::VkResult, vk};
-use bevy_app::{App, Plugin, PostUpdate};
-use bevy_ecs::prelude::*;
-use bevy_window::{RawHandleWrapper, Window};
+use bevy::app::{App, Plugin, PostUpdate};
+use bevy::ecs::prelude::*;
+use bevy::window::{RawHandleWrapper, Window};
 use raw_window_handle::{
     DisplayHandle, HasDisplayHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
 };
@@ -66,7 +66,7 @@ impl Plugin for SurfacePlugin {
 
         app.add_systems(
             PostUpdate,
-            extract_surfaces.run_if(|e: EventReader<bevy_window::WindowCreated>| !e.is_empty()),
+            extract_surfaces.run_if(|e: EventReader<bevy::window::WindowCreated>| !e.is_empty()),
         );
     }
 }
@@ -161,7 +161,7 @@ impl PhysicalDevice {
 pub(super) fn extract_surfaces(
     mut commands: Commands,
     instance: Res<Instance>,
-    mut window_created_events: EventReader<bevy_window::WindowCreated>,
+    mut window_created_events: EventReader<bevy::window::WindowCreated>,
     query: Query<(&RawHandleWrapper, Option<&Surface>), With<Window>>,
 ) {
     for create_event in window_created_events.read() {

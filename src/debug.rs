@@ -1,7 +1,7 @@
 use ash::extensions::ext;
 use ash::{prelude::VkResult, vk};
-use bevy_app::Plugin;
-use bevy_ecs::system::Resource;
+use bevy::app::Plugin;
+use bevy::ecs::system::Resource;
 use std::ffi::{CStr, CString};
 
 use std::sync::RwLock;
@@ -13,11 +13,11 @@ use crate::Instance;
 pub struct DebugUtilsPlugin;
 
 impl Plugin for DebugUtilsPlugin {
-    fn build(&self, app: &mut bevy_app::App) {
+    fn build(&self, app: &mut bevy::app::App) {
         app.add_instance_extension::<ash::extensions::ext::DebugUtils>()
             .unwrap();
     }
-    fn finish(&self, app: &mut bevy_app::App) {
+    fn finish(&self, app: &mut bevy::app::App) {
         let instance: Instance = app.world.resource::<Instance>().clone();
         app.insert_resource(DebugUtilsMessenger::new(instance).unwrap());
     }

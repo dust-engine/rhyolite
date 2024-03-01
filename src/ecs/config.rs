@@ -1,6 +1,6 @@
 use ash::vk;
-use bevy_app::{App, PostUpdate};
-use bevy_ecs::{
+use bevy::app::{App, PostUpdate};
+use bevy::ecs::{
     schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfigs, SystemSet},
     system::BoxedSystem,
 };

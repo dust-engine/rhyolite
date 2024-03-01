@@ -1,7 +1,7 @@
 use crate::{cstr, extensions::InstanceExtension, plugin::InstanceMetaBuilder};
 use ash::{prelude::VkResult, vk};
-use bevy_ecs::system::Resource;
-use bevy_utils::hashbrown::HashMap;
+use bevy::ecs::system::Resource;
+use bevy::utils::hashbrown::HashMap;
 use std::{
     any::{Any, TypeId},
     ffi::{c_char, CStr},

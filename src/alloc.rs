@@ -1,7 +1,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use ash::prelude::VkResult;
-use bevy_ecs::{system::Resource, world::FromWorld};
+use bevy::ecs::{system::Resource, world::FromWorld};
 
 use crate::{Device, HasDevice};
 
@@ -13,7 +13,7 @@ struct AllocatorInner {
 }
 
 impl FromWorld for Allocator {
-    fn from_world(world: &mut bevy_ecs::world::World) -> Self {
+    fn from_world(world: &mut bevy::ecs::world::World) -> Self {
         let device = world.resource::<Device>();
         Self::new(device.clone()).unwrap()
     }

@@ -2,8 +2,8 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
-use bevy_app::prelude::*;
-use bevy_ecs::prelude::*;
+use bevy::app::prelude::*;
+use bevy::ecs::prelude::*;
 use std::{
     any::Any,
     collections::BTreeMap,
@@ -252,7 +252,7 @@ impl Plugin for RhyolitePlugin {
             .as_mut()
             .unwrap()
             .add_build_pass(RenderSystemPass::new())
-            .before::<bevy_ecs::schedule::passes::AutoInsertApplyDeferredPass>();
+            .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
 
         // Required features
         app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore);

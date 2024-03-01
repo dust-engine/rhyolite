@@ -1,7 +1,7 @@
 use std::{mem::MaybeUninit, ops::{Deref, DerefMut, Index, IndexMut}, ptr::NonNull, sync::Barrier};
 
 use ash::{prelude::VkResult, vk};
-use bevy_ecs::system::{ResMut, Resource};
+use bevy::ecs::system::{ResMut, Resource};
 
 use crate::{ecs::{queue_cap::IsQueueCap, Barriers, PerFrameMut, PerFrameResource, RenderCommands, RenderRes}, utils::SharingMode, Access, Allocator, HasDevice, PhysicalDeviceMemoryModel};
 use vk_mem::Alloc;

@@ -1,8 +1,8 @@
 use crate::queue::{QueueRef, QueuesRouter};
 
 use super::*;
-use bevy_app::Update;
-use bevy_ecs::{
+use bevy::app::Update;
+use bevy::ecs::{
     schedule::{IntoSystemConfigs, Schedule},
     system::Resource,
     world::World,

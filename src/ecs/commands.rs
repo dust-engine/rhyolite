@@ -24,7 +24,7 @@ use std::{
 };
 
 use ash::vk::{self, Handle};
-use bevy_ecs::{
+use bevy::ecs::{
     archetype::ArchetypeComponentId,
     component::ComponentId,
     system::{lifetimeless::SRes, Res, Resource, System, SystemMeta, SystemParam},
@@ -48,7 +48,7 @@ struct RecordingCommandBufferWrapper<const Q: char>(RecordingCommandBuffer);
 impl<const Q: char> PerFrameResource for RecordingCommandBufferWrapper<Q> {
     type Params = (SRes<Device>, SRes<QueuesRouter>);
 
-    fn create((device, router): bevy_ecs::system::SystemParamItem<'_, '_, Self::Params>) -> Self {
+    fn create((device, router): bevy::ecs::system::SystemParamItem<'_, '_, Self::Params>) -> Self {
         let queue_family = router.queue_family_of_type(match Q {
             'g' => QueueType::Graphics,
             'c' => QueueType::Compute,
@@ -58,7 +58,7 @@ impl<const Q: char> PerFrameResource for RecordingCommandBufferWrapper<Q> {
         let pool = RecordingCommandBuffer::new(device.clone(), queue_family);
         Self(pool)
     }
-    fn reset(&mut self, _: bevy_ecs::system::SystemParamItem<'_, '_, Self::Params>) {
+    fn reset(&mut self, _: bevy::ecs::system::SystemParamItem<'_, '_, Self::Params>) {
         self.0.reset();
     }
 }
@@ -97,13 +97,13 @@ where
 
     fn init_state(
         world: &mut World,
-        system_meta: &mut bevy_ecs::system::SystemMeta,
+        system_meta: &mut bevy::ecs::system::SystemMeta,
     ) -> Self::State {
         let recording_cmd_buf =
             PerFrameMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
         RenderCommandState { recording_cmd_buf }
     }
-    fn default_configs(config: &mut bevy_utils::ConfigMap) {
+    fn default_configs(config: &mut bevy::utils::ConfigMap) {
         let flags = match Q {
             'g' => QueueType::Graphics,
             'c' => QueueType::Compute,
@@ -118,9 +118,9 @@ where
     }
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
-        system_meta: &bevy_ecs::system::SystemMeta,
-        world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        change_tick: bevy_ecs::component::Tick,
+        system_meta: &bevy::ecs::system::SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         let recording_cmd_buf = PerFrameMut::<RecordingCommandBufferWrapper<Q>>::get_param(
             &mut state.recording_cmd_buf,
@@ -269,7 +269,7 @@ where
 
     fn init_state(
         world: &mut World,
-        _system_meta: &mut bevy_ecs::system::SystemMeta,
+        _system_meta: &mut bevy::ecs::system::SystemMeta,
     ) -> Self::State {
         QueueSystemState {
             device: world.resource::<Device>().clone(),
@@ -284,7 +284,7 @@ where
         }
     }
 
-    fn default_configs(config: &mut bevy_utils::ConfigMap) {
+    fn default_configs(config: &mut bevy::utils::ConfigMap) {
         let flags = match Q {
             'g' => QueueType::Graphics,
             'c' => QueueType::Compute,
@@ -309,9 +309,9 @@ where
 
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
-        _system_meta: &bevy_ecs::system::SystemMeta,
-        _world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        _change_tick: bevy_ecs::component::Tick,
+        _system_meta: &bevy::ecs::system::SystemMeta,
+        _world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        _change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         state.frame_index += 1;
 
@@ -489,11 +489,11 @@ where
         std::any::TypeId::of::<InsertPipelineBarrier<Q>>()
     }
 
-    fn component_access(&self) -> &bevy_ecs::query::Access<ComponentId> {
+    fn component_access(&self) -> &bevy::ecs::query::Access<ComponentId> {
         &self.system_meta.component_access_set.combined_access()
     }
 
-    fn archetype_component_access(&self) -> &bevy_ecs::query::Access<ArchetypeComponentId> {
+    fn archetype_component_access(&self) -> &bevy::ecs::query::Access<ArchetypeComponentId> {
         &self.system_meta.archetype_component_access
     }
 
@@ -516,7 +516,7 @@ where
     unsafe fn run_unsafe(
         &mut self,
         _input: Self::In,
-        world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
     ) -> Self::Out {
         let mut image_barriers = Vec::new();
         let mut buffer_barriers = Vec::new();
@@ -566,26 +566,26 @@ where
 
     fn update_archetype_component_access(
         &mut self,
-        world: bevy_ecs::world::unsafe_world_cell::UnsafeWorldCell,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
     ) {
         for i in self.barrier_producers.iter_mut() {
             i.update_archetype_component_access(world);
         }
-        let mut archetype_component_access: bevy_ecs::query::Access<ArchetypeComponentId> =
-            bevy_ecs::query::Access::<ArchetypeComponentId>::new();
+        let mut archetype_component_access: bevy::ecs::query::Access<ArchetypeComponentId> =
+            bevy::ecs::query::Access::<ArchetypeComponentId>::new();
         for p in self.barrier_producers.iter() {
             archetype_component_access.extend(p.archetype_component_access());
         }
         self.system_meta.archetype_component_access = archetype_component_access;
     }
 
-    fn check_change_tick(&mut self, _change_tick: bevy_ecs::component::Tick) {}
+    fn check_change_tick(&mut self, _change_tick: bevy::ecs::component::Tick) {}
 
-    fn get_last_run(&self) -> bevy_ecs::component::Tick {
+    fn get_last_run(&self) -> bevy::ecs::component::Tick {
         self.system_meta.last_run
     }
 
-    fn set_last_run(&mut self, last_run: bevy_ecs::component::Tick) {
+    fn set_last_run(&mut self, last_run: bevy::ecs::component::Tick) {
         self.system_meta.last_run = last_run;
     }
     fn configurate(&mut self, config: &mut dyn Any, world: &mut World) {
@@ -594,9 +594,9 @@ where
             assert!(self.barrier_producers.is_empty());
             self.barrier_producers = systems;
 
-            let mut component_access = bevy_ecs::query::Access::<ComponentId>::new();
-            let mut archetype_component_access: bevy_ecs::query::Access<ArchetypeComponentId> =
-                bevy_ecs::query::Access::<ArchetypeComponentId>::new();
+            let mut component_access = bevy::ecs::query::Access::<ComponentId>::new();
+            let mut archetype_component_access: bevy::ecs::query::Access<ArchetypeComponentId> =
+                bevy::ecs::query::Access::<ArchetypeComponentId>::new();
             for p in self.barrier_producers.iter() {
                 component_access.extend(p.component_access());
                 archetype_component_access.extend(p.archetype_component_access());

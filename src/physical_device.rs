@@ -2,7 +2,7 @@ use crate::Version;
 
 use super::Instance;
 use ash::{prelude::VkResult, vk};
-use bevy_ecs::system::Resource;
+use bevy::ecs::system::Resource;
 use core::ffi::c_void;
 use std::{
     any::{Any, TypeId},

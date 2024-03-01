@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 use ash::vk;
-use bevy_ecs::{component::Component, system::Resource};
+use bevy::ecs::{component::Component, system::Resource};
 
 use crate::ResourceState;
 

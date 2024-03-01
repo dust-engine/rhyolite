@@ -3,13 +3,13 @@ use std::{
     sync::Arc,
 };
 
-use bevy_ecs::{
+use bevy::ecs::{
     query::Access,
     schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
     system::{BoxedSystem, IntoSystem, System},
     world::World,
 };
-use bevy_utils::petgraph::{
+use bevy::utils::petgraph::{
     graphmap::DiGraphMap,
     visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
     Direction::{self, Incoming, Outgoing},
@@ -30,7 +30,7 @@ use super::RenderSystemConfig;
 #[derive(Debug)]
 pub struct RenderSystemPass {
     edge_graph: BTreeMap<(NodeId, NodeId), QueueSystemDependencyConfig>,
-    queue_graph: bevy_utils::petgraph::graphmap::DiGraphMap<u32, QueueGraphEdge>,
+    queue_graph: bevy::utils::petgraph::graphmap::DiGraphMap<u32, QueueGraphEdge>,
     queue_graph_nodes: Vec<QueueGraphNodeMeta>,
     num_binary_semaphores: u32,
 }
@@ -76,8 +76,8 @@ impl ScheduleBuildPass for RenderSystemPass {
 
     fn add_dependency(
         &mut self,
-        from: bevy_ecs::schedule::NodeId,
-        to: bevy_ecs::schedule::NodeId,
+        from: bevy::ecs::schedule::NodeId,
+        to: bevy::ecs::schedule::NodeId,
         options: Option<&Self::EdgeOptions>,
     ) {
         if let Some(edge) = options {
@@ -90,12 +90,12 @@ impl ScheduleBuildPass for RenderSystemPass {
 
     fn collapse_set(
         &mut self,
-        _set: bevy_ecs::schedule::NodeId,
-        _systems: &[bevy_ecs::schedule::NodeId],
-        _dependency_flattened: &bevy_utils::petgraph::prelude::GraphMap<
-            bevy_ecs::schedule::NodeId,
+        _set: bevy::ecs::schedule::NodeId,
+        _systems: &[bevy::ecs::schedule::NodeId],
+        _dependency_flattened: &bevy::utils::petgraph::prelude::GraphMap<
+            bevy::ecs::schedule::NodeId,
             (),
-            bevy_utils::petgraph::prelude::Directed,
+            bevy::utils::petgraph::prelude::Directed,
         >,
     ) -> Self::CollapseSetIterator {
         std::iter::empty()
@@ -104,15 +104,15 @@ impl ScheduleBuildPass for RenderSystemPass {
     fn build(
         &mut self,
         world: &mut World,
-        graph: &mut bevy_ecs::schedule::ScheduleGraph,
-        dependency_flattened: &mut bevy_utils::petgraph::prelude::GraphMap<
-            bevy_ecs::schedule::NodeId,
+        graph: &mut bevy::ecs::schedule::ScheduleGraph,
+        dependency_flattened: &mut bevy::utils::petgraph::prelude::GraphMap<
+            bevy::ecs::schedule::NodeId,
             (),
-            bevy_utils::petgraph::prelude::Directed,
+            bevy::utils::petgraph::prelude::Directed,
         >,
-    ) -> Result<(), bevy_ecs::schedule::ScheduleBuildError> {
+    ) -> Result<(), bevy::ecs::schedule::ScheduleBuildError> {
         let mut render_graph =
-            bevy_utils::petgraph::graphmap::DiGraphMap::<usize, QueueSystemDependencyConfig>::new();
+            bevy::utils::petgraph::graphmap::DiGraphMap::<usize, QueueSystemDependencyConfig>::new();
 
         struct RenderGraphNodeMeta {
             queue: QueueType,
@@ -206,7 +206,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         // (buffer, stages)
         let mut colors: Vec<((Vec<usize>, bool), Vec<(Vec<usize>, bool)>)> =
             vec![Default::default(); num_queues as usize];
-        let mut tiny_graph = bevy_utils::petgraph::graphmap::DiGraphMap::<u8, ()>::new();
+        let mut tiny_graph = bevy::utils::petgraph::graphmap::DiGraphMap::<u8, ()>::new();
         let mut current_graph = render_graph.clone();
         let mut heap_next_stage: Vec<usize> = Vec::new(); // nodes to be deferred to the next stage
         while let Some(node) = heap.pop() {
@@ -295,7 +295,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
 
         let mut queue_graph =
-            bevy_utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
+            bevy::utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
         let mut queue_graph_nodes = Vec::<QueueGraphNodeMeta>::new();
         // Flush all colors
         for (queue_node_buffer, stages) in colors.iter_mut() {
@@ -417,13 +417,13 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         // Remove redundant edges
         let queue_nodes_topo_sorted =
-            bevy_utils::petgraph::algo::toposort(&queue_graph, None).unwrap();
+            bevy::utils::petgraph::algo::toposort(&queue_graph, None).unwrap();
         let (queue_nodes_tred_list, _) =
-            bevy_utils::petgraph::algo::tred::dag_to_toposorted_adjacency_list::<_, u32>(
+            bevy::utils::petgraph::algo::tred::dag_to_toposorted_adjacency_list::<_, u32>(
                 &queue_graph,
                 &queue_nodes_topo_sorted,
             );
-        let (reduction, _) = bevy_utils::petgraph::algo::tred::dag_transitive_reduction_closure(
+        let (reduction, _) = bevy::utils::petgraph::algo::tred::dag_transitive_reduction_closure(
             &queue_nodes_tred_list,
         );
 
@@ -432,7 +432,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         let mut binary_semaphore_id = 0;
         let mut timeline_semaphore_id = 0;
         let mut queue_graph_reduced =
-            bevy_utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
+            bevy::utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
         for edge in reduction.edge_references() {
             let src = queue_nodes_topo_sorted[edge.source() as usize];
             let dst = queue_nodes_topo_sorted[edge.target() as usize];

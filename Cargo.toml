@@ -13,18 +13,12 @@ members = [
 [dependencies]
 crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
-bevy_a11y = { path = "../bevy/crates/bevy_a11y" }
-bevy_window = { path = "../bevy/crates/bevy_window" }
-bevy_ecs = { path = "../bevy/crates/bevy_ecs", features = ["multi-threaded"] }
-bevy_utils = { path = "../bevy/crates/bevy_utils" }
-bevy_winit = { path = "../bevy/crates/bevy_winit" }
-bevy_input = { path = "../bevy/crates/bevy_input" }
-bevy_app = { path = "../bevy/crates/bevy_app" }
+bevy = { version = "0.13", default-features = false, features=["multi-threaded","wayland", "x11"] }
 ash = "0.37"
 tracing = "0.1"
 cstr = "0.2"
 thread_local = "1"
-winit = { version = "0.29", default-features = false, features = ["rwh_05"] }
+winit = { version = "0.29", default-features = false, features = ["rwh_06"] }
 raw-window-handle = "0.6"
 glam = "0.24"
 arrayvec = "0.7"
@@ -34,15 +28,6 @@ vk-mem = "0.3"
 
 [patch.crates-io]
 bevy = { path = "../bevy" }
-bevy_a11y = { path = "../bevy/crates/bevy_a11y" }
-bevy_window = { path = "../bevy/crates/bevy_window" }
-bevy_ecs = { path = "../bevy/crates/bevy_ecs" }
-bevy_utils = { path = "../bevy/crates/bevy_utils" }
-bevy_winit = { path = "../bevy/crates/bevy_winit" }
-bevy_input = { path = "../bevy/crates/bevy_input" }
-bevy_app = { path = "../bevy/crates/bevy_app" }
-bevy_render = { path = "../bevy/crates/bevy_render" }
-bevy_internal = { path = "../bevy/crates/bevy_internal" }
 
 [dev-dependencies]
 rhyolite_egui = { path = "crates/egui" }
