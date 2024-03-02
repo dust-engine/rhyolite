@@ -364,7 +364,13 @@ fn get_create_info<'a>(
     });
     SwapchainCreateInfo {
         flags: config.flags,
-        min_image_count: config.min_image_count,
+        min_image_count: config.min_image_count.max(surface_capabilities.min_image_count).min({
+            if surface_capabilities.max_image_count == 0 {
+                u32::MAX
+            } else {
+                surface_capabilities.max_image_count
+            }
+        }),
         image_format: image_format.format,
         image_color_space: image_format.color_space,
         image_extent: vk::Extent2D {
@@ -580,7 +586,8 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     assert!(queue_ctx.binary_waits.is_empty());
     assert!(queue_ctx.timeline_signals.is_empty());
     assert!(queue_ctx.timeline_waits.is_empty());
-    assert!(queue_ctx.binary_signals.len() == 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously.");
+    assert!(!queue_ctx.binary_signals.is_empty());
+    assert!(queue_ctx.binary_signals.len() == 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously, but you have {}.", queue_ctx.binary_signals.len());
 
     let (mut swapchain, mut swapchain_image) = match query.get_single_mut() {
         Ok(item) => item,

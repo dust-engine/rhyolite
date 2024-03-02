@@ -44,6 +44,15 @@ where
             dependency_flags: vk::DependencyFlags::empty(),
         }
     }
+    pub fn copy_buffer(&mut self, src: &impl BufferLike, dst: &mut RenderRes<impl BufferLike>) {
+        unsafe {
+            self.device.cmd_copy_buffer(self.cmd_buf, src.raw_buffer(), dst.raw_buffer(), &[vk::BufferCopy {
+                src_offset: src.offset(),
+                dst_offset: dst.offset(),
+                size: src.size().min(dst.size()),
+            }]);
+        }
+    }
 }
 
 pub struct ResourceTransitionCommandRecorder<'w> {

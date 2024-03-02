@@ -63,14 +63,16 @@ impl<const Q: char> PerFrameResource for RecordingCommandBufferWrapper<Q> {
     }
 }
 
-pub struct RenderCommands<'w, const Q: char>
+pub struct RenderCommands<'w, 's, const Q: char>
 where
     (): IsQueueCap<Q>,
 {
     recording_cmd_buf: PerFrameMut<'w, RecordingCommandBufferWrapper<Q>>,
+    retained_objects: &'s mut BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
+    frame_index: u64
 }
 
-impl<'w, const Q: char> RenderCommands<'w, Q>
+impl<'w, 's, const Q: char> RenderCommands<'w, 's, Q>
 where
     (): IsQueueCap<Q>,
 {
@@ -81,19 +83,26 @@ where
             cmd_buf,
         }
     }
+    pub fn retain<T: 'static + Drop + Send + Sync>(&mut self, obj: Box<T>) {
+        self.retained_objects
+            .entry(self.frame_index)
+            .or_default()
+            .push(obj);
+    }
 }
 
 pub struct RenderCommandState<const Q: char> {
     recording_cmd_buf: PerFrameState<RecordingCommandBufferWrapper<Q>>,
+    retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
 }
 
-unsafe impl<'a, const Q: char> SystemParam for RenderCommands<'a, Q>
+unsafe impl<'w, 's, const Q: char> SystemParam for RenderCommands<'w, 's, Q>
 where
     (): IsQueueCap<Q>,
 {
     type State = RenderCommandState<Q>;
 
-    type Item<'world, 'state> = RenderCommands<'world, Q>;
+    type Item<'world, 'state> = RenderCommands<'world, 'state, Q>;
 
     fn init_state(
         world: &mut World,
@@ -101,7 +110,7 @@ where
     ) -> Self::State {
         let recording_cmd_buf =
             PerFrameMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
-        RenderCommandState { recording_cmd_buf }
+        RenderCommandState { recording_cmd_buf, retained_objects: BTreeMap::new() }
     }
     fn default_configs(config: &mut bevy::utils::ConfigMap) {
         let flags = match Q {
@@ -128,7 +137,11 @@ where
             world,
             change_tick,
         );
-        RenderCommands { recording_cmd_buf }
+        let num_frame_in_flight: u32 = 3;
+        if state.recording_cmd_buf.frame_index > num_frame_in_flight as u64 {
+            state.retained_objects.remove(&(state.recording_cmd_buf.frame_index - num_frame_in_flight as u64));
+        }
+        RenderCommands { recording_cmd_buf, retained_objects: &mut state.retained_objects, frame_index: state.recording_cmd_buf.frame_index }
     }
 }
 
@@ -162,18 +175,7 @@ impl Drop for QueueSystemState {
         // On destuction, wait for everything to finish execution.
         unsafe {
             if !self.timeline_signals.is_empty() {
-                let timeline_semaphore_to_wait = self.timeline_signals[0].semaphore.raw();
-                self.device
-                    .wait_semaphores(
-                        &vk::SemaphoreWaitInfo {
-                            semaphore_count: 1,
-                            p_semaphores: &timeline_semaphore_to_wait,
-                            p_values: &self.frame_index,
-                            ..Default::default()
-                        },
-                        !0,
-                    )
-                    .unwrap();
+                self.timeline_signals[0].semaphore.wait_blocked(self.frame_index, !0).unwrap();
             }
             if !self.fence_to_wait.is_empty() {
                 let fence_to_wait: Vec<vk::Fence> = self.fence_to_wait.values().cloned().collect();

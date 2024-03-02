@@ -452,7 +452,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                     Some(QueueGraphEdgeSemaphoreType::Timeline(timeline_semaphore_id));
                 timeline_semaphore_id += 1;
             }
-            queue_graph_reduced.add_edge(edge.source(), edge.target(), new_edge);
+            queue_graph_reduced.add_edge(src, dst, new_edge);
         }
         self.queue_graph = queue_graph_reduced;
         self.queue_graph_nodes = queue_graph_nodes;
@@ -618,18 +618,19 @@ impl ScheduleBuildPass for RenderSystemPass {
 
                 let mut barrier_producers: Vec<_> = stage
                     .iter()
-                    .map(|&i| {
+                    .filter_map(|&i| {
                         graph.systems[i]
                             .config
                             .get_mut::<RenderSystemConfig>()
                             .unwrap()
                             .barrier_producer
                             .take()
-                            .unwrap()
                     })
                     .collect();
-                system.configurate(&mut barrier_producers, world);
-                assert!(barrier_producers.is_empty());
+                if !barrier_producers.is_empty() {
+                    system.configurate(&mut barrier_producers, world);
+                    assert!(barrier_producers.is_empty());
+                }
                 system.initialize(world);
                 graph
                     .systems

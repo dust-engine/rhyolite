@@ -7,7 +7,7 @@ use std::ops::DerefMut;
 use bevy::{app::{App, Plugin, PostUpdate, Update}, ecs::{query::QueryFilter, schedule::IntoSystemConfigs}, log::tracing_subscriber::layer::Filter, window::{PrimaryWindow, Window}};
 pub use bevy_egui::*;
 use bevy::ecs::prelude::*;
-use rhyolite::{BufferArray, ecs::{PerFrameMut, RenderCommands, PerFrameResource}, Allocator, ash::vk, PhysicalDeviceMemoryModel, HasDevice};
+use rhyolite::{BufferArray, ecs::{RenderRes, PerFrameMut, RenderCommands, PerFrameResource}, Allocator, ash::vk, PhysicalDeviceMemoryModel, HasDevice};
 
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -25,7 +25,12 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
     fn build(&self, app: &mut App) {
         app.add_plugins(bevy::time::TimePlugin); // This should've been declared in bevy_egui instead.
         app.add_plugins(bevy_egui::EguiPlugin);
-        app.add_systems(PostUpdate, render_egui::<Filter>.after(EguiSet::ProcessOutput).after(rhyolite::acquire_swapchain_image::<Filter>));
+        app.add_systems(PostUpdate, render_egui::<Filter>
+            .after(EguiSet::ProcessOutput));
+
+    }
+    fn finish(&self, app: &mut App) {
+        app.init_resource::<EguiDeviceBuffer<Filter>>();
     }
 }
 
@@ -39,31 +44,37 @@ impl<Filter: QueryFilter + Send + Sync + 'static> PerFrameResource for EguiHostB
     type Params = Res<'static, Allocator>;
     fn create(allocator: Res<Allocator>) -> Self {
         Self {
-            index_buffer: BufferArray::new_upload(allocator.clone(), vk::BufferUsageFlags::INDEX_BUFFER).unwrap(),
-            vertex_buffer: BufferArray::new_upload(allocator.clone(), vk::BufferUsageFlags::VERTEX_BUFFER).unwrap(),
+            index_buffer: BufferArray::new_upload(allocator.clone(), vk::BufferUsageFlags::INDEX_BUFFER),
+            vertex_buffer: BufferArray::new_upload(allocator.clone(), vk::BufferUsageFlags::VERTEX_BUFFER),
             marker: Default::default(),
         }
     }
 }
 #[derive(Resource)]
 struct EguiDeviceBuffer<Filter: QueryFilter>{
-    index_buffer: BufferArray<u32>,
-    vertex_buffer: BufferArray<egui::epaint::Vertex>,
+    index_buffer: RenderRes<BufferArray<u32>>,
+    vertex_buffer: RenderRes<BufferArray<egui::epaint::Vertex>>,
     marker: std::marker::PhantomData<Filter>
 }
 impl<Filter: QueryFilter + Send + Sync + 'static> EguiDeviceBuffer<Filter> {
     fn new(allocator: &Allocator) -> Self {
         Self {
-            index_buffer: BufferArray::new_resource(allocator.clone(), vk::BufferUsageFlags::INDEX_BUFFER).unwrap(),
-            vertex_buffer: BufferArray::new_resource(allocator.clone(), vk::BufferUsageFlags::VERTEX_BUFFER).unwrap(),
+            index_buffer: RenderRes::new(BufferArray::new_resource(allocator.clone(), vk::BufferUsageFlags::INDEX_BUFFER)),
+            vertex_buffer: RenderRes::new(BufferArray::new_resource(allocator.clone(), vk::BufferUsageFlags::VERTEX_BUFFER)),
             marker: Default::default(),
         }
+    }
+}
+impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer<Filter> {
+    fn from_world(world: &mut World) -> Self {
+        let allocator = world.get_resource::<Allocator>().unwrap();
+        Self::new(allocator)
     }
 }
 
 
 fn render_egui<Filter: QueryFilter + Send + Sync + 'static>(
-    commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'t'>,
     mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(Entity, &EguiRenderOutput), Filter>,
@@ -91,8 +102,8 @@ fn render_egui<Filter: QueryFilter + Send + Sync + 'static>(
         total_vertices_count += mesh.vertices.len();
     }
     let host_buffers = &mut *host_buffers;
-    host_buffers.vertex_buffer.realloc(total_vertices_count as u64).unwrap();
-    host_buffers.index_buffer.realloc(total_indices_count as u64).unwrap();
+    host_buffers.vertex_buffer.realloc(total_vertices_count).unwrap();
+    host_buffers.index_buffer.realloc(total_indices_count).unwrap();
 
     // Copy data into the buffer
     total_indices_count = 0;
@@ -112,8 +123,25 @@ fn render_egui<Filter: QueryFilter + Send + Sync + 'static>(
     }
 
     if matches!(allocator.physical_device().properties().memory_model, PhysicalDeviceMemoryModel::Discrete | PhysicalDeviceMemoryModel::Bar) {
-        let host_buffers = &mut *device_buffer;
-        host_buffers.vertex_buffer.realloc(total_vertices_count as u64).unwrap();
-        host_buffers.index_buffer.realloc(total_indices_count as u64).unwrap();
+        let device_buffers = &mut *device_buffer;
+        if device_buffers.vertex_buffer.len() < total_vertices_count {
+            device_buffers.vertex_buffer.replace(|old| {
+                commands.retain(Box::new(old));
+                let mut buf = BufferArray::new_resource(allocator.clone(), vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+                buf.realloc(total_vertices_count).unwrap();
+                RenderRes::new(buf)
+            });
+        }
+
+        if device_buffers.index_buffer.len() < total_vertices_count {
+            device_buffers.index_buffer.replace(|old| {
+                commands.retain(Box::new(old));
+                let mut buf = BufferArray::new_resource(allocator.clone(), vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+                buf.realloc(total_vertices_count).unwrap();
+                RenderRes::new(buf)
+            });
+        }
+
+        commands.record_commands().copy_buffer(&host_buffers.vertex_buffer, &mut device_buffers.vertex_buffer);
     }
 }

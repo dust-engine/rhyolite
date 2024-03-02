@@ -3,7 +3,7 @@ use std::ops::Deref;
 use ash::vk;
 use bevy::ecs::{component::Component, system::Resource};
 
-use crate::ResourceState;
+use crate::{utils::Dispose, ResourceState};
 
 pub enum State {
     None,
@@ -25,6 +25,14 @@ impl<T> RenderRes<T> {
     }
     pub unsafe fn get_mut(&mut self) -> &mut T {
         &mut self.inner
+    }
+    pub fn replace(&mut self, replacer: impl FnOnce(Dispose<T>) -> RenderRes<T>) {
+        unsafe {
+            let old = std::ptr::read(&mut self.inner);
+            let new = replacer(Dispose::new(old));
+            std::ptr::write(&mut self.inner, new.inner);
+            self.state = new.state;
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 use ash::vk;
 use bevy::app::{App, PostUpdate};
+use bevy::ecs::system::IntoSystem;
 use bevy::ecs::{
     schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfigs, SystemSet},
     system::BoxedSystem,
@@ -129,74 +130,30 @@ impl Barriers {
 
 pub type BoxedBarrierProducer = BoxedSystem<Barriers, ()>;
 
-pub trait RenderSystem {
-    fn system(&self) -> SystemConfigs;
-    fn barriers(&self) -> BoxedBarrierProducer;
-}
-
-pub struct RenderSystemConfigs(SystemConfigs);
-
-pub trait IntoRenderSystemConfigs
+pub trait IntoRenderSystemConfigs<Marker>: IntoSystemConfigs<Marker>
 where
     Self: Sized,
 {
-    /// Convert into a [`SystemConfigs`].
-    fn into_configs(self) -> SystemConfigs;
-
-    /// Add these systems to the provided `set`.
-    #[track_caller]
-    fn in_set(self, set: impl SystemSet) -> RenderSystemConfigs {
-        RenderSystemConfigs(self.into_configs().in_set(set))
-    }
-    fn before<M>(self, set: impl IntoSystemSet<M>) -> RenderSystemConfigs {
-        RenderSystemConfigs(self.into_configs().before(set))
-    }
-    fn after<M>(self, set: impl IntoSystemSet<M>) -> RenderSystemConfigs {
-        RenderSystemConfigs(self.into_configs().after(set))
-    }
-    fn distributive_run_if<M>(self, condition: impl Condition<M> + Clone) -> RenderSystemConfigs {
-        RenderSystemConfigs(self.into_configs().distributive_run_if(condition))
-    }
-    fn run_if<M>(self, condition: impl Condition<M>) -> RenderSystemConfigs {
-        RenderSystemConfigs(self.into_configs().run_if(condition))
-    }
-    fn ambiguous_with<M>(self, set: impl IntoSystemSet<M>) -> RenderSystemConfigs {
-        RenderSystemConfigs(self.into_configs().ambiguous_with(set))
-    }
-    fn ambiguous_with_all(self) -> RenderSystemConfigs {
-        RenderSystemConfigs(self.into_configs().ambiguous_with_all())
-    }
-    fn on_queue<M>(self, queue_type: QueueType) -> RenderSystemConfigs {
-        let this = self
-            .into_configs()
-            .with_option::<RenderSystemPass>(|entry| {
-                let config = entry.or_default();
-                config.queue = queue_type;
-            });
-        RenderSystemConfigs(this)
-    }
-}
-
-impl<T: RenderSystem> IntoRenderSystemConfigs for T {
-    fn into_configs(self) -> SystemConfigs {
-        self.system().with_option::<RenderSystemPass>(|entry| {
+    /// Ensure that this render system will be assigned to a queue supporting the specified queue flags
+    /// while minimizing the amount of overhead associated with semaphore syncronizations.
+    /// Should be called for most smaller render systems in-between heavier operations.
+    fn on_queue(self, queue_type: QueueType) -> SystemConfigs {
+        self.with_option::<RenderSystemPass>(|entry| {
             let config = entry.or_default();
-            config.barrier_producer = Some(self.barriers());
+            config.queue = queue_type;
+        })
+    }
+    fn with_barriers<M, T: IntoSystem<Barriers, (), M>>(self, barriers: T) -> SystemConfigs {
+        let mut barriers: Option<BoxedBarrierProducer> = Some(Box::new(T::into_system(barriers)));
+        self.with_option::<RenderSystemPass>(move |entry| {
+            let config = entry.or_default();
+            if barriers.is_none() {
+                unimplemented!();
+                // TODO: allow collective barriers for multiple systems
+            }
+            config.barrier_producer = barriers.take();
         })
     }
 }
-impl IntoRenderSystemConfigs for RenderSystemConfigs {
-    fn into_configs(self) -> SystemConfigs {
-        self.0
-    }
-}
 
-pub trait RenderApp {
-    fn add_render_system(&mut self, render_system: impl IntoRenderSystemConfigs) -> &mut App;
-}
-impl RenderApp for App {
-    fn add_render_system(&mut self, render_system: impl IntoRenderSystemConfigs) -> &mut App {
-        self.add_systems(PostUpdate, render_system.into_configs());
-        self
-    }
-}
+impl<Marker, T> IntoRenderSystemConfigs<Marker> for T where T: IntoSystemConfigs<Marker> {}

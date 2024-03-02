@@ -1,6 +1,6 @@
 use ash::vk;
 
-use bevy::app::Update;
+use bevy::app::{PostUpdate, Update};
 use bevy::ecs::{
     entity::Entity,
     query::With,
@@ -10,7 +10,7 @@ use bevy::ecs::{
 use bevy::window::PrimaryWindow;
 use rhyolite::{
     acquire_swapchain_image,
-    ecs::{Barriers, RenderApp, RenderCommands, RenderSystem},
+    ecs::{Barriers, RenderCommands},
     present, Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage,
     SwapchainPlugin,
 };
@@ -31,8 +31,10 @@ fn main() {
 
     app.add_systems(Update, ui_example_system);
 
-    app.add_render_system(
-        ClearMainWindowColor
+    app.add_systems(
+        PostUpdate,
+        clear_main_window_color
+            .with_barriers(clear_main_window_color_barrier)
             .after(acquire_swapchain_image::<With<PrimaryWindow>>)
             .before(present),
     );
@@ -59,66 +61,56 @@ fn ui_example_system(mut contexts: EguiContexts) {
         ui.label("world");
     });
 }
+fn clear_main_window_color(
+    mut commands: RenderCommands<'g'>,
+    mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
+) {
+    let Ok(mut swapchain_image) = windows.get_single_mut() else {
+        return;
+    };
+    commands.record_commands().clear_color_image(
+        swapchain_image.image,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        &vk::ClearColorValue {
+            float32: [0.0, 0.0, 1.0, 1.0],
+        },
+        &[vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        }],
+    );
+    commands
+        .record_commands()
+        .transition_resources()
+        .image(
+            &mut swapchain_image,
+            Access {
+                stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+                access: vk::AccessFlags2::empty(),
+            },
+            vk::ImageLayout::PRESENT_SRC_KHR,
+            true,
+        )
+        .end();
+}
 
-struct ClearMainWindowColor;
-impl RenderSystem for ClearMainWindowColor {
-    fn system(&self) -> bevy::ecs::schedule::SystemConfigs {
-        fn clear_main_window_color(
-            mut commands: RenderCommands<'g'>,
-            mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
-        ) {
-            let Ok(mut swapchain_image) = windows.get_single_mut() else {
-                return;
-            };
-            commands.record_commands().clear_color_image(
-                swapchain_image.image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &vk::ClearColorValue {
-                    float32: [0.0, 0.0, 1.0, 1.0],
-                },
-                &[vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                }],
-            );
-            commands
-                .record_commands()
-                .transition_resources()
-                .image(
-                    &mut swapchain_image,
-                    Access {
-                        stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-                        access: vk::AccessFlags2::empty(),
-                    },
-                    vk::ImageLayout::PRESENT_SRC_KHR,
-                    true,
-                )
-                .end();
-        }
-        clear_main_window_color.into_configs()
-    }
-
-    fn barriers(&self) -> rhyolite::ecs::BoxedBarrierProducer {
-        fn barrier(
-            In(mut barriers): In<Barriers>,
-            mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
-        ) {
-            let Ok(mut swapchain_image) = windows.get_single_mut() else {
-                return;
-            };
-            barriers.transition_image(
-                &mut *swapchain_image,
-                Access {
-                    stage: vk::PipelineStageFlags2::CLEAR,
-                    access: vk::AccessFlags2::TRANSFER_WRITE,
-                },
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                false,
-            )
-        }
-        Box::new(IntoSystem::into_system(barrier))
-    }
+fn clear_main_window_color_barrier(
+    In(mut barriers): In<Barriers>,
+    mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
+) {
+    let Ok(mut swapchain_image) = windows.get_single_mut() else {
+        return;
+    };
+    barriers.transition_image(
+        &mut *swapchain_image,
+        Access {
+            stage: vk::PipelineStageFlags2::CLEAR,
+            access: vk::AccessFlags2::TRANSFER_WRITE,
+        },
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        false,
+    )
 }
