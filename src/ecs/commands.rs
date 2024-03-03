@@ -69,7 +69,7 @@ where
 {
     recording_cmd_buf: PerFrameMut<'w, RecordingCommandBufferWrapper<Q>>,
     retained_objects: &'s mut BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
-    frame_index: u64
+    frame_index: u64,
 }
 
 impl<'w, 's, const Q: char> RenderCommands<'w, 's, Q>
@@ -110,7 +110,10 @@ where
     ) -> Self::State {
         let recording_cmd_buf =
             PerFrameMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
-        RenderCommandState { recording_cmd_buf, retained_objects: BTreeMap::new() }
+        RenderCommandState {
+            recording_cmd_buf,
+            retained_objects: BTreeMap::new(),
+        }
     }
     fn default_configs(config: &mut bevy::utils::ConfigMap) {
         let flags = match Q {
@@ -139,9 +142,15 @@ where
         );
         let num_frame_in_flight: u32 = 3;
         if state.recording_cmd_buf.frame_index > num_frame_in_flight as u64 {
-            state.retained_objects.remove(&(state.recording_cmd_buf.frame_index - num_frame_in_flight as u64));
+            state
+                .retained_objects
+                .remove(&(state.recording_cmd_buf.frame_index - num_frame_in_flight as u64));
         }
-        RenderCommands { recording_cmd_buf, retained_objects: &mut state.retained_objects, frame_index: state.recording_cmd_buf.frame_index }
+        RenderCommands {
+            recording_cmd_buf,
+            retained_objects: &mut state.retained_objects,
+            frame_index: state.recording_cmd_buf.frame_index,
+        }
     }
 }
 
@@ -175,7 +184,10 @@ impl Drop for QueueSystemState {
         // On destuction, wait for everything to finish execution.
         unsafe {
             if !self.timeline_signals.is_empty() {
-                self.timeline_signals[0].semaphore.wait_blocked(self.frame_index, !0).unwrap();
+                self.timeline_signals[0]
+                    .semaphore
+                    .wait_blocked(self.frame_index, !0)
+                    .unwrap();
             }
             if !self.fence_to_wait.is_empty() {
                 let fence_to_wait: Vec<vk::Fence> = self.fence_to_wait.values().cloned().collect();

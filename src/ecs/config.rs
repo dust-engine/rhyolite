@@ -1,8 +1,8 @@
 use ash::vk;
-use bevy::app::{App, PostUpdate};
+
 use bevy::ecs::system::IntoSystem;
 use bevy::ecs::{
-    schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfigs, SystemSet},
+    schedule::{IntoSystemConfigs, SystemConfigs},
     system::BoxedSystem,
 };
 
@@ -114,11 +114,7 @@ impl Barriers {
             global_barriers.dst_access_mask |= barrier.dst_access_mask;
         }
     }
-    pub fn transition_buffer<T: BufferLike>(
-        &mut self,
-        buffer: &mut RenderRes<T>,
-        access: Access,
-    ) {
+    pub fn transition_buffer<T: BufferLike>(&mut self, buffer: &mut RenderRes<T>, access: Access) {
         let global_barriers = unsafe { &mut *self.global_barriers };
         let barrier = buffer.state.transition(access, false);
         global_barriers.src_stage_mask |= barrier.src_stage_mask;

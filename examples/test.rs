@@ -5,7 +5,7 @@ use bevy::ecs::{
     entity::Entity,
     query::With,
     schedule::IntoSystemConfigs,
-    system::{In, IntoSystem, Query},
+    system::{In, Query},
 };
 use bevy::window::PrimaryWindow;
 use rhyolite::{
@@ -54,7 +54,6 @@ fn main() {
 
     app.run();
 }
-
 
 fn ui_example_system(mut contexts: EguiContexts) {
     egui::Window::new("Hello").show(contexts.ctx_mut(), |ui| {

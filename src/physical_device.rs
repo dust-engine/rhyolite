@@ -47,7 +47,7 @@ impl Instance {
         let pdevices = unsafe { self.deref().enumerate_physical_devices().unwrap() };
         Ok(pdevices.into_iter().map(|pdevice| {
             let properties = PhysicalDeviceProperties::new(self.clone(), pdevice);
-            PhysicalDevice(Arc::new( PhysicalDeviceInner{
+            PhysicalDevice(Arc::new(PhysicalDeviceInner {
                 instance: self.clone(),
                 physical_device: pdevice,
                 properties,
@@ -69,11 +69,14 @@ impl PhysicalDevice {
     ) -> VkResult<Option<vk::ImageFormatProperties2>> {
         let mut out = vk::ImageFormatProperties2::default();
         unsafe {
-            match self.0.instance.get_physical_device_image_format_properties2(
-                self.0.physical_device,
-                format_info,
-                &mut out,
-            ) {
+            match self
+                .0
+                .instance
+                .get_physical_device_image_format_properties2(
+                    self.0.physical_device,
+                    format_info,
+                    &mut out,
+                ) {
                 Err(vk::Result::ERROR_FORMAT_NOT_SUPPORTED) => Ok(None),
                 Ok(_) => Ok(Some(out)),
                 Err(_) => panic!(),
@@ -82,7 +85,8 @@ impl PhysicalDevice {
     }
     pub(crate) fn get_queue_family_properties(&self) -> Vec<vk::QueueFamilyProperties> {
         unsafe {
-            self.0.instance
+            self.0
+                .instance
                 .get_physical_device_queue_family_properties(self.0.physical_device)
         }
     }
@@ -129,7 +133,6 @@ pub unsafe trait PhysicalDeviceProperty: Sized + Default + 'static {
     }
 }
 
-
 pub struct PhysicalDeviceProperties {
     instance: Instance,
     pdevice: vk::PhysicalDevice,
@@ -142,14 +145,8 @@ unsafe impl Send for PhysicalDeviceProperties {}
 unsafe impl Sync for PhysicalDeviceProperties {}
 impl PhysicalDeviceProperties {
     fn new(instance: Instance, pdevice: vk::PhysicalDevice) -> Self {
-        let memory_properties = unsafe {
-            instance
-                .get_physical_device_memory_properties(pdevice)
-        };
-        let pdevice_properties = unsafe {
-            instance
-                .get_physical_device_properties(pdevice)
-        };
+        let memory_properties = unsafe { instance.get_physical_device_memory_properties(pdevice) };
+        let pdevice_properties = unsafe { instance.get_physical_device_properties(pdevice) };
         let types =
             &memory_properties.memory_types[0..memory_properties.memory_type_count as usize];
         let heaps =

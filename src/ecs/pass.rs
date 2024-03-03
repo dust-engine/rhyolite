@@ -112,7 +112,8 @@ impl ScheduleBuildPass for RenderSystemPass {
         >,
     ) -> Result<(), bevy::ecs::schedule::ScheduleBuildError> {
         let mut render_graph =
-            bevy::utils::petgraph::graphmap::DiGraphMap::<usize, QueueSystemDependencyConfig>::new();
+            bevy::utils::petgraph::graphmap::DiGraphMap::<usize, QueueSystemDependencyConfig>::new(
+            );
 
         struct RenderGraphNodeMeta {
             queue: QueueType,

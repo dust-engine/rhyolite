@@ -27,7 +27,11 @@ impl HasDevice for Allocator {
 
 impl Allocator {
     pub fn new(device: Device) -> VkResult<Self> {
-        let info = vk_mem::AllocatorCreateInfo::new(device.instance(), &device, device.physical_device().raw());
+        let info = vk_mem::AllocatorCreateInfo::new(
+            device.instance(),
+            &device,
+            device.physical_device().raw(),
+        );
         let alloc = vk_mem::Allocator::new(info)?;
         Ok(Self(Arc::new(AllocatorInner {
             device,

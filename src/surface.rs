@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 
 use ash::{extensions::khr, prelude::VkResult, vk};
 use bevy::app::{App, Plugin, PostUpdate};

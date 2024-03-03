@@ -23,11 +23,12 @@ impl<T: Deref<Target = [u32]>> SharingMode<T> {
     pub fn queue_family_indices(&self) -> &[u32] {
         match self {
             Self::Exclusive => &[],
-            Self::Concurrent { queue_family_indices } => &queue_family_indices.deref()
+            Self::Concurrent {
+                queue_family_indices,
+            } => &queue_family_indices.deref(),
         }
     }
 }
-
 
 /// A wrapper for GPU-owned resources that may currently be in use.
 /// Dispose-wrapped objects may not be immediately dropped. They must be passed to the `retain` method

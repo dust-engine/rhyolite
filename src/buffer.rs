@@ -1,9 +1,12 @@
-use std::{mem::MaybeUninit, ops::{Deref, DerefMut, Index, IndexMut}, ptr::NonNull, sync::Barrier};
+use std::{
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut, Index, IndexMut},
+    ptr::NonNull,
+};
 
 use ash::{prelude::VkResult, vk};
-use bevy::ecs::system::{ResMut, Resource};
 
-use crate::{ecs::{queue_cap::IsQueueCap, Barriers, PerFrameMut, PerFrameResource, RenderCommands, RenderRes}, utils::SharingMode, Access, Allocator, HasDevice, PhysicalDeviceMemoryModel};
+use crate::{utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel};
 use vk_mem::Alloc;
 
 pub trait BufferLike {
@@ -86,15 +89,18 @@ impl<T> BufferArray<T> {
             if let Some(allocation) = &mut self.allocation {
                 self.allocator.destroy_buffer(self.buffer, allocation);
             }
-            let (buffer, allocation) = self.allocator.create_buffer(&vk::BufferCreateInfo {
-                size: new_capacity as u64 * std::mem::size_of::<T>() as u64,
-                usage: self.usage,
-                sharing_mode: self.sharing_mode.as_raw(),
-                queue_family_index_count: self.sharing_mode.queue_family_indices().len() as u32,
-                p_queue_family_indices: self.sharing_mode.queue_family_indices().as_ptr(),
-                ..Default::default()
-            }, &self.allocation_info)?;
-            
+            let (buffer, allocation) = self.allocator.create_buffer(
+                &vk::BufferCreateInfo {
+                    size: new_capacity as u64 * std::mem::size_of::<T>() as u64,
+                    usage: self.usage,
+                    sharing_mode: self.sharing_mode.as_raw(),
+                    queue_family_index_count: self.sharing_mode.queue_family_indices().len() as u32,
+                    p_queue_family_indices: self.sharing_mode.queue_family_indices().as_ptr(),
+                    ..Default::default()
+                },
+                &self.allocation_info,
+            )?;
+
             let info = self.allocator.get_allocation_info(&allocation);
             self.ptr = info.mapped_data as *mut MaybeUninit<T>;
             self.buffer = buffer;
@@ -108,13 +114,20 @@ impl<T> BufferArray<T> {
     /// On discrete GPUs, the upload buffer serves as the staging buffer. The user will have to create backing
     /// DEVICE_LOCAL buffer and schedule transfer.
     pub fn new_upload(allocator: Allocator, mut usage: vk::BufferUsageFlags) -> Self {
-        let memory_model = allocator.device().physical_device().properties().memory_model;
+        let memory_model = allocator
+            .device()
+            .physical_device()
+            .properties()
+            .memory_model;
         let memory_usage = if matches!(memory_model, PhysicalDeviceMemoryModel::ReBar) {
             vk_mem::MemoryUsage::AutoPreferDevice
         } else {
             vk_mem::MemoryUsage::AutoPreferHost
         };
-        if matches!(memory_model, PhysicalDeviceMemoryModel::Bar | PhysicalDeviceMemoryModel::Discrete) {
+        if matches!(
+            memory_model,
+            PhysicalDeviceMemoryModel::Bar | PhysicalDeviceMemoryModel::Discrete
+        ) {
             usage |= vk::BufferUsageFlags::TRANSFER_SRC;
         };
         Self {
@@ -127,13 +140,14 @@ impl<T> BufferArray<T> {
             sharing_mode: SharingMode::Exclusive,
             allocation_info: vk_mem::AllocationCreateInfo {
                 usage: memory_usage,
-                flags: vk_mem::AllocationCreateFlags::MAPPED | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                flags: vk_mem::AllocationCreateFlags::MAPPED
+                    | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
             len: 0,
         }
     }
-    
+
     /// Create GPU-owned buffer.
     pub fn new_resource(allocator: Allocator, usage: vk::BufferUsageFlags) -> Self {
         let res = Self {
@@ -159,7 +173,11 @@ impl<T> Index<usize> for BufferArray<T> {
     type Output = MaybeUninit<T>;
 
     fn index(&self, index: usize) -> &Self::Output {
-        if self.allocation_info.flags.contains(vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE) {
+        if self
+            .allocation_info
+            .flags
+            .contains(vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE)
+        {
             tracing::warn!("Reading from a HOST_VISIBLE buffer that is mapped for sequential write is likely inefficient");
         }
         assert!(index < self.len);
@@ -180,20 +198,20 @@ impl<T> IndexMut<usize> for BufferArray<T> {
 }
 impl<T> Deref for BufferArray<T> {
     type Target = [MaybeUninit<T>];
-    
+
     fn deref(&self) -> &Self::Target {
-        if self.allocation_info.flags.contains(vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE) {
+        if self
+            .allocation_info
+            .flags
+            .contains(vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE)
+        {
             tracing::warn!("Reading from a HOST_VISIBLE buffer that is mapped for sequential write is likely inefficient");
         }
-        unsafe {
-            std::slice::from_raw_parts(self.ptr, self.len as usize)
-        }
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len as usize) }
     }
 }
 impl<T> DerefMut for BufferArray<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            std::slice::from_raw_parts_mut(self.ptr, self.len as usize)
-        }
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len as usize) }
     }
 }

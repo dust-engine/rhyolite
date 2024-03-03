@@ -364,13 +364,16 @@ fn get_create_info<'a>(
     });
     SwapchainCreateInfo {
         flags: config.flags,
-        min_image_count: config.min_image_count.max(surface_capabilities.min_image_count).min({
-            if surface_capabilities.max_image_count == 0 {
-                u32::MAX
-            } else {
-                surface_capabilities.max_image_count
-            }
-        }),
+        min_image_count: config
+            .min_image_count
+            .max(surface_capabilities.min_image_count)
+            .min({
+                if surface_capabilities.max_image_count == 0 {
+                    u32::MAX
+                } else {
+                    surface_capabilities.max_image_count
+                }
+            }),
         image_format: image_format.format,
         image_color_space: image_format.color_space,
         image_extent: vk::Extent2D {

@@ -1,6 +1,7 @@
 #![feature(associated_type_defaults)]
 
 mod access;
+mod alloc;
 mod buffer;
 mod command_pool;
 mod commands;
@@ -17,11 +18,11 @@ mod queue;
 mod semaphore;
 mod surface;
 mod swapchain;
-mod alloc;
 
 pub mod utils;
 
 pub use access::*;
+pub use alloc::Allocator;
 pub use buffer::*;
 pub use cstr::cstr;
 pub use device::*;
@@ -33,6 +34,5 @@ pub use plugin::RhyolitePlugin;
 pub use queue::*;
 pub use surface::*;
 pub use swapchain::*;
-pub use alloc::Allocator;
 
 pub use ash;
