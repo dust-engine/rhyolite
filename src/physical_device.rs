@@ -39,6 +39,20 @@ pub enum PhysicalDeviceMemoryModel {
     /// [256MB DEVICE_LOCAL] [32GB HOST_VISIBLE] (also AMD APU)
     BiasedUnified,
 }
+impl PhysicalDeviceMemoryModel {
+    pub fn storage_buffer_should_use_staging(&self) -> bool {
+        matches!(
+            self,
+            Self::Bar | Self::Discrete
+        )
+    }
+    pub fn uniform_buffer_should_use_staging(&self) -> bool {
+        matches!(
+            self,
+            Self::Discrete
+        )
+    }
+}
 
 impl Instance {
     pub fn enumerate_physical_devices<'a>(
@@ -196,7 +210,7 @@ impl PhysicalDeviceProperties {
             instance,
             pdevice,
             properties: Default::default(),
-            memory_model,
+            memory_model: PhysicalDeviceMemoryModel::Discrete,
             memory_properties,
             inner: pdevice_properties,
         }

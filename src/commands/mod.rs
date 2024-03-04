@@ -44,17 +44,13 @@ where
             dependency_flags: vk::DependencyFlags::empty(),
         }
     }
-    pub fn copy_buffer(&mut self, src: &impl BufferLike, dst: &mut RenderRes<impl BufferLike>) {
+    pub fn copy_buffer(&mut self, src: vk::Buffer, dst: vk::Buffer, regions: &[vk::BufferCopy]) {
         unsafe {
             self.device.cmd_copy_buffer(
                 self.cmd_buf,
                 src.raw_buffer(),
                 dst.raw_buffer(),
-                &[vk::BufferCopy {
-                    src_offset: src.offset(),
-                    dst_offset: dst.offset(),
-                    size: src.size().min(dst.size()),
-                }],
+                regions,
             );
         }
     }

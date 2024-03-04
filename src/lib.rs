@@ -30,7 +30,7 @@ pub use future::*;
 pub use image::*;
 pub use instance::*;
 pub use physical_device::*;
-pub use plugin::RhyolitePlugin;
+pub use plugin::{RhyolitePlugin, RhyoliteApp};
 pub use queue::*;
 pub use surface::*;
 pub use swapchain::*;

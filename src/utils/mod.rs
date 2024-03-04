@@ -42,11 +42,14 @@ impl<T> Drop for Dispose<T> {
 }
 impl<T> Dispose<T> {
     pub fn new(inner: T) -> Self {
+        assert!(std::mem::needs_drop::<T>());
         Self(ManuallyDrop::new(inner))
     }
-    pub fn dispose(mut self) {
+    pub(crate) unsafe fn take(mut self) -> T {
         unsafe {
-            ManuallyDrop::drop(&mut self.0);
+            let item = ManuallyDrop::take(&mut self.0);
+            std::mem::forget(self);
+            item
         }
     }
 }

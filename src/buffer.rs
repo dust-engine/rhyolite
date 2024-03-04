@@ -11,27 +11,11 @@ use vk_mem::Alloc;
 
 pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
-    fn offset(&self) -> vk::DeviceSize {
-        0
-    }
-    fn size(&self) -> vk::DeviceSize;
-    fn device_address(&self) -> vk::DeviceAddress;
-    /// If the buffer is host visible and mapped, this function returns the host-side address.
-    fn as_mut_ptr(&mut self) -> Option<NonNull<u8>>;
 }
 
 impl BufferLike for vk::Buffer {
     fn raw_buffer(&self) -> vk::Buffer {
         *self
-    }
-    fn size(&self) -> vk::DeviceSize {
-        vk::WHOLE_SIZE
-    }
-    fn device_address(&self) -> vk::DeviceAddress {
-        panic!()
-    }
-    fn as_mut_ptr(&mut self) -> Option<NonNull<u8>> {
-        panic!()
     }
 }
 
@@ -60,18 +44,6 @@ impl<T> Drop for BufferArray<T> {
 impl<T> BufferLike for BufferArray<T> {
     fn raw_buffer(&self) -> vk::Buffer {
         self.buffer
-    }
-
-    fn size(&self) -> vk::DeviceSize {
-        self.len as u64 * std::mem::size_of::<T>() as u64
-    }
-
-    fn device_address(&self) -> vk::DeviceAddress {
-        0
-    }
-
-    fn as_mut_ptr(&mut self) -> Option<NonNull<u8>> {
-        NonNull::new(self.ptr as *mut u8)
     }
 }
 
@@ -124,10 +96,7 @@ impl<T> BufferArray<T> {
         } else {
             vk_mem::MemoryUsage::AutoPreferHost
         };
-        if matches!(
-            memory_model,
-            PhysicalDeviceMemoryModel::Bar | PhysicalDeviceMemoryModel::Discrete
-        ) {
+        if memory_model.storage_buffer_should_use_staging() {
             usage |= vk::BufferUsageFlags::TRANSFER_SRC;
         };
         Self {

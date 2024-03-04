@@ -13,8 +13,14 @@ use bevy::{
 pub use bevy_egui::*;
 use rhyolite::{
     ash::vk,
+    ash,
     ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderRes},
     Allocator, BufferArray, HasDevice, PhysicalDeviceMemoryModel,
+    BufferLike,
+    RhyoliteApp,
+    Device,
+    ecs::{Barriers, IntoRenderSystemConfigs},
+    Access,
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -30,12 +36,14 @@ impl<Filter: QueryFilter> Default for EguiPlugin<Filter> {
 
 impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> {
     fn build(&self, app: &mut App) {
+        // TODO: Rip out the copying, don't add the copy buffer systems if we don't need to copy buffers.
         app.add_plugins(bevy::time::TimePlugin); // This should've been declared in bevy_egui instead.
         app.add_plugins(bevy_egui::EguiPlugin);
         app.add_systems(
             PostUpdate,
-            render_egui::<Filter>.after(EguiSet::ProcessOutput),
+            copy_buffers::<Filter>.after(EguiSet::ProcessOutput).with_barriers(copy_buffers_barrier::<Filter>),
         );
+        app.add_device_extension::<ash::extensions::khr::DynamicRendering>();
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
@@ -91,7 +99,24 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer
     }
 }
 
-fn render_egui<Filter: QueryFilter + Send + Sync + 'static>(
+fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
+    mut barriers: In<Barriers>,
+    mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
+    device: Res<Device>,
+){
+    if device.physical_device().properties().memory_model.storage_buffer_should_use_staging() {
+        barriers.transition_buffer(&mut device_buffer.index_buffer, Access {
+            access: vk::AccessFlags2::TRANSFER_WRITE,
+            stage: vk::PipelineStageFlags2::COPY,
+        });
+        barriers.transition_buffer(&mut device_buffer.vertex_buffer, Access {
+            access: vk::AccessFlags2::TRANSFER_WRITE,
+            stage: vk::PipelineStageFlags2::COPY,
+        });
+    }
+}
+
+fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut commands: RenderCommands<'t'>,
     mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
@@ -102,7 +127,6 @@ fn render_egui<Filter: QueryFilter + Send + Sync + 'static>(
     let Ok((window, mut output)) = egui_render_output.get_single_mut() else {
         return;
     };
-    println!("Rendering egui to window: {:?}", output.paint_jobs.len());
 
     let mut total_indices_count: usize = 0;
     let mut total_vertices_count: usize = 0;
@@ -156,14 +180,11 @@ fn render_egui<Filter: QueryFilter + Send + Sync + 'static>(
         total_indices_count += mesh.indices.len();
     }
 
-    if matches!(
-        allocator.physical_device().properties().memory_model,
-        PhysicalDeviceMemoryModel::Discrete | PhysicalDeviceMemoryModel::Bar
-    ) {
+    if allocator.physical_device().properties().memory_model.storage_buffer_should_use_staging() {
         let device_buffers = &mut *device_buffer;
         if device_buffers.vertex_buffer.len() < total_vertices_count {
             device_buffers.vertex_buffer.replace(|old| {
-                commands.retain(Box::new(old));
+                commands.retain(old);
                 let mut buf = BufferArray::new_resource(
                     allocator.clone(),
                     vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
@@ -173,21 +194,48 @@ fn render_egui<Filter: QueryFilter + Send + Sync + 'static>(
             });
         }
 
-        if device_buffers.index_buffer.len() < total_vertices_count {
+        if device_buffers.index_buffer.len() < total_indices_count {
             device_buffers.index_buffer.replace(|old| {
-                commands.retain(Box::new(old));
+                commands.retain(old);
                 let mut buf = BufferArray::new_resource(
                     allocator.clone(),
                     vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 );
-                buf.realloc(total_vertices_count).unwrap();
+                buf.realloc(total_indices_count).unwrap();
                 RenderRes::new(buf)
             });
         }
-
-        commands.record_commands().copy_buffer(
-            &host_buffers.vertex_buffer,
-            &mut device_buffers.vertex_buffer,
-        );
+        if total_vertices_count > 0 {
+            println!("Copied buffer");
+            commands.record_commands().copy_buffer(
+                host_buffers.vertex_buffer.raw_buffer(),
+                device_buffers.vertex_buffer.raw_buffer(),
+                &[vk::BufferCopy {
+                    src_offset: 0,
+                    dst_offset: 0,
+                    size: total_vertices_count as u64 * std::mem::size_of::<egui::epaint::Vertex>() as u64,
+                }],
+            );
+        }
+        if total_indices_count > 0 {
+            commands.record_commands().copy_buffer(
+                host_buffers.index_buffer.raw_buffer(),
+                device_buffers.index_buffer.raw_buffer(),
+                &[vk::BufferCopy {
+                    src_offset: 0,
+                    dst_offset: 0,
+                    size: total_indices_count as u64 * std::mem::size_of::<u32>() as u64,
+                }],
+            );
+        }
     }
+}
+
+fn draw<Filter: QueryFilter + Send + Sync + 'static>(
+    mut commands: RenderCommands<'t'>,
+    mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+    mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
+    mut egui_render_output: Query<(Entity, &EguiRenderOutput), Filter>,
+) {
+
 }
