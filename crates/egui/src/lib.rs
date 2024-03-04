@@ -2,6 +2,7 @@
 
 use std::mem::MaybeUninit;
 use std::ops::DerefMut;
+use std::sync::Arc;
 
 use bevy::ecs::prelude::*;
 use bevy::{
@@ -12,15 +13,12 @@ use bevy::{
 };
 pub use bevy_egui::*;
 use rhyolite::{
-    ash::vk,
     ash,
-    ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderRes},
-    Allocator, BufferArray, HasDevice, PhysicalDeviceMemoryModel,
-    BufferLike,
-    RhyoliteApp,
-    Device,
+    ash::vk,
     ecs::{Barriers, IntoRenderSystemConfigs},
-    Access,
+    ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderRes},
+    Access, Allocator, BufferArray, BufferLike, Device, HasDevice, Instance,
+    PhysicalDeviceMemoryModel, RhyoliteApp,
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -41,12 +39,29 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
         app.add_plugins(bevy_egui::EguiPlugin);
         app.add_systems(
             PostUpdate,
-            copy_buffers::<Filter>.after(EguiSet::ProcessOutput).with_barriers(copy_buffers_barrier::<Filter>),
+            collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
         );
         app.add_device_extension::<ash::extensions::khr::DynamicRendering>();
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
+        let device = app.world.resource::<Device>();
+        if device
+            .physical_device()
+            .properties()
+            .memory_model
+            .storage_buffer_should_use_staging()
+        {
+            app.add_systems(
+                PostUpdate,
+                (
+                    resize_device_buffers::<Filter>.after(collect_outputs::<Filter>),
+                    copy_buffers::<Filter>
+                        .after(resize_device_buffers::<Filter>)
+                        .with_barriers(copy_buffers_barrier::<Filter>), //.before(draw::<Filter>),
+                ),
+            );
+        }
     }
 }
 
@@ -73,6 +88,8 @@ impl<Filter: QueryFilter + Send + Sync + 'static> PerFrameResource for EguiHostB
 }
 #[derive(Resource)]
 struct EguiDeviceBuffer<Filter: QueryFilter> {
+    total_indices_count: usize,
+    total_vertices_count: usize,
     index_buffer: RenderRes<BufferArray<u32>>,
     vertex_buffer: RenderRes<BufferArray<egui::epaint::Vertex>>,
     marker: std::marker::PhantomData<Filter>,
@@ -89,6 +106,8 @@ impl<Filter: QueryFilter + Send + Sync + 'static> EguiDeviceBuffer<Filter> {
                 vk::BufferUsageFlags::VERTEX_BUFFER,
             )),
             marker: Default::default(),
+            total_indices_count: 0,
+            total_vertices_count: 0,
         }
     }
 }
@@ -99,35 +118,17 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer
     }
 }
 
-fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
-    mut barriers: In<Barriers>,
-    mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
-    device: Res<Device>,
-){
-    if device.physical_device().properties().memory_model.storage_buffer_should_use_staging() {
-        barriers.transition_buffer(&mut device_buffer.index_buffer, Access {
-            access: vk::AccessFlags2::TRANSFER_WRITE,
-            stage: vk::PipelineStageFlags2::COPY,
-        });
-        barriers.transition_buffer(&mut device_buffer.vertex_buffer, Access {
-            access: vk::AccessFlags2::TRANSFER_WRITE,
-            stage: vk::PipelineStageFlags2::COPY,
-        });
-    }
-}
-
-fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'t'>,
+/// Collect output from egui and copy it into a host-side buffer
+fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
-    mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(Entity, &EguiRenderOutput), Filter>,
-    settings: Res<EguiSettings>,
-    allocator: Res<Allocator>,
 ) {
     let Ok((window, mut output)) = egui_render_output.get_single_mut() else {
         return;
     };
 
+    let device_buffers = &mut *device_buffers;
     let mut total_indices_count: usize = 0;
     let mut total_vertices_count: usize = 0;
     for egui::epaint::ClippedPrimitive {
@@ -154,6 +155,9 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
         .realloc(total_indices_count)
         .unwrap();
 
+    device_buffers.total_indices_count = total_indices_count;
+    device_buffers.total_vertices_count = total_vertices_count;
+
     // Copy data into the buffer
     total_indices_count = 0;
     total_vertices_count = 0;
@@ -179,55 +183,94 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
         );
         total_indices_count += mesh.indices.len();
     }
+    assert_eq!(total_indices_count, device_buffers.total_indices_count);
+    assert_eq!(total_vertices_count, device_buffers.total_vertices_count);
+}
 
-    if allocator.physical_device().properties().memory_model.storage_buffer_should_use_staging() {
-        let device_buffers = &mut *device_buffer;
-        if device_buffers.vertex_buffer.len() < total_vertices_count {
-            device_buffers.vertex_buffer.replace(|old| {
-                commands.retain(old);
-                let mut buf = BufferArray::new_resource(
-                    allocator.clone(),
-                    vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-                );
-                buf.realloc(total_vertices_count).unwrap();
-                RenderRes::new(buf)
-            });
-        }
+fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+    mut commands: RenderCommands<'t'>,
+    host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+    allocator: Res<Allocator>,
+) {
+    let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
+    if device_buffers.vertex_buffer.len() < device_buffers.total_vertices_count {
+        device_buffers.vertex_buffer.replace(|old| {
+            commands.retain(old);
+            let mut buf = BufferArray::new_resource(
+                allocator.clone(),
+                vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            );
+            buf.realloc(device_buffers.total_vertices_count).unwrap();
+            RenderRes::new(buf)
+        });
+    }
 
-        if device_buffers.index_buffer.len() < total_indices_count {
-            device_buffers.index_buffer.replace(|old| {
-                commands.retain(old);
-                let mut buf = BufferArray::new_resource(
-                    allocator.clone(),
-                    vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-                );
-                buf.realloc(total_indices_count).unwrap();
-                RenderRes::new(buf)
-            });
-        }
-        if total_vertices_count > 0 {
-            println!("Copied buffer");
-            commands.record_commands().copy_buffer(
-                host_buffers.vertex_buffer.raw_buffer(),
-                device_buffers.vertex_buffer.raw_buffer(),
-                &[vk::BufferCopy {
-                    src_offset: 0,
-                    dst_offset: 0,
-                    size: total_vertices_count as u64 * std::mem::size_of::<egui::epaint::Vertex>() as u64,
-                }],
+    if device_buffers.index_buffer.len() < device_buffers.total_indices_count {
+        device_buffers.index_buffer.replace(|old| {
+            commands.retain(old);
+            let mut buf = BufferArray::new_resource(
+                allocator.clone(),
+                vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             );
-        }
-        if total_indices_count > 0 {
-            commands.record_commands().copy_buffer(
-                host_buffers.index_buffer.raw_buffer(),
-                device_buffers.index_buffer.raw_buffer(),
-                &[vk::BufferCopy {
-                    src_offset: 0,
-                    dst_offset: 0,
-                    size: total_indices_count as u64 * std::mem::size_of::<u32>() as u64,
-                }],
-            );
-        }
+            buf.realloc(device_buffers.total_indices_count).unwrap();
+            RenderRes::new(buf)
+        });
+    }
+}
+
+fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
+    mut barriers: In<Barriers>,
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+) {
+    if device_buffers.total_vertices_count > 0 {
+        barriers.transition_buffer(
+            &mut device_buffers.vertex_buffer,
+            Access {
+                access: vk::AccessFlags2::TRANSFER_WRITE,
+                stage: vk::PipelineStageFlags2::COPY,
+            },
+        );
+    }
+
+    if device_buffers.total_indices_count > 0 {
+        barriers.transition_buffer(
+            &mut device_buffers.index_buffer,
+            Access {
+                access: vk::AccessFlags2::TRANSFER_WRITE,
+                stage: vk::PipelineStageFlags2::COPY,
+            },
+        );
+    }
+}
+fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+    mut commands: RenderCommands<'t'>,
+    host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+) {
+    let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
+    if device_buffers.total_vertices_count > 0 {
+        commands.record_commands().copy_buffer(
+            host_buffers.vertex_buffer.raw_buffer(),
+            device_buffers.vertex_buffer.raw_buffer(),
+            &[vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: 0,
+                size: device_buffers.total_vertices_count as u64
+                    * std::mem::size_of::<egui::epaint::Vertex>() as u64,
+            }],
+        );
+    }
+    if device_buffers.total_indices_count > 0 {
+        commands.record_commands().copy_buffer(
+            host_buffers.index_buffer.raw_buffer(),
+            device_buffers.index_buffer.raw_buffer(),
+            &[vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: 0,
+                size: device_buffers.total_indices_count as u64 * std::mem::size_of::<u32>() as u64,
+            }],
+        );
     }
 }
 
@@ -237,5 +280,4 @@ fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(Entity, &EguiRenderOutput), Filter>,
 ) {
-
 }

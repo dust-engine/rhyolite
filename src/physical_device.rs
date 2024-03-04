@@ -41,16 +41,10 @@ pub enum PhysicalDeviceMemoryModel {
 }
 impl PhysicalDeviceMemoryModel {
     pub fn storage_buffer_should_use_staging(&self) -> bool {
-        matches!(
-            self,
-            Self::Bar | Self::Discrete
-        )
+        matches!(self, Self::Bar | Self::Discrete)
     }
     pub fn uniform_buffer_should_use_staging(&self) -> bool {
-        matches!(
-            self,
-            Self::Discrete
-        )
+        matches!(self, Self::Discrete)
     }
 }
 

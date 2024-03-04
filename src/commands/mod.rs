@@ -46,12 +46,8 @@ where
     }
     pub fn copy_buffer(&mut self, src: vk::Buffer, dst: vk::Buffer, regions: &[vk::BufferCopy]) {
         unsafe {
-            self.device.cmd_copy_buffer(
-                self.cmd_buf,
-                src.raw_buffer(),
-                dst.raw_buffer(),
-                regions,
-            );
+            self.device
+                .cmd_copy_buffer(self.cmd_buf, src.raw_buffer(), dst.raw_buffer(), regions);
         }
     }
 }

@@ -354,7 +354,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                 existing.config.wait.access |= edge.wait.access;
                 existing.config.signal.stage |= edge.signal.stage;
                 existing.config.signal.access |= edge.signal.access;
-            } else {
+            } else if from_meta.queue_graph_node != to_meta.queue_graph_node {
                 queue_graph.add_edge(
                     from_meta.queue_graph_node,
                     to_meta.queue_graph_node,

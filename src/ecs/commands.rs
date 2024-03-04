@@ -33,7 +33,9 @@ use bevy::ecs::{
 use queue_cap::*;
 
 use crate::{
-    command_pool::RecordingCommandBuffer, commands::CommandRecorder, ecs::Barriers, queue::QueueType, semaphore::TimelineSemaphore, utils::Dispose, Device, HasDevice, QueueRef, QueuesRouter
+    command_pool::RecordingCommandBuffer, commands::CommandRecorder, ecs::Barriers,
+    queue::QueueType, semaphore::TimelineSemaphore, utils::Dispose, Device, HasDevice, QueueRef,
+    QueuesRouter,
 };
 
 use super::{
@@ -86,9 +88,7 @@ where
         self.retained_objects
             .entry(self.frame_index)
             .or_default()
-            .push(Box::new(unsafe {
-                obj.take()
-            }));
+            .push(Box::new(unsafe { obj.take() }));
     }
 }
 
@@ -236,7 +236,7 @@ where
     (): IsQueueCap<Q>,
 {
     pub fn retain<T: 'static + Drop + Send + Sync>(&mut self, obj: Dispose<T>) {
-        self.retained_objects.push(unsafe {Box::new(obj.take())});
+        self.retained_objects.push(unsafe { Box::new(obj.take()) });
     }
     /// Returns a fence that the caller MUST wait on.
     /// Safety:

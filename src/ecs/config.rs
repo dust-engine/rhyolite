@@ -121,7 +121,6 @@ impl Barriers {
         global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
         global_barriers.src_access_mask |= barrier.src_access_mask;
         global_barriers.dst_access_mask |= barrier.dst_access_mask;
-        println!("{:?}", global_barriers);
     }
 }
 
