@@ -10,10 +10,10 @@ pub mod queue_cap {
     impl IsQueueCap<'c'> for () {}
     impl IsQueueCap<'t'> for () {}
 
-    pub trait IsGraphicsQueueCap<const Q: QueueCap> {}
+    pub trait IsGraphicsQueueCap<const Q: QueueCap>: IsQueueCap<Q> {}
     impl IsGraphicsQueueCap<'g'> for () {}
 
-    pub trait IsComputeQueueCap<const Q: QueueCap> {}
+    pub trait IsComputeQueueCap<const Q: QueueCap>: IsQueueCap<Q> {}
     impl IsComputeQueueCap<'c'> for () {}
 }
 

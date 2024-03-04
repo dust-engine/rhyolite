@@ -41,7 +41,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
             PostUpdate,
             collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
         );
-        app.add_device_extension::<ash::extensions::khr::DynamicRendering>();
+        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering);
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
@@ -187,6 +187,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     assert_eq!(total_vertices_count, device_buffers.total_vertices_count);
 }
 
+/// Resize the device buffers if necessary. Only runs on Discrete GPUs.
 fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut commands: RenderCommands<'t'>,
@@ -243,6 +244,7 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
         );
     }
 }
+/// Copy data from the host buffers to the device buffers. Only runs on Discrete GPUs.
 fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut commands: RenderCommands<'t'>,
@@ -273,11 +275,31 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
         );
     }
 }
-
+/// Issue draw commands for egui.
 fn draw<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'g'>,
     mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(Entity, &EguiRenderOutput), Filter>,
 ) {
+    let pass = commands.record_commands().begin_rendering(&vk::RenderingInfo {
+        flags: vk::RenderingFlags::empty(),
+        render_area: vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+                width: 1920,
+                height: 1080,
+            },
+        },
+        layer_count: 1,
+        view_mask: 0,
+        color_attachment_count: 1,
+        p_color_attachments: &vk::RenderingAttachmentInfo {
+        },
+        p_depth_attachment: &vk::RenderingAttachmentInfo {
+        },
+        p_stencil_attachment: &vk::RenderingAttachmentInfo {
+        },
+        ..Default::default()
+    });
 }

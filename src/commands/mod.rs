@@ -5,6 +5,8 @@ use crate::{
     Access, BufferLike, ImageLike,
 };
 
+mod render;
+
 pub struct CommandRecorder<'w, const Q: char>
 where
     (): IsQueueCap<Q>,
