@@ -1,0 +1,11 @@
+struct Transform {
+    scale: Vec2,
+    translation: Vec2,
+}
+
+
+#[set]
+struct EguiLayout {
+    #![stage(VERTEX)]
+    transform: UniformBuffer<Transform>,
+}

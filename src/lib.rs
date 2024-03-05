@@ -1,4 +1,5 @@
 #![feature(associated_type_defaults)]
+#![feature(noop_waker)]
 
 mod access;
 mod alloc;
@@ -18,6 +19,9 @@ mod queue;
 mod semaphore;
 mod surface;
 mod swapchain;
+pub mod pipeline;
+mod shader;
+mod deferred;
 
 pub mod utils;
 
@@ -34,5 +38,6 @@ pub use plugin::{RhyoliteApp, RhyolitePlugin};
 pub use queue::*;
 pub use surface::*;
 pub use swapchain::*;
+pub use shader::*;
 
 pub use ash;

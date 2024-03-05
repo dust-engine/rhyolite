@@ -13,10 +13,7 @@ use bevy::ecs::{
 use bevy::window::{PrimaryWindow, Window};
 
 use crate::{
-    ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
-    plugin::RhyoliteApp,
-    utils::{ColorSpace, SharingMode},
-    Device, HasDevice, ImageLike, PhysicalDevice, QueueType, QueuesRouter, Surface,
+    ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker}, plugin::RhyoliteApp, utils::{ColorSpace, SharingMode}, Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter, Surface
 };
 
 pub struct SwapchainPlugin {
@@ -141,7 +138,7 @@ impl Swapchain {
             let swapchain = swapchain_loader.create_swapchain(&create_info, None)?;
             let images = swapchain_loader.get_swapchain_images(swapchain)?;
             let swapchain = SwapchainInner {
-                device,
+                device: device.clone(),
                 surface,
                 inner: swapchain,
                 generation: 0,
@@ -156,16 +153,31 @@ impl Swapchain {
                     .into_iter()
                     .enumerate()
                     .map(|(i, image)| {
+                    let view = device.create_image_view(&vk::ImageViewCreateInfo {
+                        image,
+                        view_type: vk::ImageViewType::TYPE_2D,
+                        format: info.image_format,
+                        components: vk::ComponentMapping::default(),
+                        subresource_range: vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        },
+                        ..Default::default()
+                    }, None)?;
                         let mut img = RenderImage::new(SwapchainImageInner {
                             image,
                             indice: i as u32,
                             swapchain: inner.clone(),
+                            view,
                         });
                         img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                         img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
-                        Some(img)
+                        Ok(Some(img))
                     })
-                    .collect(),
+                    .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?,
                 inner,
             })
         }
@@ -233,16 +245,31 @@ impl Swapchain {
                 .into_iter()
                 .enumerate()
                 .map(|(i, image)| {
+                    let view = self.inner.device.create_image_view(&vk::ImageViewCreateInfo {
+                        image,
+                        view_type: vk::ImageViewType::TYPE_2D,
+                        format: self.inner.format,
+                        components: vk::ComponentMapping::default(),
+                        subresource_range: vk::ImageSubresourceRange {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            base_mip_level: 0,
+                            level_count: 1,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        },
+                        ..Default::default()
+                    }, None)?;
                     let mut img = RenderImage::new(SwapchainImageInner {
                         image,
                         indice: i as u32,
                         swapchain: self.inner.clone(),
+                        view
                     });
                     img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                     img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
-                    Some(img)
+                    Ok(Some(img))
                 })
-                .collect();
+                .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?;
         }
         Ok(())
     }
@@ -539,8 +566,16 @@ impl DerefMut for SwapchainImage {
 
 pub struct SwapchainImageInner {
     pub image: vk::Image,
+    view: vk::ImageView,
     indice: u32,
     swapchain: Arc<SwapchainInner>,
+}
+impl Drop for SwapchainImageInner {
+    fn drop(&mut self) {
+        unsafe {
+            self.swapchain.device.destroy_image_view(self.view, None);
+        }
+    }
 }
 
 impl ImageLike for SwapchainImageInner {
@@ -568,6 +603,11 @@ impl ImageLike for SwapchainImageInner {
 
     fn format(&self) -> vk::Format {
         self.swapchain.format
+    }
+}
+impl ImageViewLike for SwapchainImageInner {
+    fn raw_image_view(&self) -> vk::ImageView {
+        self.view
     }
 }
 

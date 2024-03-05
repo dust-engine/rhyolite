@@ -19,6 +19,11 @@ use rhyolite::{
     ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderRes},
     Access, Allocator, BufferArray, BufferLike, Device, HasDevice, Instance,
     PhysicalDeviceMemoryModel, RhyoliteApp,
+    SwapchainImage,
+    ImageLike,
+    ImageViewLike,
+    present,
+    pipeline::{PipelineLayout,DescriptorSetLayout}
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -39,7 +44,12 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
         app.add_plugins(bevy_egui::EguiPlugin);
         app.add_systems(
             PostUpdate,
-            collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
+            (
+                collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
+                draw::<Filter>.with_barriers(draw_barriers::<Filter>)
+                .after(collect_outputs::<Filter>)
+                .before(present)
+            ),
         );
         app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering);
     }
@@ -58,11 +68,31 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
                     resize_device_buffers::<Filter>.after(collect_outputs::<Filter>),
                     copy_buffers::<Filter>
                         .after(resize_device_buffers::<Filter>)
-                        .with_barriers(copy_buffers_barrier::<Filter>), //.before(draw::<Filter>),
+                        .with_barriers(copy_buffers_barrier::<Filter>)
+                        .before(draw::<Filter>),
                 ),
             );
         }
     }
+}
+
+
+fn initialize_pipelines(
+    device: Res<Device>
+) {
+    let desc0 = DescriptorSetLayout::new(
+        device.clone(),
+        &playout_macro::layout!("draw.playout", 0),
+        vk::DescriptorSetLayoutCreateFlags::empty(),
+    ).unwrap();
+    let layout = PipelineLayout::new(
+        device.clone(),
+        vec![
+            Arc::new(desc0)
+        ],
+        &[],
+        vk::PipelineLayoutCreateFlags::empty(),
+    );
 }
 
 struct EguiHostBuffer<Filter: QueryFilter> {
@@ -275,30 +305,61 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
         );
     }
 }
+
+fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
+    mut barriers: In<Barriers>,
+    mut egui_render_output: Query<(Entity, &EguiRenderOutput, &mut SwapchainImage), Filter>,
+) {
+    let (_, output, mut swapchain_image) = egui_render_output.get_single_mut().unwrap();
+    if output.paint_jobs.is_empty() {
+        return;
+    }
+    barriers.transition_image(
+        &mut *swapchain_image,
+        Access {
+            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+        },
+        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        false,
+    );
+}
 /// Issue draw commands for egui.
 fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     mut commands: RenderCommands<'g'>,
     mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(Entity, &EguiRenderOutput), Filter>,
+    mut egui_render_output: Query<(Entity, &EguiRenderOutput, &mut SwapchainImage), Filter>,
 ) {
+    let (_, output, swapchain_image) = egui_render_output.get_single_mut().unwrap();
+    if output.paint_jobs.is_empty() {
+        return;
+    }
     let pass = commands.record_commands().begin_rendering(&vk::RenderingInfo {
         flags: vk::RenderingFlags::empty(),
         render_area: vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
             extent: vk::Extent2D {
-                width: 1920,
-                height: 1080,
+                width: swapchain_image.extent().width,
+                height: swapchain_image.extent().width,
             },
         },
         layer_count: 1,
-        view_mask: 0,
         color_attachment_count: 1,
         p_color_attachments: &vk::RenderingAttachmentInfo {
-        },
-        p_depth_attachment: &vk::RenderingAttachmentInfo {
-        },
-        p_stencil_attachment: &vk::RenderingAttachmentInfo {
+            image_view: swapchain_image.raw_image_view(),
+            image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            resolve_mode: vk::ResolveModeFlags::NONE,
+            resolve_image_view: vk::ImageView::null(),
+            resolve_image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            load_op: vk::AttachmentLoadOp::DONT_CARE,
+            store_op: vk::AttachmentStoreOp::STORE,
+            clear_value: vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [1.0, 0.0, 0.0, 1.0],
+                },
+            },
+            ..Default::default()
         },
         ..Default::default()
     });

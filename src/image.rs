@@ -68,3 +68,6 @@ impl<T: ImageLike> ImageLike for ImageSubregion<T> {
         self.inner.format()
     }
 }
+pub trait ImageViewLike: ImageLike {
+    fn raw_image_view(&self) -> vk::ImageView;
+}
