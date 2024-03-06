@@ -9,6 +9,7 @@ use bevy::asset::{load_internal_asset, AssetServer, Assets, Handle};
 use bevy::ecs::prelude::*;
 use bevy::ecs::query::QuerySingleError;
 use bevy::input;
+use bevy::math::Vec2;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
     ecs::{query::QueryFilter, schedule::IntoSystemConfigs},
@@ -64,7 +65,12 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
             ),
         );
         app.add_systems(Startup, initialize_pipelines);
-        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering);
+        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering)
+            .unwrap();
+        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.inline_uniform_block)
+            .unwrap();
+        app.add_device_extension::<ash::extensions::khr::PushDescriptor>()
+            .unwrap();
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
@@ -92,6 +98,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
 #[derive(Resource)]
 pub struct EguiPipelines {
     pipeline: CachedPipeline<GraphicsPipeline>,
+    layout: Arc<PipelineLayout>,
 }
 fn initialize_pipelines(
     mut commands: Commands,
@@ -102,16 +109,22 @@ fn initialize_pipelines(
     let desc0 = DescriptorSetLayout::new(
         device.clone(),
         &playout_macro::layout!("../../../assets/shaders/draw.playout", 0),
-        vk::DescriptorSetLayoutCreateFlags::empty(),
+        vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR,
     )
     .unwrap();
     let layout = PipelineLayout::new(
         device.clone(),
         vec![Arc::new(desc0)],
-        &[],
+        &[vk::PushConstantRange {
+            offset: 0,
+            size: std::mem::size_of::<[f32; 2]>() as u32,
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+        }], // Ideally this can be specified automatically
         vk::PipelineLayoutCreateFlags::empty(),
     )
     .unwrap();
+    let layout = Arc::new(layout);
+    let layout2 = layout.clone();
     let pipeline_create_info = GraphicsPipelineBuildInfo {
         device: device.clone(),
         stages: vec![
@@ -167,16 +180,16 @@ fn initialize_pipelines(
             let viewport = vk::Viewport {
                 x: 0.0,
                 y: 0.0,
-                width: 1.0,
-                height: 1.0,
+                width: 2560.0,
+                height: 1440.0,
                 min_depth: 0.0,
                 max_depth: 1.0,
             };
             let scisser = vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: vk::Extent2D {
-                    width: 1,
-                    height: 1,
+                    width: 2560,
+                    height: 1440,
                 },
             };
             let viewport_state = vk::PipelineViewportStateCreateInfo {
@@ -197,22 +210,29 @@ fn initialize_pipelines(
                 sample_shading_enable: vk::FALSE,
                 ..Default::default()
             };
+            let color_blend_attachment_state = vk::PipelineColorBlendAttachmentState {
+                color_write_mask: vk::ColorComponentFlags::R
+                    | vk::ColorComponentFlags::G
+                    | vk::ColorComponentFlags::B
+                    | vk::ColorComponentFlags::A,
+                blend_enable: vk::FALSE,
+                ..Default::default()
+            };
             let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
                 attachment_count: 1,
-                p_attachments: &vk::PipelineColorBlendAttachmentState {
-                    color_write_mask: vk::ColorComponentFlags::R
-                        | vk::ColorComponentFlags::G
-                        | vk::ColorComponentFlags::B
-                        | vk::ColorComponentFlags::A,
-                    blend_enable: vk::FALSE,
-                    ..Default::default()
-                },
+                p_attachments: &color_blend_attachment_state,
                 ..Default::default()
             };
             let dynamic_rendering_format = vk::Format::B8G8R8A8_UNORM;
-            let dynamic_rendering_info = vk::PipelineRenderingCreateInfo{
+            let dynamic_rendering_info = vk::PipelineRenderingCreateInfo {
                 color_attachment_count: 1,
                 p_color_attachment_formats: &dynamic_rendering_format,
+                ..Default::default()
+            };
+            let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+            let dynamic_state = vk::PipelineDynamicStateCreateInfo {
+                dynamic_state_count: dynamic_states.len() as u32,
+                p_dynamic_states: dynamic_states.as_ptr(),
                 ..Default::default()
             };
             builder.p_vertex_input_state = &vertex_input_state;
@@ -221,13 +241,14 @@ fn initialize_pipelines(
             builder.p_rasterization_state = &rasterization_state;
             builder.p_multisample_state = &multisample_state;
             builder.p_color_blend_state = &color_blend_state;
+            builder.p_dynamic_state = &dynamic_state;
             builder.p_next = &dynamic_rendering_info as *const _ as *const c_void;
-            builder.layout = layout.raw();
+            builder.layout = layout2.raw();
             builder.build()
         },
     };
     let pipeline = pipeline_cache.create_graphics(pipeline_create_info);
-    commands.insert_resource(EguiPipelines { pipeline });
+    commands.insert_resource(EguiPipelines { pipeline, layout });
 }
 
 pub struct EguiHostBuffer<Filter: QueryFilter> {
@@ -412,7 +433,7 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
 /// Copy data from the host buffers to the device buffers. Only runs on Discrete GPUs.
 fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'g'>,
     host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
@@ -443,6 +464,7 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
 
 fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
     mut barriers: In<Barriers>,
+    mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage), Filter>,
 ) {
     let (output, mut swapchain_image) = match egui_render_output.get_single_mut() {
@@ -463,20 +485,40 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
         vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         false,
     );
+
+    if device_buffer.vertex_buffer.len() > 0 {
+        barriers.transition_buffer(
+            &mut device_buffer.vertex_buffer,
+            Access {
+                stage: vk::PipelineStageFlags2::VERTEX_INPUT,
+                access: vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
+            },
+        );
+    }
+    if device_buffer.index_buffer.len() > 0 {
+        barriers.transition_buffer(
+            &mut device_buffer.index_buffer,
+            Access {
+                stage: vk::PipelineStageFlags2::INDEX_INPUT,
+                access: vk::AccessFlags2::INDEX_READ,
+            },
+        );
+    }
 }
 /// Issue draw commands for egui.
 pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     mut commands: RenderCommands<'g'>,
-    mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
-    mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage), Filter>,
-    mut pipeline: ResMut<EguiPipelines>,
+    host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+    device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
+    mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage, &WindowSize), Filter>,
+    mut egui_pipeline: ResMut<EguiPipelines>,
+    egui_settings: Res<EguiSettings>,
     pipeline_cache: Res<PipelineCache>,
 
     assets: Res<Assets<ShaderModule>>,
     task_pool: Res<DeferredOperationTaskPool>,
 ) {
-    let (output, mut swapchain_image) = match egui_render_output.get_single_mut() {
+    let (output, mut swapchain_image, window_size) = match egui_render_output.get_single_mut() {
         Ok(r) => r,
         Err(QuerySingleError::NoEntities(_)) => return,
         Err(QuerySingleError::MultipleEntities(_)) => panic!(),
@@ -485,7 +527,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
         return;
     }
     let Some((pipeline, old_pipeline)) =
-        pipeline_cache.retrieve_graphics(&mut pipeline.pipeline, &assets, &task_pool)
+        pipeline_cache.retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool)
     else {
         return;
     };
@@ -511,7 +553,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
                 resolve_mode: vk::ResolveModeFlags::NONE,
                 resolve_image_view: vk::ImageView::null(),
                 resolve_image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                load_op: vk::AttachmentLoadOp::DONT_CARE,
+                load_op: vk::AttachmentLoadOp::CLEAR,
                 store_op: vk::AttachmentStoreOp::STORE,
                 clear_value: vk::ClearValue {
                     color: vk::ClearColorValue {
@@ -530,6 +572,35 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
         vertex_buffer = host_buffers.vertex_buffer.raw_buffer();
         index_buffer = host_buffers.index_buffer.raw_buffer();
     }
+    let mut current_vertex = 0;
+    let mut current_indice = 0;
+
+    pass.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+    pass.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
+    let viewport_physical_size = Vec2::new(
+        swapchain_image.extent().width as f32,
+        swapchain_image.extent().height as f32,
+    );
+    pass.set_viewport(
+        0,
+        &[vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: viewport_physical_size.x,
+            height: viewport_physical_size.y,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }],
+    );
+    let scale_factor = egui_settings.scale_factor * window_size.scale_factor;
+    let viewport_logical_size = viewport_physical_size / scale_factor;
+    pass.push_constants(
+        egui_pipeline.layout.raw(),
+        vk::ShaderStageFlags::VERTEX,
+        0,
+        &bytemuck::cast_slice(&[viewport_logical_size.x, viewport_logical_size.y]),
+    );
+
     for egui::epaint::ClippedPrimitive {
         clip_rect,
         primitive,
@@ -539,26 +610,47 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
             egui::epaint::Primitive::Mesh(mesh) => mesh,
             egui::epaint::Primitive::Callback(_) => panic!(),
         };
-
-        pass.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
-        pass.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
-        pass.draw(mesh.vertices.len() as u32, 0, 0, 0);
+        let clip_min = Vec2::new(clip_rect.min.x, clip_rect.min.y) * scale_factor;
+        let clip_max = Vec2::new(clip_rect.max.x, clip_rect.max.y) * scale_factor;
+        let clip_extent = clip_max - clip_min;
+        pass.set_scissor(
+            0,
+            &[vk::Rect2D {
+                extent: vk::Extent2D {
+                    width: clip_extent.x.round() as u32,
+                    height: clip_extent.y.round() as u32,
+                },
+                offset: vk::Offset2D {
+                    x: clip_min.x.round() as i32,
+                    y: clip_min.y.round() as i32,
+                },
+            }],
+        );
+        pass.draw_indexed(
+            mesh.vertices.len() as u32,
+            1,
+            current_indice,
+            current_vertex as i32,
+            0,
+        );
+        current_vertex += mesh.vertices.len() as u32;
+        current_indice += mesh.indices.len() as u32;
     }
+    assert_eq!(current_vertex as usize, device_buffer.total_vertices_count);
+    assert_eq!(current_indice as usize, device_buffer.total_indices_count);
     drop(pass);
 
-
-
     commands
-    .record_commands()
-    .transition_resources()
-    .image(
-        &mut swapchain_image,
-        Access {
-            stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-            access: vk::AccessFlags2::empty(),
-        },
-        vk::ImageLayout::PRESENT_SRC_KHR,
-        true,
-    )
-    .end();
+        .record_commands()
+        .transition_resources()
+        .image(
+            &mut swapchain_image,
+            Access {
+                stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+                access: vk::AccessFlags2::empty(),
+            },
+            vk::ImageLayout::PRESENT_SRC_KHR,
+            true,
+        )
+        .end();
 }

@@ -18,11 +18,17 @@ pub struct MemoryBarrier {
 
 impl Access {
     pub fn is_writeonly(&self) -> bool {
+        if self.access == vk::AccessFlags2::empty() {
+            return false;
+        }
         // Clear all the write bits. If nothing is left, that means there's no read bits.
         self.access & !utils::ALL_WRITE_BITS == vk::AccessFlags2::NONE
     }
 
     pub fn is_readonly(&self) -> bool {
+        if self.access == vk::AccessFlags2::empty() {
+            return false;
+        }
         // Clear all the read bits. If nothing is left, that means there's no write bits.
         self.access & !utils::ALL_READ_BITS == vk::AccessFlags2::NONE
     }

@@ -6,6 +6,7 @@ use ash::{
 use bevy::ecs::{system::Resource, world::FromWorld};
 use crossbeam_channel::Sender;
 use std::{
+    mem::ManuallyDrop,
     sync::{
         atomic::{AtomicBool, AtomicU32},
         Arc,
@@ -71,8 +72,7 @@ struct DHOTask {
 pub struct DeferredOperationTaskPool(Option<DeferredOperationTaskPoolInner>);
 struct DeferredOperationTaskPoolInner {
     device: Device,
-    sender: Sender<Arc<DHOTask>>,
-    terminate: Arc<AtomicBool>,
+    sender: ManuallyDrop<Arc<Sender<Arc<DHOTask>>>>,
     threads: Vec<JoinHandle<()>>,
     available_parallelism: u32,
 }
@@ -84,8 +84,9 @@ impl FromWorld for DeferredOperationTaskPool {
 }
 impl Drop for DeferredOperationTaskPoolInner {
     fn drop(&mut self) {
-        self.terminate
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            ManuallyDrop::drop(&mut self.sender);
+        }
         for i in self.threads.drain(..) {
             i.join().unwrap();
         }
@@ -102,16 +103,15 @@ impl DeferredOperationTaskPool {
         }
         // At most one Task may be in the channel at any given time
         let (sender, receiver) = crossbeam_channel::unbounded::<Arc<DHOTask>>();
-        let terminate = Arc::new(AtomicBool::new(false));
+        let sender = Arc::new(sender);
         let available_parallelism = std::thread::available_parallelism().unwrap().get() as u32;
         let threads: Vec<_> = (0..available_parallelism)
             .map(|_| {
-                let sender = sender.clone();
+                let sender = Arc::downgrade(&sender);
                 let receiver = receiver.clone();
                 let device = device.clone();
-                let terminate = terminate.clone();
                 std::thread::spawn(move || {
-                    while !terminate.load(std::sync::atomic::Ordering::Relaxed) {
+                    loop {
                         let task = if let Ok(task) = receiver.recv() {
                             task
                         } else {
@@ -127,7 +127,9 @@ impl DeferredOperationTaskPool {
                             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                         if current_concurrency > 1 {
                             // The task can be handled by someone else concurrently
-                            sender.send(task.clone()).unwrap();
+                            if let Some(sender) = sender.upgrade() {
+                                sender.send(task.clone()).unwrap();
+                            }
                         }
                         if current_concurrency == 0 {
                             continue;
@@ -160,7 +162,9 @@ impl DeferredOperationTaskPool {
                                     .concurrency
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 if current_concurrency == 0 {
-                                    sender.send(task.clone()).unwrap();
+                                    if let Some(sender) = sender.upgrade() {
+                                        sender.send(task.clone()).unwrap();
+                                    }
                                 }
                             }
                             _result => {
@@ -173,8 +177,7 @@ impl DeferredOperationTaskPool {
             .collect();
         let inner = DeferredOperationTaskPoolInner {
             device,
-            sender,
-            terminate,
+            sender: ManuallyDrop::new(sender),
             threads,
             available_parallelism,
         };

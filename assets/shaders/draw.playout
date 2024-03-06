@@ -1,11 +1,10 @@
-
-
 #[set]
 struct EguiLayout {
-    #![stage(VERTEX)]
-    u_transform: UniformBuffer<Transform>,
+    #![stage(FRAGMENT)]
+    u_img: SampledImage,
 }
-struct Transform {
-    scale: Vec2,
-    translation: Vec2,
+#[push_constants]
+struct PushConstants {
+    #![stage(VERTEX)]
+    u_transform: Vec2,
 }

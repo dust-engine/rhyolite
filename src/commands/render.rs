@@ -194,4 +194,38 @@ where
             );
         }
     }
+    pub fn set_viewport(&mut self, first_viewport: u32, viewports: &[vk::Viewport]) {
+        unsafe {
+            self.recorder
+                .device
+                .cmd_set_viewport(self.recorder.cmd_buf, 0, viewports);
+        }
+    }
+    pub fn set_scissor(&mut self, first_scissor: u32, scissors: &[vk::Rect2D]) {
+        unsafe {
+            self.recorder
+                .device
+                .cmd_set_scissor(self.recorder.cmd_buf, 0, scissors);
+        }
+    }
+
+    pub fn push_descriptor_set(
+        &mut self,
+        pipeline_layout: vk::PipelineLayout,
+        set: u32,
+        descriptor_writes: &[vk::WriteDescriptorSet],
+    ) {
+        unsafe {
+            self.recorder
+                .device
+                .extension::<ash::extensions::khr::PushDescriptor>()
+                .cmd_push_descriptor_set(
+                    self.recorder.cmd_buf,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    pipeline_layout,
+                    set,
+                    descriptor_writes,
+                );
+        }
+    }
 }

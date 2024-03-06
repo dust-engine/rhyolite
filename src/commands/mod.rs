@@ -1,8 +1,8 @@
-use ash::{vk, Device};
+use ash::vk;
 
 use crate::{
     ecs::{queue_cap::IsQueueCap, RenderImage, RenderRes},
-    Access, BufferLike, ImageLike,
+    Access, BufferLike, Device, ImageLike,
 };
 
 mod render;
