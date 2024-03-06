@@ -3,17 +3,20 @@ use std::{collections::HashMap, sync::Arc};
 use ash::vk;
 use bevy::app::Plugin;
 use bevy::asset::{AssetEvent, AssetId, Assets};
+use bevy::ecs::world::FromWorld;
 use bevy::ecs::{
     prelude::EventReader,
     system::{ResMut, Resource},
 };
 
 use crate::deferred::{DeferredOperationTaskPool, Task};
+use crate::shader::ShaderModule;
 use crate::Device;
-use crate::ShaderModule;
 
-use super::{Pipeline, PipelineBuildInfo};
-
+use super::{
+    BoxedGraphicsPipelineBuildInfo, Builder, BuilderResult, GraphicsPipeline,
+    GraphicsPipelineBuildInfo, Pipeline, PipelineBuildInfo,
+};
 
 #[derive(Resource)]
 pub struct PipelineCache {
@@ -23,7 +26,18 @@ pub struct PipelineCache {
     hot_reload_enabled: bool,
 }
 
-pub struct CachedPipeline<T: Pipeline>{
+impl FromWorld for PipelineCache {
+    fn from_world(world: &mut bevy::ecs::world::World) -> Self {
+        Self {
+            device: world.resource::<Device>().clone(),
+            cache: vk::PipelineCache::null(), // TODO
+            shader_generations: Default::default(),
+            hot_reload_enabled: true,
+        }
+    }
+}
+
+pub struct CachedPipeline<T: Pipeline> {
     build_info: Option<T::BuildInfo>,
     pipeline: Option<T>,
     task: Option<Task<T>>,
@@ -31,15 +45,52 @@ pub struct CachedPipeline<T: Pipeline>{
 }
 
 impl PipelineCache {
-    pub fn retrieve<'a, T: Pipeline>(
+    fn create<T: Pipeline>(&self, build_info: T::BuildInfo) -> CachedPipeline<T> {
+        CachedPipeline {
+            pipeline: None,
+            task: None,
+            shader_generations: if self.hot_reload_enabled {
+                let mut map = HashMap::new();
+                map.extend(build_info.all_shaders().map(|shader| (shader, 0)));
+                map
+            } else {
+                Default::default()
+            },
+            build_info: Some(build_info),
+        }
+    }
+    pub fn create_graphics<F>(
+        &self,
+        build_info: GraphicsPipelineBuildInfo<F>,
+    ) -> CachedPipeline<GraphicsPipeline>
+    where
+        F: for<'a> Fn(Builder) -> BuilderResult + Send + Sync + 'static,
+    {
+        let boxed = BoxedGraphicsPipelineBuildInfo {
+            device: build_info.device,
+            stages: build_info.stages,
+            builder: Arc::new(build_info.builder),
+        };
+        self.create(boxed)
+    }
+    pub fn retrieve_graphics<'a>(
+        &self,
+        cached_pipeline: &'a mut CachedPipeline<GraphicsPipeline>,
+        assets: &Assets<ShaderModule>,
+        pool: &DeferredOperationTaskPool,
+    ) -> Option<&'a GraphicsPipeline> {
+        self.retrieve(cached_pipeline, assets, pool)
+    }
+    fn retrieve<'a, T: Pipeline>(
         &self,
         cached_pipeline: &'a mut CachedPipeline<T>,
         assets: &Assets<ShaderModule>,
-        pool: &DeferredOperationTaskPool
+        pool: &DeferredOperationTaskPool,
     ) -> Option<&'a T> {
         if let Some(pipeline) = &mut cached_pipeline.task {
             if pipeline.is_finished() {
-                cached_pipeline.pipeline = Some(cached_pipeline.task.take().unwrap().unwrap().unwrap());
+                cached_pipeline.pipeline =
+                    Some(cached_pipeline.task.take().unwrap().unwrap().unwrap());
             }
         }
 
@@ -96,7 +147,6 @@ impl PipelineCache {
     }
 }
 
-
 fn pipeline_cache_shader_updated_system(
     mut pipeline_cache: ResMut<PipelineCache>,
     mut events: EventReader<AssetEvent<ShaderModule>>,
@@ -131,8 +181,7 @@ impl Default for PipelineCachePlugin {
 }
 
 impl Plugin for PipelineCachePlugin {
-    fn build(&self, app: &mut bevy::prelude::App) {
-    }
+    fn build(&self, app: &mut bevy::prelude::App) {}
     fn finish(&self, app: &mut bevy::app::App) {
         let cache = PipelineCache {
             device: app.world.resource::<Device>().clone(),

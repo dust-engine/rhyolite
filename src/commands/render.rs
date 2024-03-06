@@ -8,12 +8,9 @@ impl<'w, const Q: char> CommandRecorder<'w, Q>
 where
     (): IsGraphicsQueueCap<Q>,
 {
-    pub fn begin_rendering(self, info: &vk::RenderingInfo) -> RenderPass<'w, Q>{
+    pub fn begin_rendering(self, info: &vk::RenderingInfo) -> RenderPass<'w, Q> {
         unsafe {
-            self.device.cmd_begin_rendering(
-                self.cmd_buf,
-                &info,
-            );
+            self.device.cmd_begin_rendering(self.cmd_buf, &info);
             RenderPass {
                 recorder: self,
                 is_dynamic_rendering: true,
@@ -22,8 +19,10 @@ where
     }
 }
 
-pub struct RenderPass<'w, const Q: char> where
-(): IsGraphicsQueueCap<Q> {
+pub struct RenderPass<'w, const Q: char>
+where
+    (): IsGraphicsQueueCap<Q>,
+{
     recorder: CommandRecorder<'w, Q>,
     is_dynamic_rendering: bool,
 }
@@ -35,14 +34,17 @@ where
     fn drop(&mut self) {
         unsafe {
             if self.is_dynamic_rendering {
-                self.recorder.device.cmd_end_rendering(self.recorder.cmd_buf);
+                self.recorder
+                    .device
+                    .cmd_end_rendering(self.recorder.cmd_buf);
             } else {
-                self.recorder.device.cmd_end_render_pass(self.recorder.cmd_buf);
+                self.recorder
+                    .device
+                    .cmd_end_render_pass(self.recorder.cmd_buf);
             }
         }
     }
 }
-
 
 impl<'w, const Q: char> RenderPass<'w, Q>
 where
@@ -57,7 +59,12 @@ where
             );
         }
     }
-    pub fn bind_vertex_buffers(&mut self, first_binding: u32, buffers: &[vk::Buffer], offsets: &[vk::DeviceSize]) {
+    pub fn bind_vertex_buffers(
+        &mut self,
+        first_binding: u32,
+        buffers: &[vk::Buffer],
+        offsets: &[vk::DeviceSize],
+    ) {
         unsafe {
             self.recorder.device.cmd_bind_vertex_buffers(
                 self.recorder.cmd_buf,
@@ -67,7 +74,12 @@ where
             );
         }
     }
-    pub fn bind_index_buffer(&mut self, buffer: vk::Buffer, offset: vk::DeviceSize, index_type: vk::IndexType) {
+    pub fn bind_index_buffer(
+        &mut self,
+        buffer: vk::Buffer,
+        offset: vk::DeviceSize,
+        index_type: vk::IndexType,
+    ) {
         unsafe {
             self.recorder.device.cmd_bind_index_buffer(
                 self.recorder.cmd_buf,
@@ -77,7 +89,13 @@ where
             );
         }
     }
-    pub fn bind_descriptor_sets(&mut self, layout: vk::PipelineLayout, first_set: u32, descriptor_sets: &[vk::DescriptorSet], dynamic_offsets: &[u32]) {
+    pub fn bind_descriptor_sets(
+        &mut self,
+        layout: vk::PipelineLayout,
+        first_set: u32,
+        descriptor_sets: &[vk::DescriptorSet],
+        dynamic_offsets: &[u32],
+    ) {
         unsafe {
             self.recorder.device.cmd_bind_descriptor_sets(
                 self.recorder.cmd_buf,
@@ -89,7 +107,13 @@ where
             );
         }
     }
-    pub fn push_constants(&mut self, layout: vk::PipelineLayout, stage_flags: vk::ShaderStageFlags, offset: u32, constants: &[u8]) {
+    pub fn push_constants(
+        &mut self,
+        layout: vk::PipelineLayout,
+        stage_flags: vk::ShaderStageFlags,
+        offset: u32,
+        constants: &[u8],
+    ) {
         unsafe {
             self.recorder.device.cmd_push_constants(
                 self.recorder.cmd_buf,
@@ -100,7 +124,13 @@ where
             );
         }
     }
-    pub fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) {
+    pub fn draw(
+        &mut self,
+        vertex_count: u32,
+        instance_count: u32,
+        first_vertex: u32,
+        first_instance: u32,
+    ) {
         unsafe {
             self.recorder.device.cmd_draw(
                 self.recorder.cmd_buf,
@@ -111,7 +141,14 @@ where
             );
         }
     }
-    pub fn draw_indexed(&mut self, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32) {
+    pub fn draw_indexed(
+        &mut self,
+        index_count: u32,
+        instance_count: u32,
+        first_index: u32,
+        vertex_offset: i32,
+        first_instance: u32,
+    ) {
         unsafe {
             self.recorder.device.cmd_draw_indexed(
                 self.recorder.cmd_buf,
@@ -123,7 +160,13 @@ where
             );
         }
     }
-    pub fn draw_indirect(&mut self, buffer: vk::Buffer, offset: vk::DeviceSize, draw_count: u32, stride: u32) {
+    pub fn draw_indirect(
+        &mut self,
+        buffer: vk::Buffer,
+        offset: vk::DeviceSize,
+        draw_count: u32,
+        stride: u32,
+    ) {
         unsafe {
             self.recorder.device.cmd_draw_indirect(
                 self.recorder.cmd_buf,
@@ -134,7 +177,13 @@ where
             );
         }
     }
-    pub fn draw_indexed_indirect(&mut self, buffer: vk::Buffer, offset: vk::DeviceSize, draw_count: u32, stride: u32) {
+    pub fn draw_indexed_indirect(
+        &mut self,
+        buffer: vk::Buffer,
+        offset: vk::DeviceSize,
+        draw_count: u32,
+        stride: u32,
+    ) {
         unsafe {
             self.recorder.device.cmd_draw_indexed_indirect(
                 self.recorder.cmd_buf,

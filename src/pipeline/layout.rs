@@ -1,5 +1,3 @@
-
-
 use std::{collections::BTreeMap, sync::Arc};
 
 use crate::{Device, HasDevice};
@@ -71,8 +69,6 @@ impl DescriptorSetLayout {
         self.raw
     }
 }
-
-
 
 pub struct PipelineLayout {
     device: Device,

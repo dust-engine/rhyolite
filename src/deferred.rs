@@ -3,10 +3,9 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
-use bevy::{ecs::system::Resource, tasks::futures_lite::FutureExt};
+use bevy::ecs::{system::Resource, world::FromWorld};
 use crossbeam_channel::Sender;
 use std::{
-    future::Future,
     sync::{
         atomic::{AtomicBool, AtomicU32},
         Arc,
@@ -60,13 +59,12 @@ impl DeferredHostOperation {
     }
 }
 
-
 struct DHOTask {
     // Number of remaining parallelism
     concurrency: AtomicU32,
     // true if THREAD_DONE_KHR or DONE was ever returned
     done: AtomicBool,
-    op: DeferredHostOperation
+    op: DeferredHostOperation,
 }
 
 #[derive(Resource)]
@@ -78,19 +76,28 @@ struct DeferredOperationTaskPoolInner {
     threads: Vec<JoinHandle<()>>,
     available_parallelism: u32,
 }
+impl FromWorld for DeferredOperationTaskPool {
+    fn from_world(world: &mut bevy::ecs::world::World) -> Self {
+        let device = world.resource::<Device>().clone();
+        Self::new(device)
+    }
+}
 impl Drop for DeferredOperationTaskPoolInner {
     fn drop(&mut self) {
-            self.terminate
+        self.terminate
             .store(true, std::sync::atomic::Ordering::Relaxed);
-            for i in self.threads.drain(..) {
-                i.join().unwrap();
-            }
+        for i in self.threads.drain(..) {
+            i.join().unwrap();
+        }
     }
 }
 
 impl DeferredOperationTaskPool {
     pub fn new(device: Device) -> Self {
-        if device.get_extension::<ash::extensions::khr::DeferredHostOperations>().is_none() {
+        if device
+            .get_extension::<ash::extensions::khr::DeferredHostOperations>()
+            .is_none()
+        {
             return Self(None);
         }
         // At most one Task may be in the channel at any given time
@@ -204,7 +211,8 @@ impl DeferredOperationTaskPool {
                 vk::Result::OPERATION_DEFERRED_KHR => {
                     let dho = dho2.unwrap();
                     let concurrency = dho.op.get_max_concurrency().max(available_parallelism);
-                    dho.concurrency.store(concurrency, std::sync::atomic::Ordering::Relaxed);
+                    dho.concurrency
+                        .store(concurrency, std::sync::atomic::Ordering::Relaxed);
                     sender.unwrap().send(dho.clone()).unwrap();
                     return Ok(item);
                 }
@@ -214,30 +222,21 @@ impl DeferredOperationTaskPool {
                 other => return Err(other),
             }
         });
-        Task {
-            task,
-            dho,
-        }
+        Task { task, dho }
     }
 
     pub fn schedule<T: Send + 'static>(
         &self,
         op: impl FnOnce() -> VkResult<T> + Send + 'static,
     ) -> Task<T> {
-        let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
-            op()
-        });
-        Task {
-            task,
-            dho: None,
-        }
+        let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move { op() });
+        Task { task, dho: None }
     }
 }
 
-
 pub struct Task<T> {
     task: bevy::tasks::Task<VkResult<T>>,
-    dho: Option<Arc<DHOTask>>
+    dho: Option<Arc<DHOTask>>,
 }
 impl<T> Task<T> {
     pub fn is_finished(&self) -> bool {
@@ -247,18 +246,18 @@ impl<T> Task<T> {
         if let Some(dho) = &self.dho {
             return dho.op.status().is_some();
         } else {
-            return true
+            return true;
         }
     }
     pub fn unwrap(self) -> VkResult<T> {
         if !self.task.is_finished() {
-            return Err(vk::Result::NOT_READY)
+            return Err(vk::Result::NOT_READY);
         }
         let out = unwrap_future(self.task)?;
         if let Some(task) = self.dho {
             let status = task.op.status();
             if let Some(status) = status {
-                return Err(status)
+                return Err(status);
             }
         }
         Ok(out)

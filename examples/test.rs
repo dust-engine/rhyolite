@@ -1,6 +1,6 @@
 use ash::vk;
 
-use bevy::app::{PostUpdate, Update};
+use bevy::app::{PluginGroup, PostUpdate, Update};
 use bevy::ecs::{
     entity::Entity,
     query::With,
@@ -19,15 +19,17 @@ use rhyolite_egui::{egui, EguiContexts};
 
 fn main() {
     let mut app = bevy::app::App::new();
-    app.add_plugins(bevy::window::WindowPlugin::default())
-        .add_plugins(bevy::a11y::AccessibilityPlugin)
-        .add_plugins(bevy::winit::WinitPlugin::default())
-        .add_plugins(bevy::input::InputPlugin::default())
-        .add_plugins(SurfacePlugin::default())
-        .add_plugins(DebugUtilsPlugin::default())
-        .add_plugins(RhyolitePlugin::default())
-        .add_plugins(SwapchainPlugin::default())
-        .add_plugins(rhyolite_egui::EguiPlugin::<With<PrimaryWindow>>::default());
+    app.add_plugins(bevy::DefaultPlugins.set::<bevy::asset::AssetPlugin>(
+        bevy::asset::AssetPlugin {
+            mode: bevy::asset::AssetMode::Processed,
+            ..Default::default()
+        },
+    ))
+    .add_plugins(SurfacePlugin::default())
+    .add_plugins(DebugUtilsPlugin::default())
+    .add_plugins(RhyolitePlugin::default())
+    .add_plugins(SwapchainPlugin::default())
+    .add_plugins(rhyolite_egui::EguiPlugin::<With<PrimaryWindow>>::default());
 
     app.add_systems(Update, ui_example_system);
 

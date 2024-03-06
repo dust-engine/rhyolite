@@ -1,8 +1,10 @@
 mod format;
 mod future;
+mod send;
 use ash::vk;
 pub use format::*;
 pub use future::*;
+pub use send::SendBox;
 use std::{mem::ManuallyDrop, ops::Deref};
 
 #[derive(Debug, Clone)]
@@ -53,18 +55,5 @@ impl<T> Dispose<T> {
             std::mem::forget(self);
             item
         }
-    }
-}
-
-#[repr(transparent)]
-pub struct SendBox<T>(T);
-unsafe impl<T> Send for SendBox<T> {}
-unsafe impl<T> Sync for SendBox<T> {}
-impl<T> SendBox<T> {
-    pub unsafe fn new(inner: T) -> Self {
-        Self(inner)
-    }
-    pub fn into_inner(self) -> T {
-        self.0
     }
 }

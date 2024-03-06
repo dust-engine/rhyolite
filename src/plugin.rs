@@ -2,8 +2,8 @@ use ash::{
     prelude::VkResult,
     vk::{self},
 };
-use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
+use bevy::{app::prelude::*, asset::AssetApp};
 use std::{
     any::Any,
     collections::BTreeMap,
@@ -244,7 +244,9 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(instance)
             .insert_resource(physical_device)
             .insert_resource(features)
-            .insert_resource(queue_router);
+            .insert_resource(queue_router)
+            .init_asset::<crate::shader::ShaderModule>()
+            .init_asset::<crate::shader::loader::SpirvShaderSource>();
 
         // Add build pass
         app.get_schedule_mut(PostUpdate)
@@ -254,8 +256,16 @@ impl Plugin for RhyolitePlugin {
             .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
 
         // Required features
-        app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore);
-        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|f| &mut f.synchronization2);
+        app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore)
+            .unwrap();
+        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|f| &mut f.synchronization2)
+            .unwrap();
+
+        // Optional extensions
+        app.add_device_extension::<ash::extensions::khr::DeferredHostOperations>();
+
+        #[cfg(feature = "glsl")]
+        app.add_plugins(crate::shader::loader::GlslPlugin);
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =
@@ -278,6 +288,10 @@ impl Plugin for RhyolitePlugin {
 
         // Add allocator
         app.world.init_resource::<crate::Allocator>();
+        app.world.init_resource::<crate::pipeline::PipelineCache>();
+        app.world
+            .init_resource::<crate::DeferredOperationTaskPool>();
+        app.init_asset_loader::<crate::shader::loader::SpirvLoader>();
     }
 }
 

@@ -1,13 +1,20 @@
-use std::{ffi::CStr, sync::Arc};
+use std::ffi::CStr;
 
-use ash::prelude::VkResult;
-use bevy::asset::{Asset, AssetLoader, Handle, AsyncReadExt};
-use bevy::reflect::TypePath;
 use crate::Device;
+use ash::prelude::VkResult;
 use ash::vk;
+use bevy::asset::{Asset, Handle};
+use bevy::reflect::TypePath;
 use cstr::cstr;
-use thiserror::Error;
 
+#[cfg(feature = "glsl")]
+mod glsl;
+mod spirv;
+pub mod loader {
+    #[cfg(feature = "glsl")]
+    pub use super::glsl::*;
+    pub use super::spirv::*;
+}
 
 #[derive(TypePath, Asset)]
 pub struct ShaderModule {
@@ -39,7 +46,6 @@ impl Drop for ShaderModule {
         }
     }
 }
-
 #[derive(Clone)]
 pub struct SpecializedShader {
     pub stage: vk::ShaderStageFlags,
@@ -47,6 +53,17 @@ pub struct SpecializedShader {
     pub shader: Handle<ShaderModule>,
     pub specialization_info: SpecializationInfo,
     pub entry_point: &'static CStr,
+}
+impl Default for SpecializedShader {
+    fn default() -> Self {
+        Self {
+            stage: vk::ShaderStageFlags::empty(),
+            flags: vk::PipelineShaderStageCreateFlags::empty(),
+            shader: Handle::default(),
+            specialization_info: SpecializationInfo::new(),
+            entry_point: cstr!("main"),
+        }
+    }
 }
 impl SpecializedShader {
     pub fn with_const<T: Copy + 'static>(mut self, constant_id: u32, item: T) -> Self {
@@ -70,52 +87,6 @@ impl SpecializedShader {
         }
     }
 }
-
-#[derive(Debug, Error)]
-pub enum SpirvLoaderError {
-    #[error("io error: {0}")]
-    IoError(#[from] std::io::Error),
-
-    #[error("vulkan error: {0:?}")]
-    VkError(#[from] vk::Result),
-}
-pub struct SpirvLoader {
-    device: Device,
-}
-impl SpirvLoader {
-    pub(crate) fn new(device: Device) -> Self {
-        Self { device }
-    }
-}
-impl AssetLoader for SpirvLoader {
-    type Asset = ShaderModule;
-    type Settings = ();
-    type Error = SpirvLoaderError;
-    fn load<'a>(
-        &'a self,
-        reader: &'a mut bevy::asset::io::Reader,
-        _settings: &'a Self::Settings,
-        _load_context: &'a mut bevy::asset::LoadContext,
-    ) -> bevy::utils::BoxedFuture<'a, Result<ShaderModule, Self::Error>> {
-        let device = self.device.clone();
-        return Box::pin(async move {
-            let mut bytes = Vec::new();
-            reader.read_to_end(&mut bytes).await?;
-            assert!(bytes.len() % 4 == 0);
-            let bytes = unsafe {
-                std::slice::from_raw_parts(bytes.as_ptr() as *const u32, bytes.len() / 4)
-            };
-            let shader = ShaderModule::new(device, bytes)?;
-            Ok(shader)
-        });
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["spv"]
-    }
-}
-
-
 #[derive(Clone, Default, Debug)]
 pub struct SpecializationInfo {
     pub(super) data: Vec<u8>,

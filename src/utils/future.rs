@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin};
+use std::future::Future;
 
 pub fn unwrap_future<F: Future>(future: F) -> F::Output {
     let future = std::pin::pin!(future);

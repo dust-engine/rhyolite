@@ -13,7 +13,10 @@ use bevy::ecs::{
 use bevy::window::{PrimaryWindow, Window};
 
 use crate::{
-    ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker}, plugin::RhyoliteApp, utils::{ColorSpace, SharingMode}, Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter, Surface
+    ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
+    plugin::RhyoliteApp,
+    utils::{ColorSpace, SharingMode},
+    Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -153,20 +156,23 @@ impl Swapchain {
                     .into_iter()
                     .enumerate()
                     .map(|(i, image)| {
-                    let view = device.create_image_view(&vk::ImageViewCreateInfo {
-                        image,
-                        view_type: vk::ImageViewType::TYPE_2D,
-                        format: info.image_format,
-                        components: vk::ComponentMapping::default(),
-                        subresource_range: vk::ImageSubresourceRange {
-                            aspect_mask: vk::ImageAspectFlags::COLOR,
-                            base_mip_level: 0,
-                            level_count: 1,
-                            base_array_layer: 0,
-                            layer_count: 1,
-                        },
-                        ..Default::default()
-                    }, None)?;
+                        let view = device.create_image_view(
+                            &vk::ImageViewCreateInfo {
+                                image,
+                                view_type: vk::ImageViewType::TYPE_2D,
+                                format: info.image_format,
+                                components: vk::ComponentMapping::default(),
+                                subresource_range: vk::ImageSubresourceRange {
+                                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                                    base_mip_level: 0,
+                                    level_count: 1,
+                                    base_array_layer: 0,
+                                    layer_count: 1,
+                                },
+                                ..Default::default()
+                            },
+                            None,
+                        )?;
                         let mut img = RenderImage::new(SwapchainImageInner {
                             image,
                             indice: i as u32,
@@ -245,25 +251,28 @@ impl Swapchain {
                 .into_iter()
                 .enumerate()
                 .map(|(i, image)| {
-                    let view = self.inner.device.create_image_view(&vk::ImageViewCreateInfo {
-                        image,
-                        view_type: vk::ImageViewType::TYPE_2D,
-                        format: self.inner.format,
-                        components: vk::ComponentMapping::default(),
-                        subresource_range: vk::ImageSubresourceRange {
-                            aspect_mask: vk::ImageAspectFlags::COLOR,
-                            base_mip_level: 0,
-                            level_count: 1,
-                            base_array_layer: 0,
-                            layer_count: 1,
+                    let view = self.inner.device.create_image_view(
+                        &vk::ImageViewCreateInfo {
+                            image,
+                            view_type: vk::ImageViewType::TYPE_2D,
+                            format: self.inner.format,
+                            components: vk::ComponentMapping::default(),
+                            subresource_range: vk::ImageSubresourceRange {
+                                aspect_mask: vk::ImageAspectFlags::COLOR,
+                                base_mip_level: 0,
+                                level_count: 1,
+                                base_array_layer: 0,
+                                layer_count: 1,
+                            },
+                            ..Default::default()
                         },
-                        ..Default::default()
-                    }, None)?;
+                        None,
+                    )?;
                     let mut img = RenderImage::new(SwapchainImageInner {
                         image,
                         indice: i as u32,
                         swapchain: self.inner.clone(),
-                        view
+                        view,
                     });
                     img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                     img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;

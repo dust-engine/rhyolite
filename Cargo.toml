@@ -10,10 +10,14 @@ members = [
   "crates/*",
 ]
 
+[features]
+default = ["glsl", "playout"]
+glsl = ["shaderc"]
+
 [dependencies]
 crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
-bevy = { version = "0.13", default-features = false, features=["multi-threaded","wayland", "x11", "bevy_asset"] }
+bevy = { version = "0.13", default-features = false, features=["multi-threaded","wayland", "x11", "bevy_asset", "asset_processor", "file_watcher"] }
 ash = "0.37"
 tracing = "0.1"
 cstr = "0.2"
@@ -25,7 +29,10 @@ arrayvec = "0.7"
 itertools = "0.12"
 vk-mem = "0.3"
 thiserror = "1.0"
-playout = { path = "../playout" }
+playout = { path = "../playout", optional = true }
+
+# GLSL
+shaderc = { version = "0.8", optional = true }
 
 [patch.crates-io]
 bevy = { path = "../bevy" }

@@ -4,26 +4,31 @@ use std::mem::MaybeUninit;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
+use bevy::asset::{load_internal_asset, AssetServer, Assets, Handle};
 use bevy::ecs::prelude::*;
+use bevy::ecs::query::QuerySingleError;
+use bevy::input;
 use bevy::{
-    app::{App, Plugin, PostUpdate, Update},
+    app::{App, Plugin, PostUpdate, Startup},
     ecs::{query::QueryFilter, schedule::IntoSystemConfigs},
     log::tracing_subscriber::layer::Filter,
     window::{PrimaryWindow, Window},
 };
 pub use bevy_egui::*;
 use rhyolite::{
-    ash,
+    acquire_swapchain_image, ash,
     ash::vk,
     ecs::{Barriers, IntoRenderSystemConfigs},
     ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderRes},
-    Access, Allocator, BufferArray, BufferLike, Device, HasDevice, Instance,
-    PhysicalDeviceMemoryModel, RhyoliteApp,
-    SwapchainImage,
-    ImageLike,
-    ImageViewLike,
+    pipeline::{
+        CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
+        PipelineCache, PipelineLayout,
+    },
     present,
-    pipeline::{PipelineLayout,DescriptorSetLayout}
+    shader::{ShaderModule, SpecializedShader},
+    utils::SendBox,
+    Access, Allocator, BufferArray, BufferLike, DeferredOperationTaskPool, Device, HasDevice,
+    ImageLike, ImageViewLike, Instance, PhysicalDeviceMemoryModel, RhyoliteApp, SwapchainImage,
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -37,20 +42,27 @@ impl<Filter: QueryFilter> Default for EguiPlugin<Filter> {
     }
 }
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
+pub enum RenderUiSystem {
+    ExtractNode,
+}
+
 impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> {
     fn build(&self, app: &mut App) {
         // TODO: Rip out the copying, don't add the copy buffer systems if we don't need to copy buffers.
-        app.add_plugins(bevy::time::TimePlugin); // This should've been declared in bevy_egui instead.
         app.add_plugins(bevy_egui::EguiPlugin);
         app.add_systems(
             PostUpdate,
             (
                 collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
-                draw::<Filter>.with_barriers(draw_barriers::<Filter>)
-                .after(collect_outputs::<Filter>)
-                .before(present)
+                draw::<Filter>
+                    .with_barriers(draw_barriers::<Filter>)
+                    .after(collect_outputs::<Filter>)
+                    .after(acquire_swapchain_image::<Filter>)
+                    .before(present),
             ),
         );
+        app.add_systems(Startup, initialize_pipelines);
         app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering);
     }
     fn finish(&self, app: &mut App) {
@@ -76,23 +88,125 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
     }
 }
 
-
+#[derive(Resource)]
+struct EguiPipelines {
+    pipeline: CachedPipeline<GraphicsPipeline>,
+}
 fn initialize_pipelines(
-    device: Res<Device>
+    mut commands: Commands,
+    device: Res<Device>,
+    pipeline_cache: Res<PipelineCache>,
+    assets: Res<AssetServer>,
 ) {
     let desc0 = DescriptorSetLayout::new(
         device.clone(),
-        &playout_macro::layout!("draw.playout", 0),
+        &playout_macro::layout!("../../../assets/shaders/draw.playout", 0),
         vk::DescriptorSetLayoutCreateFlags::empty(),
-    ).unwrap();
+    )
+    .unwrap();
     let layout = PipelineLayout::new(
         device.clone(),
-        vec![
-            Arc::new(desc0)
-        ],
+        vec![Arc::new(desc0)],
         &[],
         vk::PipelineLayoutCreateFlags::empty(),
-    );
+    )
+    .unwrap();
+    let pipeline_create_info = GraphicsPipelineBuildInfo {
+        device: device.clone(),
+        stages: vec![
+            SpecializedShader {
+                stage: vk::ShaderStageFlags::VERTEX,
+                shader: assets.load("shaders/egui.vert"),
+                ..Default::default()
+            },
+            SpecializedShader {
+                stage: vk::ShaderStageFlags::FRAGMENT,
+                shader: assets.load("shaders/egui.frag"),
+                ..Default::default()
+            },
+        ],
+        builder: move |mut builder| {
+            let input_bindings = vk::VertexInputBindingDescription {
+                binding: 0,
+                stride: std::mem::size_of::<egui::epaint::Vertex>() as u32,
+                input_rate: vk::VertexInputRate::VERTEX,
+            };
+            let input_attributes = [
+                vk::VertexInputAttributeDescription {
+                    binding: 0,
+                    location: 0,
+                    format: vk::Format::R32G32_SFLOAT,
+                    offset: 0,
+                }, // pos
+                vk::VertexInputAttributeDescription {
+                    binding: 0,
+                    location: 1,
+                    format: vk::Format::R32G32_SFLOAT,
+                    offset: std::mem::size_of::<[f32; 2]>() as u32,
+                }, // uv
+                vk::VertexInputAttributeDescription {
+                    binding: 0,
+                    location: 2,
+                    format: vk::Format::B8G8R8A8_UNORM,
+                    offset: std::mem::size_of::<[f32; 4]>() as u32,
+                }, // color
+            ];
+            let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
+                vertex_binding_description_count: 1,
+                p_vertex_binding_descriptions: &input_bindings,
+                vertex_attribute_description_count: input_attributes.len() as u32,
+                p_vertex_attribute_descriptions: input_attributes.as_ptr(),
+                ..Default::default()
+            };
+            let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
+                topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                primitive_restart_enable: vk::FALSE,
+                ..Default::default()
+            };
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
+            let scisser = vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: 1,
+                    height: 1,
+                },
+            };
+            let viewport_state = vk::PipelineViewportStateCreateInfo {
+                viewport_count: 1,
+                p_viewports: &viewport,
+                scissor_count: 1,
+                p_scissors: &scisser,
+                ..Default::default()
+            };
+            let rasterization_state = vk::PipelineRasterizationStateCreateInfo {
+                polygon_mode: vk::PolygonMode::FILL,
+                cull_mode: vk::CullModeFlags::NONE,
+                line_width: 1.0,
+                ..Default::default()
+            };
+            let multisample_state = vk::PipelineMultisampleStateCreateInfo {
+                rasterization_samples: vk::SampleCountFlags::TYPE_1,
+                sample_shading_enable: vk::FALSE,
+                ..Default::default()
+            };
+            builder.p_vertex_input_state = &vertex_input_state;
+            builder.p_input_assembly_state = &input_assembly_state;
+            builder.p_viewport_state = &viewport_state;
+            builder.p_rasterization_state = &rasterization_state;
+            builder.p_multisample_state = &multisample_state;
+            builder.layout = layout.raw();
+            builder.build()
+        },
+    };
+    let pipeline = pipeline_cache.create_graphics(pipeline_create_info);
+    commands.insert_resource(EguiPipelines { pipeline });
 }
 
 struct EguiHostBuffer<Filter: QueryFilter> {
@@ -308,9 +422,14 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
 
 fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
     mut barriers: In<Barriers>,
-    mut egui_render_output: Query<(Entity, &EguiRenderOutput, &mut SwapchainImage), Filter>,
+    mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage), Filter>,
 ) {
-    let (_, output, mut swapchain_image) = egui_render_output.get_single_mut().unwrap();
+    let (output, mut swapchain_image) = match egui_render_output.get_single_mut() {
+        Ok(r) => r,
+        Err(QuerySingleError::NoEntities(_)) => return,
+        Err(QuerySingleError::MultipleEntities(_)) => panic!(),
+    };
+
     if output.paint_jobs.is_empty() {
         return;
     }
@@ -329,38 +448,54 @@ fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     mut commands: RenderCommands<'g'>,
     mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(Entity, &EguiRenderOutput, &mut SwapchainImage), Filter>,
+    mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage), Filter>,
+    mut pipeline: ResMut<EguiPipelines>,
+    pipeline_cache: Res<PipelineCache>,
+
+    assets: Res<Assets<ShaderModule>>,
+    task_pool: Res<DeferredOperationTaskPool>,
 ) {
-    let (_, output, swapchain_image) = egui_render_output.get_single_mut().unwrap();
+    let (output, mut swapchain_image) = match egui_render_output.get_single_mut() {
+        Ok(r) => r,
+        Err(QuerySingleError::NoEntities(_)) => return,
+        Err(QuerySingleError::MultipleEntities(_)) => panic!(),
+    };
     if output.paint_jobs.is_empty() {
         return;
     }
-    let pass = commands.record_commands().begin_rendering(&vk::RenderingInfo {
-        flags: vk::RenderingFlags::empty(),
-        render_area: vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-                width: swapchain_image.extent().width,
-                height: swapchain_image.extent().width,
-            },
-        },
-        layer_count: 1,
-        color_attachment_count: 1,
-        p_color_attachments: &vk::RenderingAttachmentInfo {
-            image_view: swapchain_image.raw_image_view(),
-            image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            resolve_mode: vk::ResolveModeFlags::NONE,
-            resolve_image_view: vk::ImageView::null(),
-            resolve_image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            load_op: vk::AttachmentLoadOp::DONT_CARE,
-            store_op: vk::AttachmentStoreOp::STORE,
-            clear_value: vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [1.0, 0.0, 0.0, 1.0],
+    let Some(pipeline) =
+        pipeline_cache.retrieve_graphics(&mut pipeline.pipeline, &assets, &task_pool)
+    else {
+        return;
+    };
+    let pass = commands
+        .record_commands()
+        .begin_rendering(&vk::RenderingInfo {
+            flags: vk::RenderingFlags::empty(),
+            render_area: vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: swapchain_image.extent().width,
+                    height: swapchain_image.extent().width,
                 },
             },
+            layer_count: 1,
+            color_attachment_count: 1,
+            p_color_attachments: &vk::RenderingAttachmentInfo {
+                image_view: swapchain_image.raw_image_view(),
+                image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                resolve_mode: vk::ResolveModeFlags::NONE,
+                resolve_image_view: vk::ImageView::null(),
+                resolve_image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                load_op: vk::AttachmentLoadOp::DONT_CARE,
+                store_op: vk::AttachmentStoreOp::STORE,
+                clear_value: vk::ClearValue {
+                    color: vk::ClearColorValue {
+                        float32: [1.0, 0.0, 0.0, 1.0],
+                    },
+                },
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    });
+        });
 }

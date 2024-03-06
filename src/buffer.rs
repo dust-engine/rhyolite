@@ -1,7 +1,6 @@
 use std::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut, Index, IndexMut},
-    ptr::NonNull,
 };
 
 use ash::{prelude::VkResult, vk};
