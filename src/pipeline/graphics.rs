@@ -4,7 +4,7 @@ use std::{
 };
 
 use ash::{prelude::VkResult, vk};
-use bevy::asset::{AssetId, Assets};
+use bevy::{asset::{AssetId, Assets}, utils::petgraph::Graph};
 
 use crate::shader::{ShaderModule, SpecializedShader};
 use crate::{
@@ -16,6 +16,18 @@ use crate::{
 pub struct GraphicsPipeline {
     device: Device,
     pipeline: vk::Pipeline,
+}
+impl GraphicsPipeline {
+    pub fn raw(&self) -> vk::Pipeline {
+        self.pipeline
+    }
+}
+impl Drop for GraphicsPipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_pipeline(self.pipeline, None);
+        }
+    }
 }
 
 impl super::Pipeline for GraphicsPipeline {

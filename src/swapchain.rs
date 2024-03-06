@@ -605,7 +605,7 @@ impl ImageLike for SwapchainImageInner {
     fn extent(&self) -> vk::Extent3D {
         vk::Extent3D {
             width: self.swapchain.extent.width,
-            height: self.swapchain.extent.width,
+            height: self.swapchain.extent.height,
             depth: 1,
         }
     }

@@ -2,6 +2,7 @@
 
 use std::mem::MaybeUninit;
 use std::ops::DerefMut;
+use std::os::raw::c_void;
 use std::sync::Arc;
 
 use bevy::asset::{load_internal_asset, AssetServer, Assets, Handle};
@@ -89,7 +90,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
 }
 
 #[derive(Resource)]
-struct EguiPipelines {
+pub struct EguiPipelines {
     pipeline: CachedPipeline<GraphicsPipeline>,
 }
 fn initialize_pipelines(
@@ -196,11 +197,31 @@ fn initialize_pipelines(
                 sample_shading_enable: vk::FALSE,
                 ..Default::default()
             };
+            let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
+                attachment_count: 1,
+                p_attachments: &vk::PipelineColorBlendAttachmentState {
+                    color_write_mask: vk::ColorComponentFlags::R
+                        | vk::ColorComponentFlags::G
+                        | vk::ColorComponentFlags::B
+                        | vk::ColorComponentFlags::A,
+                    blend_enable: vk::FALSE,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let dynamic_rendering_format = vk::Format::B8G8R8A8_UNORM;
+            let dynamic_rendering_info = vk::PipelineRenderingCreateInfo{
+                color_attachment_count: 1,
+                p_color_attachment_formats: &dynamic_rendering_format,
+                ..Default::default()
+            };
             builder.p_vertex_input_state = &vertex_input_state;
             builder.p_input_assembly_state = &input_assembly_state;
             builder.p_viewport_state = &viewport_state;
             builder.p_rasterization_state = &rasterization_state;
             builder.p_multisample_state = &multisample_state;
+            builder.p_color_blend_state = &color_blend_state;
+            builder.p_next = &dynamic_rendering_info as *const _ as *const c_void;
             builder.layout = layout.raw();
             builder.build()
         },
@@ -209,7 +230,7 @@ fn initialize_pipelines(
     commands.insert_resource(EguiPipelines { pipeline });
 }
 
-struct EguiHostBuffer<Filter: QueryFilter> {
+pub struct EguiHostBuffer<Filter: QueryFilter> {
     index_buffer: BufferArray<u32>,
     vertex_buffer: BufferArray<egui::epaint::Vertex>,
     marker: std::marker::PhantomData<Filter>,
@@ -231,7 +252,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> PerFrameResource for EguiHostB
     }
 }
 #[derive(Resource)]
-struct EguiDeviceBuffer<Filter: QueryFilter> {
+pub struct EguiDeviceBuffer<Filter: QueryFilter> {
     total_indices_count: usize,
     total_vertices_count: usize,
     index_buffer: RenderRes<BufferArray<u32>>,
@@ -356,7 +377,7 @@ fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
             commands.retain(old);
             let mut buf = BufferArray::new_resource(
                 allocator.clone(),
-                vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             );
             buf.realloc(device_buffers.total_indices_count).unwrap();
             RenderRes::new(buf)
@@ -444,7 +465,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
     );
 }
 /// Issue draw commands for egui.
-fn draw<Filter: QueryFilter + Send + Sync + 'static>(
+pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     mut commands: RenderCommands<'g'>,
     mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
@@ -463,12 +484,15 @@ fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     if output.paint_jobs.is_empty() {
         return;
     }
-    let Some(pipeline) =
+    let Some((pipeline, old_pipeline)) =
         pipeline_cache.retrieve_graphics(&mut pipeline.pipeline, &assets, &task_pool)
     else {
         return;
     };
-    let pass = commands
+    if let Some(old_pipeline) = old_pipeline {
+        commands.retain(old_pipeline);
+    }
+    let mut pass = commands
         .record_commands()
         .begin_rendering(&vk::RenderingInfo {
             flags: vk::RenderingFlags::empty(),
@@ -476,7 +500,7 @@ fn draw<Filter: QueryFilter + Send + Sync + 'static>(
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: vk::Extent2D {
                     width: swapchain_image.extent().width,
-                    height: swapchain_image.extent().width,
+                    height: swapchain_image.extent().height,
                 },
             },
             layer_count: 1,
@@ -498,4 +522,43 @@ fn draw<Filter: QueryFilter + Send + Sync + 'static>(
             },
             ..Default::default()
         });
+    pass.bind_pipeline(pipeline.raw());
+
+    let mut vertex_buffer = device_buffer.vertex_buffer.raw_buffer();
+    let mut index_buffer = device_buffer.index_buffer.raw_buffer();
+    if vertex_buffer == vk::Buffer::null() || index_buffer == vk::Buffer::null() {
+        vertex_buffer = host_buffers.vertex_buffer.raw_buffer();
+        index_buffer = host_buffers.index_buffer.raw_buffer();
+    }
+    for egui::epaint::ClippedPrimitive {
+        clip_rect,
+        primitive,
+    } in output.paint_jobs.iter()
+    {
+        let mesh = match primitive {
+            egui::epaint::Primitive::Mesh(mesh) => mesh,
+            egui::epaint::Primitive::Callback(_) => panic!(),
+        };
+
+        pass.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+        pass.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
+        pass.draw(mesh.vertices.len() as u32, 0, 0, 0);
+    }
+    drop(pass);
+
+
+
+    commands
+    .record_commands()
+    .transition_resources()
+    .image(
+        &mut swapchain_image,
+        Access {
+            stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+            access: vk::AccessFlags2::empty(),
+        },
+        vk::ImageLayout::PRESENT_SRC_KHR,
+        true,
+    )
+    .end();
 }
