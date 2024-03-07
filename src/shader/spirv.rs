@@ -52,7 +52,6 @@ impl AssetLoader for SpirvLoader {
         return Box::pin(async move {
             let mut bytes = Vec::new();
             reader.read_to_end(&mut bytes).await?;
-            println!("bytes: {:?}", bytes.len());
             assert!(bytes.len() % 4 == 0);
             let bytes = unsafe {
                 std::slice::from_raw_parts(bytes.as_ptr() as *const u32, bytes.len() / 4)

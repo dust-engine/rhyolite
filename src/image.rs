@@ -1,4 +1,7 @@
-use ash::vk;
+use ash::{prelude::VkResult, vk};
+
+use crate::Allocator;
+use vk_mem::Alloc;
 
 pub trait ImageLike {
     fn raw_image(&self) -> vk::Image;
@@ -70,4 +73,41 @@ impl<T: ImageLike> ImageLike for ImageSubregion<T> {
 }
 pub trait ImageViewLike: ImageLike {
     fn raw_image_view(&self) -> vk::ImageView;
+}
+
+pub struct Image {
+    allocator: Allocator,
+    image: vk::Image,
+    allocation: vk_mem::Allocation,
+    extent: vk::Extent3D,
+}
+impl Drop for Image {
+    fn drop(&mut self) {
+        unsafe {
+            self.allocator
+                .destroy_image(self.image, &mut self.allocation);
+        }
+    }
+}
+impl Image {
+    pub fn new_device_image(allocator: Allocator, info: &vk::ImageCreateInfo) -> VkResult<Self> {
+        unsafe {
+            let (image, allocation) = allocator.create_image(
+                info,
+                &vk_mem::AllocationCreateInfo {
+                    usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    ..Default::default()
+                },
+            )?;
+            Ok(Self {
+                extent: info.extent,
+                allocator,
+                image,
+                allocation,
+            })
+        }
+    }
+    pub fn extent(&self) -> vk::Extent3D {
+        self.extent
+    }
 }

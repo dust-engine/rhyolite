@@ -1,3 +1,5 @@
+pub mod staging;
+
 use std::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut, Index, IndexMut},

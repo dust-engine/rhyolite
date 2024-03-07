@@ -1,11 +1,12 @@
 #![feature(associated_type_defaults)]
+#![feature(generic_const_exprs)]
 #![feature(noop_waker)]
 
 mod access;
 mod alloc;
 mod buffer;
 mod command_pool;
-mod commands;
+pub mod commands;
 pub mod debug;
 mod deferred;
 mod device;

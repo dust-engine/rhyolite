@@ -33,9 +33,13 @@ use bevy::ecs::{
 use queue_cap::*;
 
 use crate::{
-    command_pool::RecordingCommandBuffer, commands::CommandRecorder, ecs::Barriers,
-    queue::QueueType, semaphore::TimelineSemaphore, utils::Dispose, Device, HasDevice, QueueRef,
-    QueuesRouter,
+    command_pool::RecordingCommandBuffer,
+    commands::{CommandRecorder, CommonCommands},
+    ecs::Barriers,
+    queue::QueueType,
+    semaphore::TimelineSemaphore,
+    utils::Dispose,
+    Device, HasDevice, QueueRef, QueuesRouter,
 };
 
 use super::{
@@ -77,18 +81,28 @@ impl<'w, 's, const Q: char> RenderCommands<'w, 's, Q>
 where
     (): IsQueueCap<Q>,
 {
-    pub fn record_commands(&mut self) -> CommandRecorder<Q> {
-        let cmd_buf = self.recording_cmd_buf.0.record();
-        CommandRecorder {
-            device: self.recording_cmd_buf.0.device(),
-            cmd_buf,
-        }
-    }
     pub fn retain<T: 'static + Drop + Send + Sync>(&mut self, obj: Dispose<T>) {
         self.retained_objects
             .entry(self.frame_index)
             .or_default()
             .push(Box::new(unsafe { obj.take() }));
+    }
+}
+impl<'w, 's, const Q: char> HasDevice for RenderCommands<'w, 's, Q>
+where
+    (): IsQueueCap<Q>,
+{
+    fn device(&self) -> &Device {
+        self.recording_cmd_buf.0.device()
+    }
+}
+impl<'w, 's, const Q: char> CommandRecorder for RenderCommands<'w, 's, Q>
+where
+    (): IsQueueCap<Q>,
+{
+    const QUEUE_CAP: char = Q;
+    fn cmd_buf(&mut self) -> vk::CommandBuffer {
+        self.recording_cmd_buf.0.record()
     }
 }
 
@@ -555,7 +569,7 @@ where
             world,
             change_tick,
         );
-        let mut barriers = render_commands.record_commands().transition_resources();
+        let mut barriers = render_commands.transition_resources();
         barriers.global_barriers = global_barriers;
         barriers.image_barriers = image_barriers;
         barriers.buffer_barriers = buffer_barriers;

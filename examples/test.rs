@@ -1,20 +1,19 @@
 use ash::vk;
 
-use bevy::app::{PluginGroup, PostUpdate, Update};
+use bevy::app::{PluginGroup, Update};
+use bevy::ecs::system::Local;
 use bevy::ecs::{
     entity::Entity,
     query::With,
-    schedule::IntoSystemConfigs,
     system::{In, Query},
 };
 use bevy::window::PrimaryWindow;
+use rhyolite::debug::DebugUtilsPlugin;
 use rhyolite::{
-    acquire_swapchain_image,
+    commands::CommonCommands,
     ecs::{Barriers, RenderCommands},
-    present, Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage,
-    SwapchainPlugin,
+    Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage, SwapchainPlugin,
 };
-use rhyolite::{debug::DebugUtilsPlugin, ecs::IntoRenderSystemConfigs};
 use rhyolite_egui::{egui, EguiContexts};
 
 fn main() {
@@ -60,9 +59,24 @@ fn main() {
     app.run();
 }
 
-fn ui_example_system(mut contexts: EguiContexts) {
-    egui::Window::new("Hello").show(contexts.ctx_mut(), |ui| {
-        ui.label("world");
+#[derive(Default)]
+struct UIState {
+    name: String,
+    age: u32,
+}
+fn ui_example_system(mut contexts: EguiContexts, mut state: Local<UIState>) {
+    egui::Window::new("hello").show(contexts.ctx_mut(), |ui| {
+        ui.heading("My egui Application");
+        ui.horizontal(|ui| {
+            let name_label = ui.label("Your name: ");
+            ui.text_edit_singleline(&mut state.name)
+                .labelled_by(name_label.id);
+        });
+        ui.add(egui::Slider::new(&mut state.age, 0..=120).text("age"));
+        if ui.button("Increment").clicked() {
+            state.age += 1;
+        }
+        ui.label(format!("Hello '{}', age {}", state.name, state.age));
     });
 }
 fn clear_main_window_color(
@@ -72,7 +86,7 @@ fn clear_main_window_color(
     let Ok(mut swapchain_image) = windows.get_single_mut() else {
         return;
     };
-    commands.record_commands().clear_color_image(
+    commands.clear_color_image(
         swapchain_image.image,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         &vk::ClearColorValue {
@@ -87,7 +101,6 @@ fn clear_main_window_color(
         }],
     );
     commands
-        .record_commands()
         .transition_resources()
         .image(
             &mut swapchain_image,

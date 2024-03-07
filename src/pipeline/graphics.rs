@@ -4,10 +4,7 @@ use std::{
 };
 
 use ash::{prelude::VkResult, vk};
-use bevy::{
-    asset::{AssetId, Assets},
-    utils::petgraph::Graph,
-};
+use bevy::asset::{AssetId, Assets};
 
 use crate::shader::{ShaderModule, SpecializedShader};
 use crate::{

@@ -1,36 +1,37 @@
 #![feature(maybe_uninit_write_slice)]
 
+use std::collections::BTreeMap;
 use std::mem::MaybeUninit;
 use std::ops::DerefMut;
 use std::os::raw::c_void;
 use std::sync::Arc;
 
-use bevy::asset::{load_internal_asset, AssetServer, Assets, Handle};
+use bevy::asset::{AssetServer, Assets};
 use bevy::ecs::prelude::*;
 use bevy::ecs::query::QuerySingleError;
-use bevy::input;
+
 use bevy::math::Vec2;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
     ecs::{query::QueryFilter, schedule::IntoSystemConfigs},
-    log::tracing_subscriber::layer::Filter,
-    window::{PrimaryWindow, Window},
+    window::PrimaryWindow,
 };
+use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::{
     acquire_swapchain_image, ash,
     ash::vk,
+    commands::{CommonCommands, GraphicsCommands, RenderPassCommands, TransferCommands},
     ecs::{Barriers, IntoRenderSystemConfigs},
-    ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderRes},
+    ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderImage, RenderRes},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
         PipelineCache, PipelineLayout,
     },
     present,
     shader::{ShaderModule, SpecializedShader},
-    utils::SendBox,
     Access, Allocator, BufferArray, BufferLike, DeferredOperationTaskPool, Device, HasDevice,
-    ImageLike, ImageViewLike, Instance, PhysicalDeviceMemoryModel, RhyoliteApp, SwapchainImage,
+    Image, ImageLike, ImageViewLike, RhyoliteApp, SwapchainImage,
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -278,6 +279,7 @@ pub struct EguiDeviceBuffer<Filter: QueryFilter> {
     total_vertices_count: usize,
     index_buffer: RenderRes<BufferArray<u32>>,
     vertex_buffer: RenderRes<BufferArray<egui::epaint::Vertex>>,
+    textures: BTreeMap<u64, RenderImage<Image>>,
     marker: std::marker::PhantomData<Filter>,
 }
 impl<Filter: QueryFilter + Send + Sync + 'static> EguiDeviceBuffer<Filter> {
@@ -294,6 +296,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> EguiDeviceBuffer<Filter> {
             marker: Default::default(),
             total_indices_count: 0,
             total_vertices_count: 0,
+            textures: Default::default(),
         }
     }
 }
@@ -305,12 +308,14 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer
 }
 
 /// Collect output from egui and copy it into a host-side buffer
+/// Create textures
 fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(Entity, &EguiRenderOutput), Filter>,
+    mut egui_render_output: Query<(Entity, &mut EguiRenderOutput), Filter>,
+    allocator: Res<Allocator>,
 ) {
-    let Ok((window, mut output)) = egui_render_output.get_single_mut() else {
+    let Ok((window, output)) = egui_render_output.get_single_mut() else {
         return;
     };
 
@@ -373,11 +378,63 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     assert_eq!(total_vertices_count, device_buffers.total_vertices_count);
 }
 
+fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
+    mut commands: RenderCommands<'g'>,
+    mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+    mut egui_render_output: Query<(Entity, &mut EguiRenderOutput), Filter>,
+    allocator: Res<Allocator>,
+) {
+    let Ok((window, mut output)) = egui_render_output.get_single_mut() else {
+        return;
+    };
+    for (texture_id, image_delta) in output
+        .textures_delta
+        .set
+        .iter()
+        .filter(|(_, image_delta)| image_delta.is_whole())
+    {
+        let texture_id = match texture_id {
+            TextureId::Managed(id) => *id,
+            TextureId::User(id) => unimplemented!(),
+        };
+        if let Some(existing_img) = device_buffers.textures.get(&texture_id) {
+            if existing_img.extent().width == image_delta.image.size()[0] as u32
+                && existing_img.extent().height == image_delta.image.size()[1] as u32
+            {
+                continue;
+            }
+        }
+        let size = image_delta.image.size();
+        let create_info = vk::ImageCreateInfo {
+            format: vk::Format::B8G8R8A8_UNORM,
+            extent: vk::Extent3D {
+                width: size[0] as u32,
+                height: size[1] as u32,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            ..Default::default()
+        };
+        let image = Image::new_device_image(allocator.clone(), &create_info).unwrap();
+        let image = RenderImage::new(image);
+        if let Some(old) = device_buffers.textures.insert(texture_id, image) {
+            commands.retain(old.into_dispose());
+        }
+    }
+    output.textures_delta.set.clear();
+}
+
 /// Resize the device buffers if necessary. Only runs on Discrete GPUs.
 fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'t'>,
-    host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+    mut commands: RenderCommands<'g'>,
     allocator: Res<Allocator>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
@@ -438,7 +495,7 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
     if device_buffers.total_vertices_count > 0 {
-        commands.record_commands().copy_buffer(
+        commands.copy_buffer(
             host_buffers.vertex_buffer.raw_buffer(),
             device_buffers.vertex_buffer.raw_buffer(),
             &[vk::BufferCopy {
@@ -450,7 +507,7 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
         );
     }
     if device_buffers.total_indices_count > 0 {
-        commands.record_commands().copy_buffer(
+        commands.copy_buffer(
             host_buffers.index_buffer.raw_buffer(),
             device_buffers.index_buffer.raw_buffer(),
             &[vk::BufferCopy {
@@ -534,36 +591,34 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     if let Some(old_pipeline) = old_pipeline {
         commands.retain(old_pipeline);
     }
-    let mut pass = commands
-        .record_commands()
-        .begin_rendering(&vk::RenderingInfo {
-            flags: vk::RenderingFlags::empty(),
-            render_area: vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: vk::Extent2D {
-                    width: swapchain_image.extent().width,
-                    height: swapchain_image.extent().height,
-                },
+    let mut pass = commands.begin_rendering(&vk::RenderingInfo {
+        flags: vk::RenderingFlags::empty(),
+        render_area: vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+                width: swapchain_image.extent().width,
+                height: swapchain_image.extent().height,
             },
-            layer_count: 1,
-            color_attachment_count: 1,
-            p_color_attachments: &vk::RenderingAttachmentInfo {
-                image_view: swapchain_image.raw_image_view(),
-                image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                resolve_mode: vk::ResolveModeFlags::NONE,
-                resolve_image_view: vk::ImageView::null(),
-                resolve_image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                load_op: vk::AttachmentLoadOp::CLEAR,
-                store_op: vk::AttachmentStoreOp::STORE,
-                clear_value: vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [1.0, 0.0, 0.0, 1.0],
-                    },
+        },
+        layer_count: 1,
+        color_attachment_count: 1,
+        p_color_attachments: &vk::RenderingAttachmentInfo {
+            image_view: swapchain_image.raw_image_view(),
+            image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            resolve_mode: vk::ResolveModeFlags::NONE,
+            resolve_image_view: vk::ImageView::null(),
+            resolve_image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            load_op: vk::AttachmentLoadOp::CLEAR,
+            store_op: vk::AttachmentStoreOp::STORE,
+            clear_value: vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [1.0, 0.0, 0.0, 1.0],
                 },
-                ..Default::default()
             },
             ..Default::default()
-        });
+        },
+        ..Default::default()
+    });
     pass.bind_pipeline(pipeline.raw());
 
     let mut vertex_buffer = device_buffer.vertex_buffer.raw_buffer();
@@ -641,7 +696,6 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     drop(pass);
 
     commands
-        .record_commands()
         .transition_resources()
         .image(
             &mut swapchain_image,

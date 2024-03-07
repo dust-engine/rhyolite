@@ -1,25 +1,22 @@
 use ash::vk;
 
 use crate::{
-    ecs::{queue_cap::IsQueueCap, RenderImage, RenderRes},
-    Access, BufferLike, Device, ImageLike,
+    ecs::{RenderImage, RenderRes},
+    Access, BufferLike, Device, HasDevice, ImageLike,
 };
 
 mod render;
+mod transfer;
+pub use render::*;
+pub use transfer::*;
 
-pub struct CommandRecorder<'w, const Q: char>
-where
-    (): IsQueueCap<Q>,
-{
-    pub(crate) device: &'w Device,
-    pub(crate) cmd_buf: vk::CommandBuffer,
+pub trait CommandRecorder: HasDevice {
+    const QUEUE_CAP: char;
+    fn cmd_buf(&mut self) -> vk::CommandBuffer;
 }
 
-impl<'w, const Q: char> CommandRecorder<'w, Q>
-where
-    (): IsQueueCap<Q>,
-{
-    pub fn clear_color_image(
+pub trait CommonCommands: CommandRecorder {
+    fn clear_color_image(
         &mut self,
         image: vk::Image,
         image_layout: vk::ImageLayout,
@@ -27,8 +24,9 @@ where
         ranges: &[vk::ImageSubresourceRange],
     ) {
         unsafe {
-            self.device.cmd_clear_color_image(
-                self.cmd_buf,
+            let cmd_buf = self.cmd_buf();
+            self.device().cmd_clear_color_image(
+                cmd_buf,
                 image,
                 image_layout,
                 clear_color_value,
@@ -36,23 +34,19 @@ where
             )
         }
     }
-    pub fn transition_resources(&mut self) -> ResourceTransitionCommandRecorder<'w> {
+    fn transition_resources(&mut self) -> ResourceTransitionCommandRecorder {
+        let cmd_buf = self.cmd_buf();
         ResourceTransitionCommandRecorder {
-            device: self.device,
-            cmd_buf: self.cmd_buf,
+            device: self.device(),
+            cmd_buf,
             global_barriers: vk::MemoryBarrier2::default(),
             image_barriers: Vec::new(),
             buffer_barriers: Vec::new(),
             dependency_flags: vk::DependencyFlags::empty(),
         }
     }
-    pub fn copy_buffer(&mut self, src: vk::Buffer, dst: vk::Buffer, regions: &[vk::BufferCopy]) {
-        unsafe {
-            self.device
-                .cmd_copy_buffer(self.cmd_buf, src.raw_buffer(), dst.raw_buffer(), regions);
-        }
-    }
 }
+impl<T> CommonCommands for T where T: CommandRecorder {}
 
 pub struct ResourceTransitionCommandRecorder<'w> {
     device: &'w Device,
