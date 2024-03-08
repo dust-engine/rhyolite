@@ -59,7 +59,10 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
             PostUpdate,
             (
                 collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
-                transfer_image::<Filter>.after(collect_outputs::<Filter>),
+                prepare_image::<Filter>.after(collect_outputs::<Filter>),
+                transfer_image::<Filter>
+                    .after(prepare_image::<Filter>)
+                    .with_barriers(image_barrier::<Filter>),
                 draw::<Filter>
                     .with_barriers(draw_barriers::<Filter>)
                     .after(collect_outputs::<Filter>)
@@ -380,14 +383,94 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     assert_eq!(total_vertices_count, device_buffers.total_vertices_count);
 }
 
+fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
+    mut commands: RenderCommands<'g'>,
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+    mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
+    allocator: Res<Allocator>,
+) {
+    let Ok(output) = egui_render_output.get_single_mut() else {
+        return;
+    };
+    for (texture_id, image_delta) in output
+        .textures_delta
+        .set
+        .iter()
+        .filter(|(_, image_delta)| image_delta.is_whole())
+    {
+        let texture_id = match texture_id {
+            TextureId::Managed(id) => *id,
+            TextureId::User(id) => unimplemented!(),
+        };
+        if let Some(existing_img) = device_buffers.textures.get(&texture_id) {
+            if existing_img.extent().width == image_delta.image.size()[0] as u32
+                && existing_img.extent().height == image_delta.image.size()[1] as u32
+            {
+                continue;
+            }
+        }
+        let size = image_delta.image.size();
+        let create_info = vk::ImageCreateInfo {
+            format: vk::Format::B8G8R8A8_UNORM,
+            image_type: vk::ImageType::TYPE_2D,
+            extent: vk::Extent3D {
+                width: size[0] as u32,
+                height: size[1] as u32,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            ..Default::default()
+        };
+        let image = Image::new_device_image(allocator.clone(), &create_info).unwrap();
+        let image = RenderImage::new(image);
+        if let Some(old) = device_buffers.textures.insert(texture_id, image) {
+            commands.retain(old.into_dispose());
+        }
+    }
+}
+fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
+    mut barriers: In<Barriers>,
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+    mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
+) {
+    let Ok(output) = egui_render_output.get_single_mut() else {
+        return;
+    };
+    for (texture_id, image_delta) in output
+        .textures_delta
+        .set
+        .iter()
+        .filter(|(_, image_delta)| image_delta.is_whole())
+    {
+        let texture_id = match texture_id {
+            TextureId::Managed(id) => *id,
+            TextureId::User(id) => unimplemented!(),
+        };
+        barriers.transition_image(
+            device_buffers.textures.get_mut(&texture_id).unwrap(),
+            Access {
+                access: vk::AccessFlags2::TRANSFER_WRITE,
+                stage: vk::PipelineStageFlags2::COPY,
+            },
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            !image_delta.is_whole(),
+        );
+    }
+}
+
 fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
     mut commands: RenderCommands<'g'>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(Entity, &mut EguiRenderOutput), Filter>,
+    mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     mut staging_belt: ResMut<StagingBelt>,
     allocator: Res<Allocator>,
 ) {
-    let Ok((window, mut output)) = egui_render_output.get_single_mut() else {
+    let Ok(mut output) = egui_render_output.get_single_mut() else {
         return;
     };
     for (texture_id, image_delta) in output
@@ -593,6 +676,26 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
 
     if output.paint_jobs.is_empty() {
         return;
+    }
+    for i in output.paint_jobs.iter() {
+        let mesh = match &i.primitive {
+            egui::epaint::Primitive::Mesh(mesh) => mesh,
+            egui::epaint::Primitive::Callback(_) => panic!(),
+        };
+        let texture_id = match mesh.texture_id {
+            TextureId::Managed(id) => id,
+            TextureId::User(id) => unimplemented!(),
+        };
+        let texture = device_buffer.textures.get_mut(&texture_id).unwrap();
+        barriers.transition_image(
+            texture,
+            Access {
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                access: vk::AccessFlags2::SHADER_READ,
+            },
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            true,
+        );
     }
     barriers.transition_image(
         &mut *swapchain_image,

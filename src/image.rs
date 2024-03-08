@@ -75,6 +75,7 @@ pub trait ImageViewLike: ImageLike {
     fn raw_image_view(&self) -> vk::ImageView;
 }
 
+/// A regular image with 1 mip level and 1 layer fully backed by memory
 pub struct Image {
     allocator: Allocator,
     image: vk::Image,
@@ -112,5 +113,25 @@ impl Image {
     }
     pub fn raw(&self) -> vk::Image {
         self.image
+    }
+}
+impl ImageLike for Image {
+    fn raw_image(&self) -> vk::Image {
+        self.image
+    }
+    fn subresource_range(&self) -> vk::ImageSubresourceRange {
+        vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        }
+    }
+    fn extent(&self) -> vk::Extent3D {
+        self.extent
+    }
+    fn format(&self) -> vk::Format {
+        vk::Format::R8G8B8A8_UNORM
     }
 }
