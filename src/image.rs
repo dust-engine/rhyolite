@@ -110,4 +110,7 @@ impl Image {
     pub fn extent(&self) -> vk::Extent3D {
         self.extent
     }
+    pub fn raw(&self) -> vk::Image {
+        self.image
+    }
 }

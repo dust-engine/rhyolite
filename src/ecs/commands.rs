@@ -605,7 +605,9 @@ where
         for p in self.barrier_producers.iter() {
             archetype_component_access.extend(p.archetype_component_access());
         }
-        self.system_meta.archetype_component_access = archetype_component_access;
+        self.system_meta
+            .archetype_component_access
+            .extend(&archetype_component_access);
     }
 
     fn check_change_tick(&mut self, _change_tick: bevy::ecs::component::Tick) {}

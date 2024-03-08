@@ -1,10 +1,12 @@
 #![feature(associated_type_defaults)]
 #![feature(generic_const_exprs)]
+#![feature(non_null_convenience)]
+#![feature(get_mut_unchecked)]
 #![feature(noop_waker)]
 
 mod access;
 mod alloc;
-mod buffer;
+pub mod buffer;
 mod command_pool;
 pub mod commands;
 pub mod debug;

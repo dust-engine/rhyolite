@@ -72,6 +72,12 @@ impl<T> RenderImage<T> {
             layout: vk::ImageLayout::UNDEFINED,
         }
     }
+    pub fn preinitialized(inner: T) -> Self {
+        Self {
+            res: RenderRes::new(inner),
+            layout: vk::ImageLayout::PREINITIALIZED,
+        }
+    }
     pub unsafe fn get_mut(&mut self) -> &mut T {
         &mut self.res.inner
     }

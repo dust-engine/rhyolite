@@ -1,8 +1,9 @@
 use ash::vk;
 
 use crate::{
+    buffer::BufferLike,
     ecs::{RenderImage, RenderRes},
-    Access, BufferLike, Device, HasDevice, ImageLike,
+    Access, Device, HasDevice, ImageLike,
 };
 
 mod render;

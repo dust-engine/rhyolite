@@ -116,6 +116,18 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
             param_state,
         }
     }
+    fn new_archetype(
+        state: &mut Self::State,
+        archetype: &bevy::ecs::archetype::Archetype,
+        system_meta: &mut bevy::ecs::system::SystemMeta,
+    ) {
+        ResMut::<PerFrameResourceContainer<T>>::new_archetype(
+            &mut state.component_id,
+            archetype,
+            system_meta,
+        );
+        T::Params::new_archetype(&mut state.param_state, archetype, system_meta);
+    }
 
     fn configurate(
         state: &mut Self::State,

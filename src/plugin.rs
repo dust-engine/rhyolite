@@ -288,6 +288,8 @@ impl Plugin for RhyolitePlugin {
 
         // Add allocator
         app.world.init_resource::<crate::Allocator>();
+        app.world
+            .init_resource::<crate::buffer::staging::StagingBelt>();
         app.world.init_resource::<crate::pipeline::PipelineCache>();
         app.world
             .init_resource::<crate::DeferredOperationTaskPool>();
