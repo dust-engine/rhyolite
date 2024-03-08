@@ -11,6 +11,7 @@ use bevy::ecs::prelude::*;
 use bevy::ecs::query::QuerySingleError;
 
 use bevy::math::Vec2;
+use bevy::utils::HashMap;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
     ecs::{query::QueryFilter, schedule::IntoSystemConfigs},
@@ -32,7 +33,7 @@ use rhyolite::{
     present,
     shader::{ShaderModule, SpecializedShader},
     Access, Allocator, BufferArray, BufferLike, DeferredOperationTaskPool, Device, HasDevice,
-    Image, ImageLike, ImageViewLike, RhyoliteApp, SwapchainImage,
+    Image, ImageLike, ImageViewLike, RhyoliteApp, Sampler, SwapchainImage,
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -285,8 +286,9 @@ pub struct EguiDeviceBuffer<Filter: QueryFilter> {
     total_vertices_count: usize,
     index_buffer: RenderRes<BufferArray<u32>>,
     vertex_buffer: RenderRes<BufferArray<egui::epaint::Vertex>>,
-    textures: BTreeMap<u64, RenderImage<Image>>,
+    textures: BTreeMap<u64, (RenderImage<Image>, egui::TextureOptions)>,
     marker: std::marker::PhantomData<Filter>,
+    samplers: HashMap<egui::TextureOptions, Sampler>,
 }
 impl<Filter: QueryFilter + Send + Sync + 'static> EguiDeviceBuffer<Filter> {
     fn new(allocator: &Allocator) -> Self {
@@ -303,6 +305,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> EguiDeviceBuffer<Filter> {
             total_indices_count: 0,
             total_vertices_count: 0,
             textures: Default::default(),
+            samplers: Default::default(),
         }
     }
 }
@@ -402,7 +405,7 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
             TextureId::Managed(id) => *id,
             TextureId::User(id) => unimplemented!(),
         };
-        if let Some(existing_img) = device_buffers.textures.get(&texture_id) {
+        if let Some((existing_img, texture_options)) = device_buffers.textures.get(&texture_id) {
             if existing_img.extent().width == image_delta.image.size()[0] as u32
                 && existing_img.extent().height == image_delta.image.size()[1] as u32
             {
@@ -428,9 +431,42 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
         };
         let image = Image::new_device_image(allocator.clone(), &create_info).unwrap();
         let image = RenderImage::new(image);
-        if let Some(old) = device_buffers.textures.insert(texture_id, image) {
+        if let Some((old, _)) = device_buffers
+            .textures
+            .insert(texture_id, (image, image_delta.options))
+        {
             commands.retain(old.into_dispose());
         }
+
+        device_buffers
+            .samplers
+            .entry(image_delta.options)
+            .or_insert_with(|| {
+                fn convert_filter(filter: egui::TextureFilter) -> vk::Filter {
+                    match filter {
+                        egui::TextureFilter::Nearest => vk::Filter::NEAREST,
+                        egui::TextureFilter::Linear => vk::Filter::LINEAR,
+                    }
+                }
+                let warp = match image_delta.options.wrap_mode {
+                    egui::TextureWrapMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
+                    egui::TextureWrapMode::Repeat => vk::SamplerAddressMode::REPEAT,
+                    egui::TextureWrapMode::MirroredRepeat => {
+                        vk::SamplerAddressMode::MIRRORED_REPEAT
+                    }
+                };
+                Sampler::new(
+                    allocator.device().clone(),
+                    &vk::SamplerCreateInfo {
+                        min_filter: convert_filter(image_delta.options.minification),
+                        mag_filter: convert_filter(image_delta.options.magnification),
+                        address_mode_u: warp,
+                        address_mode_v: warp,
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+            });
     }
 }
 fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
@@ -452,7 +488,7 @@ fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
             TextureId::User(id) => unimplemented!(),
         };
         barriers.transition_image(
-            device_buffers.textures.get_mut(&texture_id).unwrap(),
+            &mut device_buffers.textures.get_mut(&texture_id).unwrap().0,
             Access {
                 access: vk::AccessFlags2::TRANSFER_WRITE,
                 stage: vk::PipelineStageFlags2::COPY,
@@ -473,46 +509,6 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
     let Ok(mut output) = egui_render_output.get_single_mut() else {
         return;
     };
-    for (texture_id, image_delta) in output
-        .textures_delta
-        .set
-        .iter()
-        .filter(|(_, image_delta)| image_delta.is_whole())
-    {
-        let texture_id = match texture_id {
-            TextureId::Managed(id) => *id,
-            TextureId::User(id) => unimplemented!(),
-        };
-        if let Some(existing_img) = device_buffers.textures.get(&texture_id) {
-            if existing_img.extent().width == image_delta.image.size()[0] as u32
-                && existing_img.extent().height == image_delta.image.size()[1] as u32
-            {
-                continue;
-            }
-        }
-        let size = image_delta.image.size();
-        let create_info = vk::ImageCreateInfo {
-            format: vk::Format::B8G8R8A8_UNORM,
-            image_type: vk::ImageType::TYPE_2D,
-            extent: vk::Extent3D {
-                width: size[0] as u32,
-                height: size[1] as u32,
-                depth: 1,
-            },
-            mip_levels: 1,
-            array_layers: 1,
-            samples: vk::SampleCountFlags::TYPE_1,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-            initial_layout: vk::ImageLayout::UNDEFINED,
-            ..Default::default()
-        };
-        let image = Image::new_device_image(allocator.clone(), &create_info).unwrap();
-        let image = RenderImage::new(image);
-        if let Some(old) = device_buffers.textures.insert(texture_id, image) {
-            commands.retain(old.into_dispose());
-        }
-    }
     if output.textures_delta.set.is_empty() {
         return;
     }
@@ -522,7 +518,7 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
             TextureId::Managed(id) => *id,
             TextureId::User(id) => unimplemented!(),
         };
-        let target_image = device_buffers.textures.get(&texture_id).unwrap();
+        let (target_image, _) = device_buffers.textures.get(&texture_id).unwrap();
         let image_offset = image_delta.pos.unwrap_or([0, 0]);
         let buffer_size_needed = image_delta.image.size().iter().product::<usize>()
             * image_delta.image.bytes_per_pixel();
@@ -686,7 +682,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
             TextureId::Managed(id) => id,
             TextureId::User(id) => unimplemented!(),
         };
-        let texture = device_buffer.textures.get_mut(&texture_id).unwrap();
+        let (texture, _) = device_buffer.textures.get_mut(&texture_id).unwrap();
         barriers.transition_image(
             texture,
             Access {
@@ -843,6 +839,27 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
                     x: clip_min.x.round() as i32,
                     y: clip_min.y.round() as i32,
                 },
+            }],
+        );
+        let texture_id = match mesh.texture_id {
+            TextureId::Managed(id) => id,
+            TextureId::User(id) => unimplemented!(),
+        };
+        let (texture, options) = device_buffer.textures.get(&texture_id).unwrap();
+        let sampler = device_buffer.samplers.get(options).unwrap();
+        pass.push_descriptor_set(
+            egui_pipeline.layout.raw(),
+            0,
+            &[vk::WriteDescriptorSet {
+                dst_binding: 0,
+                descriptor_count: 1,
+                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                p_image_info: &vk::DescriptorImageInfo {
+                    image_view: texture.view,
+                    image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    sampler: sampler.raw(),
+                },
+                ..Default::default()
             }],
         );
         pass.draw_indexed(

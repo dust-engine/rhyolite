@@ -1,7 +1,7 @@
 #[set]
 struct EguiLayout {
     #![stage(FRAGMENT)]
-    u_img: SampledImage,
+    u_img: CombinedImageSampler,
 }
 #[push_constants]
 struct PushConstants {

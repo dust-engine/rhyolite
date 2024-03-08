@@ -1,6 +1,6 @@
 use ash::{prelude::VkResult, vk};
 
-use crate::Allocator;
+use crate::{Allocator, HasDevice};
 use vk_mem::Alloc;
 
 pub trait ImageLike {
@@ -79,6 +79,7 @@ pub trait ImageViewLike: ImageLike {
 pub struct Image {
     allocator: Allocator,
     image: vk::Image,
+    pub view: vk::ImageView, // TODO: Get rid of this, it doesn't belong here.
     allocation: vk_mem::Allocation,
     extent: vk::Extent3D,
 }
@@ -100,10 +101,27 @@ impl Image {
                     ..Default::default()
                 },
             )?;
+            let view = allocator.device().create_image_view(
+                &vk::ImageViewCreateInfo {
+                    image,
+                    format: info.format,
+                    view_type: vk::ImageViewType::TYPE_2D,
+                    subresource_range: vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
+                    ..Default::default()
+                },
+                None,
+            )?;
             Ok(Self {
                 extent: info.extent,
                 allocator,
                 image,
+                view,
                 allocation,
             })
         }
