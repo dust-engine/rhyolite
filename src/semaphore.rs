@@ -58,7 +58,9 @@ impl TimelineSemaphore {
         timeout: u64,
     ) -> VkResult<()> {
         let mut device: Option<&Device> = None;
-        let semaphores = semaphores.map(|(s, t)| {
+        let semaphores = semaphores.filter(
+            |(s, t)| s.current_value.load(std::sync::atomic::Ordering::Relaxed) < *t,
+        ).map(|(s, t)| {
             device = Some(&s.device);
             (s, s.semaphore, t)
         });

@@ -138,7 +138,11 @@ unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
             let initial_state: &mut RenderSystemInitialState = config.downcast_mut().unwrap();
             let res = world.get_resource_mut_by_id(state.component_id).unwrap();
             let mut res = unsafe { res.with_type::<PerFrameResourceContainer<T>>() };
-            res.semaphores.push(initial_state.timeline_signal.clone());
+            if !res.semaphores.iter().any(|s| {
+                Arc::ptr_eq(s, &initial_state.timeline_signal)
+            }) {
+                res.semaphores.push(initial_state.timeline_signal.clone());
+            }
         }
         T::Params::configurate(&mut state.param_state, config, world);
     }

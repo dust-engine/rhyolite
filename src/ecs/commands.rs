@@ -349,22 +349,9 @@ where
         if state.frame_index > num_frame_in_flight {
             let wait_value = state.frame_index - num_frame_in_flight;
             if !state.timeline_signals.is_empty() {
-                let signaled_semaphore = state.timeline_signals[0].semaphore.raw();
+                let signaled_semaphore = &state.timeline_signals[0].semaphore;
                 // Just waiting on one of those timeline semaphore should be fine, right?
-                unsafe {
-                    state
-                        .device
-                        .wait_semaphores(
-                            &vk::SemaphoreWaitInfo {
-                                semaphore_count: 1,
-                                p_semaphores: &signaled_semaphore,
-                                p_values: &wait_value, // num of frame in flight
-                                ..Default::default()
-                            },
-                            !0,
-                        )
-                        .unwrap();
-                }
+                signaled_semaphore.wait_blocked(wait_value, !0).unwrap();
             }
             if let Some(&fence) = state.fence_to_wait.get(&wait_value) {
                 unsafe {

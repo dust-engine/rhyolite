@@ -54,7 +54,6 @@ pub enum RenderUiSystem {
 
 impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> {
     fn build(&self, app: &mut App) {
-        // TODO: Rip out the copying, don't add the copy buffer systems if we don't need to copy buffers.
         app.add_plugins(bevy_egui::EguiPlugin);
         app.add_systems(
             PostUpdate,
@@ -74,8 +73,6 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
         );
         app.add_systems(Startup, initialize_pipelines);
         app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering)
-            .unwrap();
-        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.inline_uniform_block)
             .unwrap();
         app.add_device_extension::<ash::extensions::khr::PushDescriptor>()
             .unwrap();
@@ -237,7 +234,7 @@ fn initialize_pipelines(
                 p_attachments: &color_blend_attachment_state,
                 ..Default::default()
             };
-            let dynamic_rendering_format = vk::Format::B8G8R8A8_UNORM;
+            let dynamic_rendering_format = vk::Format::B8G8R8A8_SRGB;
             let dynamic_rendering_info = vk::PipelineRenderingCreateInfo {
                 color_attachment_count: 1,
                 p_color_attachment_formats: &dynamic_rendering_format,
