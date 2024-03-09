@@ -1,4 +1,8 @@
-use crate::{cstr, extensions::InstanceExtension, plugin::InstanceMetaBuilder};
+use crate::{
+    cstr,
+    extensions::{ExtensionNotFoundError, InstanceExtension},
+    plugin::InstanceMetaBuilder,
+};
 use ash::{prelude::VkResult, vk};
 use bevy::ecs::system::Resource;
 use bevy::utils::hashbrown::HashMap;
@@ -139,20 +143,15 @@ impl Instance {
     pub fn entry(&self) -> &Arc<ash::Entry> {
         &self.0.entry
     }
-    pub fn get_extension<T: InstanceExtension>(&self) -> Option<&T> {
+    pub fn get_extension<T: InstanceExtension>(&self) -> Result<&T, ExtensionNotFoundError> {
         self.0
             .extensions
             .get(&TypeId::of::<T>())
             .map(|item| item.downcast_ref::<T>().unwrap())
+            .ok_or(ExtensionNotFoundError)
     }
     pub fn extension<T: InstanceExtension>(&self) -> &T {
-        let Some(extension) = self.get_extension::<T>() else {
-            panic!(
-                "InstanceExtension {:?} not found",
-                std::any::type_name::<T>()
-            );
-        };
-        extension
+        self.get_extension::<T>().unwrap()
     }
 }
 

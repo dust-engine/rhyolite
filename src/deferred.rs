@@ -97,7 +97,7 @@ impl DeferredOperationTaskPool {
     pub fn new(device: Device) -> Self {
         if device
             .get_extension::<ash::extensions::khr::DeferredHostOperations>()
-            .is_none()
+            .is_err()
         {
             return Self(None);
         }

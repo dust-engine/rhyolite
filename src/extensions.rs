@@ -10,6 +10,14 @@ pub trait DeviceExtension: Send + Sync + 'static {
     fn name() -> &'static std::ffi::CStr;
 }
 
+#[derive(Debug)]
+pub struct ExtensionNotFoundError;
+impl From<ExtensionNotFoundError> for ash::vk::Result {
+    fn from(_: ExtensionNotFoundError) -> Self {
+        ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT
+    }
+}
+
 macro_rules! impl_device_extension {
     ($name:ident $( :: $Vb : ident )*) => {
         impl DeviceExtension for $name$(::$Vb)* {

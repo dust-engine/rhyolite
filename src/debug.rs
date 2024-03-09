@@ -6,6 +6,7 @@ use std::ffi::{CStr, CString};
 
 use std::sync::RwLock;
 
+use crate::commands::CommandRecorder;
 use crate::plugin::RhyoliteApp;
 use crate::Instance;
 
@@ -193,17 +194,18 @@ fn default_callback(
     };
 }
 
+const NULL_CHAR_ERR_MESSAGE: &str = "Name cannot contain null bytes";
 /// Vulkan Object that can be associated with a name and/or a tag.
 pub trait DebugObject: crate::HasDevice {
     fn object_handle(&mut self) -> u64;
     const OBJECT_TYPE: vk::ObjectType;
-    fn set_name_cstr(&mut self, cstr: &CStr) -> VkResult<()> {
+    fn set_name(&mut self, cstr: &CStr) -> VkResult<()> {
         unsafe {
             let raw_device = self.device().handle();
             let object_handle = self.object_handle();
             self.device()
                 .instance()
-                .extension::<ext::DebugUtils>()
+                .get_extension::<ext::DebugUtils>()?
                 .set_debug_utils_object_name(
                     raw_device,
                     &vk::DebugUtilsObjectNameInfoEXT {
@@ -212,29 +214,23 @@ pub trait DebugObject: crate::HasDevice {
                         p_object_name: cstr.as_ptr(),
                         ..Default::default()
                     },
-                )?;
+                )
         }
-        Ok(())
     }
-    fn set_name(&mut self, name: &str) -> VkResult<()> {
-        let cstr = CString::new(name).expect("Name cannot contain null bytes");
-        self.set_name_cstr(cstr.as_c_str())?;
-        Ok(())
-    }
-    fn with_name(mut self, name: &str) -> VkResult<Self>
+    fn with_name(mut self, name: &CStr) -> VkResult<Self>
     where
         Self: Sized,
     {
         self.set_name(name)?;
         Ok(self)
     }
-    fn remove_name(&mut self) {
+    fn remove_name(&mut self) -> VkResult<()> {
         unsafe {
             let raw_device = self.device().handle();
             let object_handle = self.object_handle();
             self.device()
                 .instance()
-                .extension::<ext::DebugUtils>()
+                .get_extension::<ext::DebugUtils>()?
                 .set_debug_utils_object_name(
                     raw_device,
                     &vk::DebugUtilsObjectNameInfoEXT {
@@ -244,7 +240,75 @@ pub trait DebugObject: crate::HasDevice {
                         ..Default::default()
                     },
                 )
-                .unwrap();
         }
     }
 }
+
+pub trait DebugCommands: CommandRecorder {
+    fn begin_debug_label(&mut self, label: &CStr, color: [f32; 4]) {
+        if self
+            .device()
+            .instance()
+            .get_extension::<ext::DebugUtils>()
+            .is_err()
+        {
+            return;
+        }
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .instance()
+                .extension::<ext::DebugUtils>()
+                .cmd_begin_debug_utils_label(
+                    cmd_buf,
+                    &vk::DebugUtilsLabelEXT {
+                        p_label_name: label.as_ptr(),
+                        color,
+                        ..Default::default()
+                    },
+                )
+        }
+    }
+    fn end_debug_label(&mut self) {
+        if self
+            .device()
+            .instance()
+            .get_extension::<ext::DebugUtils>()
+            .is_err()
+        {
+            return;
+        }
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .instance()
+                .extension::<ext::DebugUtils>()
+                .cmd_end_debug_utils_label(cmd_buf)
+        }
+    }
+    fn insert_debug_label(&mut self, label: &CStr, color: [f32; 4]) {
+        if self
+            .device()
+            .instance()
+            .get_extension::<ext::DebugUtils>()
+            .is_err()
+        {
+            return;
+        }
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .instance()
+                .extension::<ext::DebugUtils>()
+                .cmd_insert_debug_utils_label(
+                    cmd_buf,
+                    &vk::DebugUtilsLabelEXT {
+                        p_label_name: label.as_ptr(),
+                        color,
+                        ..Default::default()
+                    },
+                )
+        }
+    }
+}
+impl<T> DebugCommands for T where T: CommandRecorder {}

@@ -1,4 +1,5 @@
 use crate::extensions::DeviceExtension;
+use crate::extensions::ExtensionNotFoundError;
 use crate::plugin::DeviceMetaBuilder;
 use crate::Instance;
 use crate::PhysicalDevice;
@@ -86,20 +87,15 @@ impl Device {
         &self.0.physical_device
     }
 
-    pub fn get_extension<T: DeviceExtension>(&self) -> Option<&T> {
+    pub fn get_extension<T: DeviceExtension>(&self) -> Result<&T, ExtensionNotFoundError> {
         self.0
             .extensions
             .get(&TypeId::of::<T>())
             .map(|item| item.downcast_ref::<T>().unwrap())
+            .ok_or(ExtensionNotFoundError)
     }
     pub fn extension<T: DeviceExtension>(&self) -> &T {
-        let Some(extension) = self.get_extension::<T>() else {
-            panic!(
-                "InstanceExtension {:?} not found",
-                std::any::type_name::<T>()
-            );
-        };
-        extension
+        self.get_extension::<T>().unwrap()
     }
 }
 
