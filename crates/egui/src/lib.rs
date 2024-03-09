@@ -363,11 +363,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     // Copy data into the buffer
     total_indices_count = 0;
     total_vertices_count = 0;
-    for egui::epaint::ClippedPrimitive {
-        primitive,
-        ..
-    } in output.paint_jobs.iter()
-    {
+    for egui::epaint::ClippedPrimitive { primitive, .. } in output.paint_jobs.iter() {
         let mesh = match primitive {
             egui::epaint::Primitive::Mesh(mesh) => mesh,
             egui::epaint::Primitive::Callback(_) => panic!(),

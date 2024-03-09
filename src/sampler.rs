@@ -1,6 +1,6 @@
 use crate::Device;
 use ash::{prelude::VkResult, vk};
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 pub struct Sampler {
     device: Device,

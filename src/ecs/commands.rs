@@ -27,13 +27,13 @@ use ash::vk::{self, Handle};
 use bevy::ecs::{
     archetype::ArchetypeComponentId,
     component::ComponentId,
-    system::{lifetimeless::SRes, Res, Resource, System, SystemMeta, SystemParam},
+    system::{lifetimeless::SRes, Res, ResMut, Resource, System, SystemMeta, SystemParam},
     world::World,
 };
 use queue_cap::*;
 
 use crate::{
-    command_pool::RecordingCommandBuffer,
+    command_pool::ManagedCommandPool,
     commands::{CommandRecorder, CommonCommands},
     ecs::Barriers,
     queue::QueueType,
@@ -47,32 +47,76 @@ use super::{
 };
 use crate::Access;
 
-/// A wrapper to produce multiple [`RecordingCommandBuffer`] variants based on the queue type it supports.
 #[derive(Resource)]
-struct RecordingCommandBufferWrapper<const Q: char>(RecordingCommandBuffer);
-impl<const Q: char> PerFrameResource for RecordingCommandBufferWrapper<Q> {
+struct DefaultCommandPool<const Q: char> {
+    pool: ManagedCommandPool,
+    /// Command buffer for the current stage.
+    current_buffer: vk::CommandBuffer,
+    /// Command buffer for the next stage, for pre-recording pipeline barriers.
+    barrier_buffer: vk::CommandBuffer,
+}
+impl<const Q: char> DefaultCommandPool<Q> {
+    /// Returns the command buffer currently being recorded.
+    fn current_buffer(&mut self) -> vk::CommandBuffer {
+        if self.current_buffer == vk::CommandBuffer::null() {
+            self.current_buffer = self.pool.allocate();
+            unsafe {
+                self.pool
+                    .device()
+                    .begin_command_buffer(
+                        self.current_buffer,
+                        &vk::CommandBufferBeginInfo {
+                            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+            }
+        }
+        self.current_buffer
+    }
+    fn take_current_buffer(&mut self) -> vk::CommandBuffer {
+        let current = self.current_buffer;
+        if current != vk::CommandBuffer::null() {
+            unsafe {
+                self.pool.device().end_command_buffer(current).unwrap();
+            }
+        }
+        current
+    }
+}
+impl<const Q: char> PerFrameResource for DefaultCommandPool<Q> {
     type Params = (SRes<Device>, SRes<QueuesRouter>);
 
     fn create((device, router): bevy::ecs::system::SystemParamItem<'_, '_, Self::Params>) -> Self {
-        let queue_family = router.queue_family_of_type(match Q {
+        let queue_family_index = router.queue_family_of_type(match Q {
             'g' => QueueType::Graphics,
             'c' => QueueType::Compute,
             't' => QueueType::Transfer,
             _ => panic!(),
         });
-        let pool = RecordingCommandBuffer::new(device.clone(), queue_family);
-        Self(pool)
+        let pool = ManagedCommandPool::new(device.clone(), queue_family_index).unwrap();
+        DefaultCommandPool {
+            pool,
+            current_buffer: vk::CommandBuffer::null(),
+            barrier_buffer: vk::CommandBuffer::null(),
+        }
     }
     fn reset(&mut self, _: bevy::ecs::system::SystemParamItem<'_, '_, Self::Params>) {
-        self.0.reset();
+        self.pool.reset();
     }
 }
+
+/// Command buffers scheduled for submission in the next call to vkQueueSubmit.
+#[derive(Resource)]
+struct RecordedCommandBuffers<const Q: char>(Vec<vk::CommandBuffer>);
 
 pub struct RenderCommands<'w, 's, const Q: char>
 where
     (): IsQueueCap<Q>,
 {
-    recording_cmd_buf: PerFrameMut<'w, RecordingCommandBufferWrapper<Q>>,
+    default_cmd_pool: PerFrameMut<'w, DefaultCommandPool<Q>>,
+    recorded_command_buffers: ResMut<'w, RecordedCommandBuffers<Q>>,
     retained_objects: &'s mut BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     frame_index: u64,
 }
@@ -87,13 +131,20 @@ where
             .or_default()
             .push(Box::new(unsafe { obj.take() }));
     }
+    pub fn add_external_command_buffer(&mut self, command_buffer: vk::CommandBuffer) {
+        let current = self.default_cmd_pool.take_current_buffer();
+        if current != vk::CommandBuffer::null() {
+            self.recorded_command_buffers.0.push(current);
+        }
+        self.recorded_command_buffers.0.push(command_buffer);
+    }
 }
 impl<'w, 's, const Q: char> HasDevice for RenderCommands<'w, 's, Q>
 where
     (): IsQueueCap<Q>,
 {
     fn device(&self) -> &Device {
-        self.recording_cmd_buf.0.device()
+        self.default_cmd_pool.pool.device()
     }
 }
 impl<'w, 's, const Q: char> CommandRecorder for RenderCommands<'w, 's, Q>
@@ -102,12 +153,13 @@ where
 {
     const QUEUE_CAP: char = Q;
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
-        self.recording_cmd_buf.0.record()
+        self.default_cmd_pool.current_buffer()
     }
 }
 
 pub struct RenderCommandState<const Q: char> {
-    recording_cmd_buf: PerFrameState<RecordingCommandBufferWrapper<Q>>,
+    default_cmd_pool_state: PerFrameState<DefaultCommandPool<Q>>,
+    recorded_cmd_buf_state: ComponentId,
     retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
 }
 
@@ -123,10 +175,16 @@ where
         world: &mut World,
         system_meta: &mut bevy::ecs::system::SystemMeta,
     ) -> Self::State {
-        let recording_cmd_buf =
-            PerFrameMut::<RecordingCommandBufferWrapper<Q>>::init_state(world, system_meta);
+        let default_cmd_pool_state =
+            PerFrameMut::<DefaultCommandPool<Q>>::init_state(world, system_meta);
+        let recorded_cmd_buf_state =
+            ResMut::<RecordedCommandBuffers<Q>>::init_state(world, system_meta);
+        world.get_resource_or_insert_with::<RecordedCommandBuffers<Q>>(|| {
+            RecordedCommandBuffers(Vec::new())
+        });
         RenderCommandState {
-            recording_cmd_buf,
+            default_cmd_pool_state,
+            recorded_cmd_buf_state,
             retained_objects: BTreeMap::new(),
         }
     }
@@ -141,7 +199,7 @@ where
         config.queue = flags;
     }
     fn configurate(state: &mut Self::State, config: &mut dyn Any, world: &mut World) {
-        PerFrameMut::configurate(&mut state.recording_cmd_buf, config, world)
+        PerFrameMut::configurate(&mut state.default_cmd_pool_state, config, world)
     }
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
@@ -149,22 +207,29 @@ where
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        let recording_cmd_buf = PerFrameMut::<RecordingCommandBufferWrapper<Q>>::get_param(
-            &mut state.recording_cmd_buf,
+        let default_cmd_pool = PerFrameMut::<DefaultCommandPool<Q>>::get_param(
+            &mut state.default_cmd_pool_state,
             system_meta,
             world,
             change_tick,
         );
         let num_frame_in_flight: u32 = 3;
-        if state.recording_cmd_buf.frame_index > num_frame_in_flight as u64 {
+        if state.default_cmd_pool_state.frame_index > num_frame_in_flight as u64 {
             state
                 .retained_objects
-                .remove(&(state.recording_cmd_buf.frame_index - num_frame_in_flight as u64));
+                .remove(&(state.default_cmd_pool_state.frame_index - num_frame_in_flight as u64));
         }
+        let recorded_command_buffers = ResMut::<RecordedCommandBuffers<Q>>::get_param(
+            &mut state.recorded_cmd_buf_state,
+            system_meta,
+            world,
+            change_tick,
+        );
         RenderCommands {
-            recording_cmd_buf,
+            frame_index: state.default_cmd_pool_state.frame_index,
+            default_cmd_pool,
             retained_objects: &mut state.retained_objects,
-            frame_index: state.recording_cmd_buf.frame_index,
+            recorded_command_buffers,
         }
     }
 }
@@ -393,14 +458,24 @@ pub(crate) fn flush_system_graph<const Q: char>(
 ) where
     (): IsQueueCap<Q>,
 {
-    let command_buffer = commands.recording_cmd_buf.0.take();
-    let command_buffer: Vec<_> = command_buffer
-        .into_iter()
+    // Take all the command buffers recorded so far, plus the default one.
+    let command_buffer: Vec<_> = commands
+        .recorded_command_buffers
+        .0
+        .iter()
+        .cloned()
+        .chain(
+            std::iter::once(commands.default_cmd_pool.take_current_buffer())
+                .filter(|&x| x != vk::CommandBuffer::null()),
+        )
         .map(|command_buffer| vk::CommandBufferSubmitInfo {
             command_buffer,
             ..Default::default()
         })
         .collect();
+    commands.recorded_command_buffers.0.clear();
+    commands.default_cmd_pool.current_buffer = commands.default_cmd_pool.barrier_buffer;
+    commands.default_cmd_pool.barrier_buffer = vk::CommandBuffer::null();
     let semaphore_signals = queue_ctx
         .binary_signals
         .iter()
@@ -468,11 +543,6 @@ pub(crate) fn flush_system_graph<const Q: char>(
             )
             .unwrap();
     }
-}
-
-struct ResourceState {
-    access: Access,
-    img_layout: vk::ImageLayout,
 }
 
 pub(crate) struct InsertPipelineBarrier<const Q: char> {

@@ -58,12 +58,12 @@ impl TimelineSemaphore {
         timeout: u64,
     ) -> VkResult<()> {
         let mut device: Option<&Device> = None;
-        let semaphores = semaphores.filter(
-            |(s, t)| s.current_value.load(std::sync::atomic::Ordering::Relaxed) < *t,
-        ).map(|(s, t)| {
-            device = Some(&s.device);
-            (s, s.semaphore, t)
-        });
+        let semaphores = semaphores
+            .filter(|(s, t)| s.current_value.load(std::sync::atomic::Ordering::Relaxed) < *t)
+            .map(|(s, t)| {
+                device = Some(&s.device);
+                (s, s.semaphore, t)
+            });
         let (semaphores, raws, values): (Vec<&TimelineSemaphore>, Vec<vk::Semaphore>, Vec<u64>) =
             itertools::multiunzip(semaphores);
         if semaphores.is_empty() {

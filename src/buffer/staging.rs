@@ -11,7 +11,7 @@ use std::{
 use ash::{prelude::VkResult, vk};
 use bevy::ecs::{system::Resource, world::FromWorld};
 
-use crate::{ecs::RenderRes, utils::Dispose, Device};
+use crate::{utils::Dispose, Device};
 
 /// A ring buffer for allocations of transient data.
 /// TODO: Can we make this thread safe?
