@@ -204,7 +204,7 @@ impl PhysicalDeviceProperties {
             instance,
             pdevice,
             properties: Default::default(),
-            memory_model: PhysicalDeviceMemoryModel::Discrete,
+            memory_model,
             memory_properties,
             inner: pdevice_properties,
         }

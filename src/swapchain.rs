@@ -307,10 +307,10 @@ pub struct SwapchainConfig {
     /// If set to false, SDR swapchains will be created with a UNORM format.
     ///
     /// Set this to false if the data will be written to the swapchain image as a storage image,
-    /// and the tonemapper will apply gamma correction manually. This is the default.
+    /// and the tonemapper will apply gamma correction manually.
     ///
     /// Set this to true if the swapchain will be directly used as a render target. In this case,
-    /// the sRGB gamma correction will be applied automatically.
+    /// the sRGB gamma correction will be applied automatically. This is the default.
     pub srgb_format: bool,
 }
 impl Default for SwapchainConfig {
@@ -326,7 +326,7 @@ impl Default for SwapchainConfig {
             pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
             clipped: true,
             hdr: false,
-            srgb_format: false,
+            srgb_format: true,
         }
     }
 }

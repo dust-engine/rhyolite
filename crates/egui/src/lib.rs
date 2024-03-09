@@ -169,7 +169,7 @@ fn initialize_pipelines(
                 vk::VertexInputAttributeDescription {
                     binding: 0,
                     location: 2,
-                    format: vk::Format::B8G8R8A8_UNORM,
+                    format: vk::Format::R8G8B8A8_UNORM,
                     offset: std::mem::size_of::<[f32; 4]>() as u32,
                 }, // color
             ];
@@ -223,7 +223,13 @@ fn initialize_pipelines(
                     | vk::ColorComponentFlags::G
                     | vk::ColorComponentFlags::B
                     | vk::ColorComponentFlags::A,
-                blend_enable: vk::FALSE,
+                src_color_blend_factor: vk::BlendFactor::ONE,
+                dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                color_blend_op: vk::BlendOp::ADD,
+                src_alpha_blend_factor: vk::BlendFactor::ONE,
+                dst_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                alpha_blend_op: vk::BlendOp::ADD,
+                blend_enable: vk::TRUE,
                 ..Default::default()
             };
             let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
@@ -361,8 +367,8 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     total_indices_count = 0;
     total_vertices_count = 0;
     for egui::epaint::ClippedPrimitive {
-        clip_rect,
         primitive,
+        ..
     } in output.paint_jobs.iter()
     {
         let mesh = match primitive {
@@ -414,7 +420,7 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
         }
         let size = image_delta.image.size();
         let create_info = vk::ImageCreateInfo {
-            format: vk::Format::B8G8R8A8_UNORM,
+            format: vk::Format::R8G8B8A8_SRGB,
             image_type: vk::ImageType::TYPE_2D,
             extent: vk::Extent3D {
                 width: size[0] as u32,
@@ -772,7 +778,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
             store_op: vk::AttachmentStoreOp::STORE,
             clear_value: vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [1.0, 0.0, 0.0, 1.0],
+                    float32: [0.0, 0.0, 0.0, 0.0],
                 },
             },
             ..Default::default()
@@ -863,7 +869,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
             }],
         );
         pass.draw_indexed(
-            mesh.vertices.len() as u32,
+            mesh.indices.len() as u32,
             1,
             current_indice,
             current_vertex as i32,
