@@ -27,7 +27,7 @@ use rhyolite::{
         CommonCommands, GraphicsCommands, RenderPassCommands, ResourceTransitionCommands,
         TransferCommands,
     },
-    ecs::{Barriers, IntoRenderSystemConfigs},
+    ecs::{BarrierProducerOut, Barriers, IntoRenderSystemConfigs},
     ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderImage, RenderRes},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
@@ -503,10 +503,9 @@ fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
 
 fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
     mut commands: RenderCommands<'g'>,
-    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+    device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     mut staging_belt: ResMut<StagingBelt>,
-    allocator: Res<Allocator>,
 ) {
     let Ok(mut output) = egui_render_output.get_single_mut() else {
         return;
@@ -567,7 +566,6 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &[update_info],
         );
-        println!("Copied buffer to texture");
     }
     commands.retain(staging_allocator.finish());
     output.textures_delta.set.clear();
@@ -665,15 +663,19 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
     mut barriers: In<Barriers>,
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage), Filter>,
-) {
+    egui_pipeline: Res<EguiPipelines>,
+) -> bool {
     let (output, mut swapchain_image) = match egui_render_output.get_single_mut() {
         Ok(r) => r,
-        Err(QuerySingleError::NoEntities(_)) => return,
+        Err(QuerySingleError::NoEntities(_)) => return false,
         Err(QuerySingleError::MultipleEntities(_)) => panic!(),
     };
 
     if output.paint_jobs.is_empty() {
-        return;
+        return false;
+    }
+    if !egui_pipeline.pipeline.is_ready() {
+        return false;
     }
     for i in output.paint_jobs.iter() {
         let mesh = match &i.primitive {
@@ -723,9 +725,11 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
             },
         );
     }
+    true
 }
 /// Issue draw commands for egui.
 pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
+    BarrierProducerOut(should_draw): BarrierProducerOut<bool>,
     mut commands: RenderCommands<'g'>,
     host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
     device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
@@ -737,22 +741,21 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     assets: Res<Assets<ShaderModule>>,
     task_pool: Res<DeferredOperationTaskPool>,
 ) {
+    let Some((pipeline, old_pipeline)) = pipeline_cache
+        .retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool) else {
+            return;
+        };
+    if let Some(old_pipeline) = old_pipeline {
+        commands.retain(old_pipeline);
+    }
+    if !should_draw {
+        return;
+    }
     let (output, mut swapchain_image, window_size) = match egui_render_output.get_single_mut() {
         Ok(r) => r,
         Err(QuerySingleError::NoEntities(_)) => return,
         Err(QuerySingleError::MultipleEntities(_)) => panic!(),
     };
-    if output.paint_jobs.is_empty() {
-        return;
-    }
-    let Some((pipeline, old_pipeline)) =
-        pipeline_cache.retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool)
-    else {
-        return;
-    };
-    if let Some(old_pipeline) = old_pipeline {
-        commands.retain(old_pipeline);
-    }
     let mut pass = commands.begin_rendering(&vk::RenderingInfo {
         flags: vk::RenderingFlags::empty(),
         render_area: vk::Rect2D {

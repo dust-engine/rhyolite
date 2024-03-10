@@ -44,6 +44,19 @@ pub struct CachedPipeline<T: Pipeline> {
     task: Option<Task<T>>,
     shader_generations: HashMap<AssetId<ShaderModule>, u32>,
 }
+impl<T: Pipeline> CachedPipeline<T> {
+    pub fn is_ready(&self) -> bool {
+        if self.pipeline.is_some() {
+            return true;
+        }
+        if let Some(task) = &self.task {
+            if task.is_finished() {
+                return true;
+            }
+        }
+        return false;
+    }
+}
 
 impl PipelineCache {
     fn create<T: Pipeline>(&self, build_info: T::BuildInfo) -> CachedPipeline<T> {

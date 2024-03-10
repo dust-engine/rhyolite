@@ -14,11 +14,11 @@ pub use cache::*;
 pub use graphics::*;
 pub use layout::*;
 
-trait Pipeline {
+pub trait Pipeline {
     type BuildInfo: PipelineBuildInfo<Pipeline = Self>;
 }
 
-trait PipelineBuildInfo {
+pub trait PipelineBuildInfo {
     type Pipeline: Pipeline<BuildInfo = Self>;
     fn build_owned(
         mut self,
