@@ -123,6 +123,15 @@ impl<'w> ResourceTransitionCommandRecorder<'w> {
         todo!()
     }
     pub fn end(self) {
+        if self.global_barriers.src_access_mask == vk::AccessFlags2::empty()
+            && self.global_barriers.dst_access_mask == vk::AccessFlags2::empty()
+            && self.global_barriers.src_stage_mask == vk::PipelineStageFlags2::empty()
+            && self.global_barriers.dst_stage_mask == vk::PipelineStageFlags2::empty()
+            && self.image_barriers.is_empty()
+            && self.buffer_barriers.is_empty()
+        {
+            return;
+        }
         unsafe {
             self.device.cmd_pipeline_barrier2(
                 self.cmd_buf,

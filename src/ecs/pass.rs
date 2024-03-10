@@ -205,36 +205,37 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         let mut stage_index = 0;
         // (buffer, stages)
-        let mut colors: Vec<((Vec<usize>, bool), Vec<(Vec<usize>, bool)>)> =
+        let mut cmd_op_colors: Vec<(Vec<usize>, Vec<Vec<usize>>)> =
             vec![Default::default(); num_queues as usize];
-        let mut tiny_graph = bevy::utils::petgraph::graphmap::DiGraphMap::<u8, ()>::new();
+        let mut queue_op_colors: Vec<(Option<usize>, Vec<usize>)> =
+            vec![Default::default(); num_queues as usize];
+        let mut tiny_graph =
+            bevy::utils::petgraph::graphmap::DiGraphMap::<(QueueRef, bool), ()>::new();
         let mut current_graph = render_graph.clone();
         let mut heap_next_stage: Vec<usize> = Vec::new(); // nodes to be deferred to the next stage
         while let Some(node) = heap.pop() {
             let meta = render_graph_meta[node].as_ref().unwrap();
             let node_color = meta.selected_queue;
+            let is_queue_op = meta.is_queue_op;
             let mut should_defer = false;
-            if meta.is_queue_op && !colors[meta.selected_queue.0 as usize].0 .0.is_empty() {
-                // Can only push a queue op when there aren't other ops in the buffer
+            if meta.is_queue_op && queue_op_colors[meta.selected_queue.0 as usize].0.is_some() {
+                // A queue op of this color was already queued
                 should_defer = true;
-            } else if !meta.is_queue_op && colors[meta.selected_queue.0 as usize].0 .1 {
-                // not a queue op, but a queue op was already queued
-                should_defer = true;
-            } else {
-                // not a queue op. push as many as we can
-                for parent in render_graph.neighbors_directed(node, Incoming) {
-                    let parent_meta = render_graph_meta[parent].as_ref().unwrap();
-                    if parent_meta.selected_queue != node_color {
-                        let start = parent_meta.selected_queue.0;
-                        let end = node_color.0;
-                        let has_path = Dfs::new(&tiny_graph, end)
-                            .iter(&tiny_graph)
-                            .any(|x| x == start);
-                        if has_path {
-                            // There is already a path from end to start, so adding a node from start to end causes a cycle.
-                            should_defer = true;
-                            break;
-                        }
+            }
+            for parent in render_graph.neighbors_directed(node, Incoming) {
+                let parent_meta = render_graph_meta[parent].as_ref().unwrap();
+                if (parent_meta.selected_queue, parent_meta.is_queue_op)
+                    != (node_color, meta.is_queue_op)
+                {
+                    let start = (parent_meta.selected_queue, parent_meta.is_queue_op);
+                    let end = (node_color, meta.is_queue_op);
+                    let has_path = Dfs::new(&tiny_graph, end)
+                        .iter(&tiny_graph)
+                        .any(|x| x == start);
+                    if has_path {
+                        // There is already a path from end to start, so adding a node from start to end causes a cycle.
+                        should_defer = true;
+                        break;
                     }
                 }
             }
@@ -244,8 +245,12 @@ impl ScheduleBuildPass for RenderSystemPass {
             } else {
                 let meta = render_graph_meta[node].as_mut().unwrap();
                 meta.stage_index = stage_index;
-                colors[meta.selected_queue.0 as usize].0 .0.push(node);
-                colors[meta.selected_queue.0 as usize].0 .1 |= meta.is_queue_op;
+                if is_queue_op {
+                    assert!(queue_op_colors[meta.selected_queue.0 as usize].0.is_none());
+                    queue_op_colors[meta.selected_queue.0 as usize].0 = Some(node);
+                } else {
+                    cmd_op_colors[meta.selected_queue.0 as usize].0.push(node);
+                }
 
                 for parent in render_graph.neighbors_directed(node, Incoming) {
                     // Update the tiny graph.
@@ -253,8 +258,8 @@ impl ScheduleBuildPass for RenderSystemPass {
                     if parent_meta.selected_queue != node_color
                         && parent_meta.stage_index == stage_index
                     {
-                        let start = parent_meta.selected_queue.0;
-                        let end = node_color.0;
+                        let start = (parent_meta.selected_queue, parent_meta.is_queue_op);
+                        let end = (node_color, is_queue_op);
                         tiny_graph.add_edge(start, end, ());
                     }
                 }
@@ -274,10 +279,16 @@ impl ScheduleBuildPass for RenderSystemPass {
 
             if heap.is_empty() {
                 // Flush all colors
-                for (queue_node_buffer, stages) in colors.iter_mut() {
-                    if !queue_node_buffer.0.is_empty() {
+                for (queue_node_buffer, stages) in cmd_op_colors.iter_mut() {
+                    if !queue_node_buffer.is_empty() {
                         // Flush remaining nodes
                         stages.push(std::mem::take(queue_node_buffer));
+                    }
+                }
+                for (queue_node_buffer, stages) in queue_op_colors.iter_mut() {
+                    if let Some(a) = queue_node_buffer.take() {
+                        // Flush remaining nodes
+                        stages.push(a);
                     }
                 }
                 // Start a new stage
@@ -298,9 +309,31 @@ impl ScheduleBuildPass for RenderSystemPass {
         let mut queue_graph =
             bevy::utils::petgraph::graphmap::DiGraphMap::<u32, QueueGraphEdge>::new();
         let mut queue_graph_nodes = Vec::<QueueGraphNodeMeta>::new();
+
         // Flush all colors
-        for (queue_node_buffer, stages) in colors.iter_mut() {
-            if !queue_node_buffer.0.is_empty() {
+
+        for (queue_node_buffer, stages) in queue_op_colors.iter_mut() {
+            if let Some(a) = queue_node_buffer.take() {
+                // Flush remaining nodes
+                stages.push(a);
+            }
+            for stage in stages.iter_mut() {
+                let queue_graph_node = queue_graph_nodes.len() as u32;
+                queue_graph.add_node(queue_graph_node);
+                let meta = render_graph_meta[*stage].as_mut().unwrap();
+                meta.queue_graph_node = queue_graph_node;
+                queue_graph_nodes.push(QueueGraphNodeMeta {
+                    force_binary_semaphore: meta.force_binary_semaphore,
+                    nodes: vec![*stage],
+                    is_queue_op: true,
+                    queue_node_index: 0,
+                    selected_queue: meta.selected_queue,
+                    queue_type: meta.queue_type,
+                });
+            }
+        }
+        for (queue_node_buffer, stages) in cmd_op_colors.iter_mut() {
+            if !queue_node_buffer.is_empty() {
                 // Flush remaining nodes
                 stages.push(std::mem::take(queue_node_buffer));
             }
@@ -310,7 +343,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                 let queue_graph_node = queue_graph_nodes.len() as u32;
                 queue_graph.add_node(queue_graph_node);
 
-                for node in stage.0.iter() {
+                for node in stage.iter() {
                     let meta = render_graph_meta[*node].as_mut().unwrap();
                     meta.queue_graph_node = queue_graph_node;
                     if let Some(queue_graph_node_info) = &queue_graph_node_info {
@@ -318,20 +351,18 @@ impl ScheduleBuildPass for RenderSystemPass {
                         assert_eq!(queue_graph_node_info.stage_index, meta.stage_index);
                         assert_eq!(queue_graph_node_info.queue, meta.selected_queue);
                     }
-                    let _queue_graph_node = queue_graph_node_info
-                        .get_or_insert(QueueGraphNode {
-                            stage_index: meta.stage_index,
-                            queue: meta.selected_queue,
-                            queue_type: meta.queue_type,
-                        })
-                        .clone();
+                    queue_graph_node_info.get_or_insert(QueueGraphNode {
+                        stage_index: meta.stage_index,
+                        queue: meta.selected_queue,
+                        queue_type: meta.queue_type,
+                    });
                     force_binary_semaphore |= meta.force_binary_semaphore;
                 }
                 if let Some(queue_graph_node_info) = queue_graph_node_info {
                     queue_graph_nodes.push(QueueGraphNodeMeta {
                         force_binary_semaphore,
-                        nodes: std::mem::take(&mut stage.0),
-                        is_queue_op: stage.1,
+                        nodes: std::mem::take(stage),
+                        is_queue_op: false,
                         queue_node_index: 0,
                         selected_queue: queue_graph_node_info.queue,
                         queue_type: queue_graph_node_info.queue_type,
@@ -343,9 +374,6 @@ impl ScheduleBuildPass for RenderSystemPass {
         for (from, to, edge) in render_graph.all_edges() {
             let from_meta = render_graph_meta[from].as_ref().unwrap();
             let to_meta = render_graph_meta[to].as_ref().unwrap();
-            if from_meta.queue_graph_node != to_meta.queue_graph_node {
-                // avoid self edges
-            }
 
             if let Some(existing) =
                 queue_graph.edge_weight_mut(from_meta.queue_graph_node, to_meta.queue_graph_node)
@@ -567,34 +595,25 @@ impl ScheduleBuildPass for RenderSystemPass {
                         .is_none()
                 })
                 .collect();
-            let mut current_access = Access::new();
             let mut next_stage_heap: Vec<usize> = Vec::new();
             let mut current_stage: Vec<usize> = Vec::new();
             let mut all_stages: Vec<Vec<usize>> = Vec::new();
             while let Some(node) = heap.pop() {
-                let system = graph.systems[node].get().unwrap();
-                let access = system.archetype_component_access();
-                if current_access.is_compatible(access) {
-                    current_access.extend(access);
-                    let revealed_nodes = queue_node_graph
+                let revealed_nodes =
+                    queue_node_graph
                         .neighbors_directed(node, Outgoing)
                         .filter(|node| {
                             let mut iter = queue_node_graph.neighbors_directed(*node, Incoming);
                             iter.next().unwrap();
                             iter.next().is_none()
                         });
-                    heap.extend(revealed_nodes);
-                    queue_node_graph.remove_node(node);
-                    current_stage.push(node);
-                } else {
-                    // defer
-                    next_stage_heap.push(node);
-                }
+                next_stage_heap.extend(revealed_nodes);
+                queue_node_graph.remove_node(node);
+                current_stage.push(node);
                 if heap.is_empty() {
                     // Try enter the next stage
                     std::mem::swap(&mut heap, &mut next_stage_heap);
                     all_stages.push(std::mem::take(&mut current_stage));
-                    current_access = Access::new();
                 }
             }
             if !current_stage.is_empty() {

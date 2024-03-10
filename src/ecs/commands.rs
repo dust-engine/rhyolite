@@ -31,6 +31,7 @@ use bevy::ecs::{
     system::{lifetimeless::SRes, Res, ResMut, Resource, System, SystemMeta, SystemParam},
     world::World,
 };
+use itertools::Itertools;
 use queue_cap::*;
 
 use crate::{
@@ -587,7 +588,11 @@ where
     type Out = ();
 
     fn name(&self) -> std::borrow::Cow<'static, str> {
-        std::any::type_name::<InsertPipelineBarrier<Q>>().into()
+        if self.barrier_producers.is_empty() {
+            return "Empty PipelineBarriers".into();
+        }
+        let names = self.barrier_producers.iter().map(|x| x.name()).join(",");
+        format!("PipelineBarriers({:?})", names).into()
     }
 
     fn type_id(&self) -> std::any::TypeId {
@@ -712,6 +717,7 @@ where
                 .component_access_set
                 .extend_combined_access(&component_access);
             self.system_meta.archetype_component_access = archetype_component_access;
+            self.system_meta.name = self.name();
         } else {
             RenderCommands::<Q>::configurate(
                 self.render_command_state.as_mut().unwrap(),
