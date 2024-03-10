@@ -3,15 +3,18 @@ use std::{
     sync::Arc,
 };
 
-use bevy::ecs::{
-    schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
-    system::{BoxedSystem, IntoSystem, System},
-    world::World,
-};
 use bevy::utils::petgraph::{
     graphmap::DiGraphMap,
     visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
     Direction::{self, Incoming, Outgoing},
+};
+use bevy::{
+    ecs::{
+        schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
+        system::{BoxedSystem, IntoSystem, System},
+        world::World,
+    },
+    utils::ConfigMap,
 };
 
 use crate::{
@@ -56,6 +59,8 @@ struct QueueGraphEdge {
     config: QueueSystemDependencyConfig,
     semaphore_id: Option<QueueGraphEdgeSemaphoreType>,
 }
+
+struct FlushSystemMarker;
 
 #[derive(Clone, Debug)]
 struct QueueGraphNodeMeta {
@@ -400,7 +405,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                 continue;
             }
             let id_num = graph.systems.len();
-            let id = NodeId::System(id_num);
+            let id: NodeId = NodeId::System(id_num);
             let mut system: BoxedSystem = match queue_node.queue_type {
                 QueueType::Graphics => Box::new(IntoSystem::into_system(
                     crate::ecs::flush_system_graph::<'g'>,
@@ -415,9 +420,9 @@ impl ScheduleBuildPass for RenderSystemPass {
             };
 
             system.initialize(world);
-            graph
-                .systems
-                .push(SystemNode::new(system, Default::default()));
+            let mut config_map = ConfigMap::new();
+            config_map.insert(FlushSystemMarker);
+            graph.systems.push(SystemNode::new(system, config_map));
             graph.system_conditions.push(Vec::new());
             graph.ambiguous_with_all.insert(id);
 
@@ -569,59 +574,75 @@ impl ScheduleBuildPass for RenderSystemPass {
         world.insert_resource(binary_semaphores);
 
         // Step 2: inside each queue, insert pipeline barriers.
-        for queue_node in self.queue_graph_nodes.iter() {
-            if queue_node.is_queue_op {
-                continue;
-            }
-            // TODO: do a DFS, detect system meta compatibilities, then group them into stages.
-            let nodes = BTreeSet::from_iter(queue_node.nodes.iter());
-            let mut queue_node_graph = DiGraphMap::<usize, ()>::new();
-            // Produce a subgraph
-            for i in queue_node.nodes.iter() {
-                queue_node_graph.add_node(*i);
-                for next in render_graph.neighbors(*i) {
-                    if nodes.contains(&next) {
-                        queue_node_graph.add_edge(*i, next, ());
+        for (queue_node_i, queue_node) in self.queue_graph_nodes.iter().enumerate() {
+            let all_stages = if queue_node.is_queue_op {
+                vec![vec![queue_node.queue_node_index]]
+            } else {
+                // do a DFS, detect system meta compatibilities, then group them into stages.
+                let nodes = BTreeSet::from_iter(queue_node.nodes.iter());
+                let mut queue_node_graph = DiGraphMap::<usize, ()>::new();
+                // Produce a subgraph
+                for i in queue_node.nodes.iter() {
+                    queue_node_graph.add_node(*i);
+                    for next in render_graph.neighbors(*i) {
+                        if nodes.contains(&next) {
+                            queue_node_graph.add_edge(*i, next, ());
+                        }
                     }
                 }
-            }
-            let mut heap: Vec<usize> = queue_node_graph
-                .nodes()
-                .filter(|node| {
-                    queue_node_graph
-                        .neighbors_directed(*node, Incoming)
-                        .next()
-                        .is_none()
-                })
-                .collect();
-            let mut next_stage_heap: Vec<usize> = Vec::new();
-            let mut current_stage: Vec<usize> = Vec::new();
-            let mut all_stages: Vec<Vec<usize>> = Vec::new();
-            while let Some(node) = heap.pop() {
-                let revealed_nodes =
-                    queue_node_graph
+                let mut heap: Vec<usize> = queue_node_graph
+                    .nodes()
+                    .filter(|node| {
+                        queue_node_graph
+                            .neighbors_directed(*node, Incoming)
+                            .next()
+                            .is_none()
+                    })
+                    .collect();
+                let mut next_stage_heap: Vec<usize> = Vec::new();
+                let mut current_stage: Vec<usize> = Vec::new();
+                let mut all_stages: Vec<Vec<usize>> = Vec::new();
+                while let Some(node) = heap.pop() {
+                    let revealed_nodes = queue_node_graph
                         .neighbors_directed(node, Outgoing)
                         .filter(|node| {
                             let mut iter = queue_node_graph.neighbors_directed(*node, Incoming);
                             iter.next().unwrap();
                             iter.next().is_none()
                         });
-                next_stage_heap.extend(revealed_nodes);
-                queue_node_graph.remove_node(node);
-                current_stage.push(node);
-                if heap.is_empty() {
-                    // Try enter the next stage
-                    std::mem::swap(&mut heap, &mut next_stage_heap);
+                    next_stage_heap.extend(revealed_nodes);
+                    queue_node_graph.remove_node(node);
+                    current_stage.push(node);
+                    if heap.is_empty() {
+                        // Try enter the next stage
+                        std::mem::swap(&mut heap, &mut next_stage_heap);
+                        all_stages.push(std::mem::take(&mut current_stage));
+                    }
+                }
+                if !current_stage.is_empty() {
                     all_stages.push(std::mem::take(&mut current_stage));
                 }
-            }
-            if !current_stage.is_empty() {
-                all_stages.push(std::mem::take(&mut current_stage));
-            }
-            for stage in all_stages.into_iter() {
+                all_stages
+            };
+            for (i, stage) in all_stages.into_iter().enumerate() {
                 // Create a pipeline flush system
                 let id_num = graph.systems.len();
                 let id = NodeId::System(id_num);
+
+                let barrier_producers: Vec<_> = stage
+                    .iter()
+                    .filter_map(|&i| {
+                        graph.systems[i]
+                            .config
+                            .get_mut::<RenderSystemConfig>()
+                            .unwrap()
+                            .barrier_producer
+                            .take()
+                    })
+                    .collect();
+                if barrier_producers.is_empty() {
+                    continue;
+                }
                 let mut system: BoxedSystem = match queue_node.queue_type {
                     QueueType::Graphics => Box::new(IntoSystem::into_system(
                         crate::ecs::InsertPipelineBarrier::<'g'>::new(),
@@ -635,21 +656,13 @@ impl ScheduleBuildPass for RenderSystemPass {
                     _ => unimplemented!(),
                 };
 
-                let mut barrier_producers: Vec<_> = stage
-                    .iter()
-                    .filter_map(|&i| {
-                        graph.systems[i]
-                            .config
-                            .get_mut::<RenderSystemConfig>()
-                            .unwrap()
-                            .barrier_producer
-                            .take()
-                    })
-                    .collect();
-                if !barrier_producers.is_empty() {
-                    system.configurate(&mut barrier_producers, world);
-                    assert!(barrier_producers.is_empty());
-                }
+                let mut config = crate::ecs::InsertPipelineBarrierConfig {
+                    producers: barrier_producers,
+                    record_to_next: i == 0 && !queue_node.is_queue_op,
+                };
+                system.configurate(&mut config, world);
+                assert!(config.producers.is_empty());
+
                 system.initialize(world);
                 graph
                     .systems
@@ -662,9 +675,31 @@ impl ScheduleBuildPass for RenderSystemPass {
                         .neighbors_directed(NodeId::System(*i), Direction::Incoming)
                         .collect::<Vec<_>>()
                     {
-                        dependency_flattened.add_edge(parent, id, ());
+                        let is_flush_system = graph.systems[parent.index()]
+                            .config
+                            .has::<FlushSystemMarker>();
+                        if !is_flush_system {
+                            // skip if the parent is a flush system we just added.
+                            dependency_flattened.add_edge(parent, id, ());
+                        }
                     }
                     dependency_flattened.add_edge(id, NodeId::System(*i), ());
+                }
+
+                if i == 0 {
+                    // For the first stage, ensure the barrier producers are run before previous queue op submission
+                    for i in
+                        queue_graph.neighbors_directed(queue_node_i as u32, Direction::Incoming)
+                    {
+                        let meta = &self.queue_graph_nodes[i as usize];
+                        if !meta.is_queue_op {
+                            dependency_flattened.add_edge(
+                                id,
+                                NodeId::System(meta.queue_node_index),
+                                (),
+                            );
+                        }
+                    }
                 }
             }
         }

@@ -877,14 +877,4 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     assert_eq!(current_vertex as usize, device_buffer.total_vertices_count);
     assert_eq!(current_indice as usize, device_buffer.total_indices_count);
     drop(pass);
-
-    commands.transition_resources().transition_image(
-        &mut swapchain_image,
-        Access {
-            stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-            access: vk::AccessFlags2::empty(),
-        },
-        vk::ImageLayout::PRESENT_SRC_KHR,
-        true,
-    );
 }

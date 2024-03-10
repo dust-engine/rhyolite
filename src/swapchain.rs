@@ -13,10 +13,15 @@ use bevy::ecs::{
 use bevy::window::{PrimaryWindow, Window};
 
 use crate::{
-    ecs::{QueueContext, RenderImage, RenderSystemPass, RenderSystemsBinarySemaphoreTracker},
+    commands::ResourceTransitionCommands,
+    ecs::{
+        Barriers, IntoRenderSystemConfigs, QueueContext, RenderImage, RenderSystemPass,
+        RenderSystemsBinarySemaphoreTracker,
+    },
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
-    Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter, Surface,
+    Access, Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter,
+    Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -40,10 +45,12 @@ impl Plugin for SwapchainPlugin {
             PostUpdate,
             (
                 extract_swapchains.after(crate::surface::extract_surfaces),
-                present.with_option::<RenderSystemPass>(|entry| {
-                    let item = entry.or_default();
-                    item.force_binary_semaphore = true;
-                }),
+                present
+                    .with_option::<RenderSystemPass>(|entry| {
+                        let item = entry.or_default();
+                        item.force_binary_semaphore = true;
+                    })
+                    .with_barriers(present_barriers),
                 acquire_swapchain_image::<With<PrimaryWindow>>
                     .with_option::<RenderSystemPass>(|entry| {
                         let item = entry.or_default();
@@ -679,6 +686,20 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     swapchain_image.0 = Some(image);
 }
 
+fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut SwapchainImage>) {
+    for mut i in query.iter_mut() {
+        let image = i.0.as_mut().unwrap();
+        barriers.transition_image(
+            image,
+            Access {
+                stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+                access: vk::AccessFlags2::empty(),
+            },
+            vk::ImageLayout::PRESENT_SRC_KHR,
+            true,
+        );
+    }
+}
 pub fn present(
     mut queue_ctx: QueueContext<'g'>,
     device: Res<Device>,

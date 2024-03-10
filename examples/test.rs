@@ -84,7 +84,7 @@ fn clear_main_window_color(
     mut commands: RenderCommands<'g'>,
     mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
 ) {
-    let Ok(mut swapchain_image) = windows.get_single_mut() else {
+    let Ok(swapchain_image) = windows.get_single_mut() else {
         return;
     };
     commands.clear_color_image(
@@ -100,15 +100,6 @@ fn clear_main_window_color(
             base_array_layer: 0,
             layer_count: 1,
         }],
-    );
-    commands.transition_resources().transition_image(
-        &mut swapchain_image,
-        Access {
-            stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-            access: vk::AccessFlags2::empty(),
-        },
-        vk::ImageLayout::PRESENT_SRC_KHR,
-        true,
     );
 }
 

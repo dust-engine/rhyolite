@@ -78,6 +78,24 @@ impl<const Q: char> DefaultCommandPool<Q> {
         }
         self.current_buffer
     }
+    fn barrier_buffer(&mut self) -> vk::CommandBuffer {
+        if self.barrier_buffer == vk::CommandBuffer::null() {
+            self.barrier_buffer = self.pool.allocate();
+            unsafe {
+                self.pool
+                    .device()
+                    .begin_command_buffer(
+                        self.barrier_buffer,
+                        &vk::CommandBufferBeginInfo {
+                            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+            }
+        }
+        self.barrier_buffer
+    }
     fn take_current_buffer(&mut self) -> vk::CommandBuffer {
         let current = self.current_buffer;
         if current != vk::CommandBuffer::null() {
@@ -569,6 +587,8 @@ pub(crate) struct InsertPipelineBarrier<const Q: char> {
     barrier_producers: Vec<BoxedBarrierProducer>,
     system_meta: SystemMeta,
     render_command_state: Option<RenderCommandState<Q>>,
+    /// If true, will record to `barrier_buffer` instead of `current_buffer`.
+    record_to_next: bool,
 }
 impl<const Q: char> InsertPipelineBarrier<Q> {
     pub(crate) fn new() -> Self {
@@ -576,8 +596,14 @@ impl<const Q: char> InsertPipelineBarrier<Q> {
             barrier_producers: Vec::new(),
             system_meta: SystemMeta::new::<Self>(),
             render_command_state: None,
+            record_to_next: false,
         }
     }
+}
+
+pub(crate) struct InsertPipelineBarrierConfig {
+    pub(crate) producers: Vec<BoxedBarrierProducer>,
+    pub(crate) record_to_next: bool,
 }
 impl<const Q: char> System for InsertPipelineBarrier<Q>
 where
@@ -628,6 +654,7 @@ where
         _input: Self::In,
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
     ) -> Self::Out {
+        let name = self.name();
         let mut image_barriers = Vec::new();
         let mut buffer_barriers = Vec::new();
         let mut global_barriers = vk::MemoryBarrier2::default();
@@ -652,8 +679,13 @@ where
             world,
             change_tick,
         );
+        let cmd_buf = if self.record_to_next {
+            render_commands.default_cmd_pool.barrier_buffer()
+        } else {
+            render_commands.default_cmd_pool.current_buffer()
+        };
         let barriers = ImmediateTransitions {
-            cmd_buf: render_commands.cmd_buf(),
+            cmd_buf,
             device: render_commands.device(),
             global_barriers,
             image_barriers,
@@ -707,8 +739,9 @@ where
         self.system_meta.last_run = last_run;
     }
     fn configurate(&mut self, config: &mut dyn Any, world: &mut World) {
-        if let Some(systems) = config.downcast_mut::<Vec<BoxedBarrierProducer>>() {
-            let systems = std::mem::take(systems);
+        if let Some(systems) = config.downcast_mut::<InsertPipelineBarrierConfig>() {
+            self.record_to_next = systems.record_to_next;
+            let systems = std::mem::take(&mut systems.producers);
             assert!(self.barrier_producers.is_empty());
             self.barrier_producers = systems;
 
