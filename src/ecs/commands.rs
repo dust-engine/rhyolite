@@ -20,6 +20,7 @@ pub mod queue_cap {
 use std::{
     any::Any,
     collections::BTreeMap,
+    ffi::CString,
     sync::{atomic::AtomicU64, Arc},
 };
 
@@ -35,6 +36,7 @@ use queue_cap::*;
 use crate::{
     command_pool::ManagedCommandPool,
     commands::{CommandRecorder, CommonCommands},
+    debug::DebugCommands,
     ecs::Barriers,
     queue::QueueType,
     semaphore::TimelineSemaphore,
@@ -48,7 +50,7 @@ use super::{
 use crate::Access;
 
 #[derive(Resource)]
-struct DefaultCommandPool<const Q: char> {
+pub(crate) struct DefaultCommandPool<const Q: char> {
     pool: ManagedCommandPool,
     /// Command buffer for the current stage.
     current_buffer: vk::CommandBuffer,
@@ -109,7 +111,7 @@ impl<const Q: char> PerFrameResource for DefaultCommandPool<Q> {
 
 /// Command buffers scheduled for submission in the next call to vkQueueSubmit.
 #[derive(Resource)]
-struct RecordedCommandBuffers<const Q: char>(Vec<vk::CommandBuffer>);
+pub(crate) struct RecordedCommandBuffers<const Q: char>(Vec<vk::CommandBuffer>);
 
 pub struct RenderCommands<'w, 's, const Q: char>
 where
@@ -225,12 +227,29 @@ where
             world,
             change_tick,
         );
-        RenderCommands {
+
+        let mut this = RenderCommands {
             frame_index: state.default_cmd_pool_state.frame_index,
             default_cmd_pool,
             retained_objects: &mut state.retained_objects,
             recorded_command_buffers,
+        };
+        #[cfg(debug_assertions)]
+        {
+            let str = CString::new(system_meta.name()).unwrap();
+            this.begin_debug_label(&str, [0.0, 0.0, 0.0, 1.0]);
         }
+        this
+    }
+}
+
+#[cfg(debug_assertions)]
+impl<const Q: char> Drop for RenderCommands<'_, '_, Q>
+where
+    (): IsQueueCap<Q>,
+{
+    fn drop(&mut self) {
+        self.end_debug_label();
     }
 }
 
@@ -451,7 +470,8 @@ where
 // If they were assigned to different queues,
 // flush_system_graph will run multiple times, once for each queue.
 pub(crate) fn flush_system_graph<const Q: char>(
-    mut commands: RenderCommands<Q>,
+    mut default_cmd_pool: PerFrameMut<DefaultCommandPool<Q>>,
+    mut recorded_command_buffers: ResMut<RecordedCommandBuffers<Q>>,
     queue_ctx: QueueContext<Q>,
     binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
     device: Res<Device>,
@@ -459,13 +479,12 @@ pub(crate) fn flush_system_graph<const Q: char>(
     (): IsQueueCap<Q>,
 {
     // Take all the command buffers recorded so far, plus the default one.
-    let command_buffer: Vec<_> = commands
-        .recorded_command_buffers
+    let command_buffer: Vec<_> = recorded_command_buffers
         .0
         .iter()
         .cloned()
         .chain(
-            std::iter::once(commands.default_cmd_pool.take_current_buffer())
+            std::iter::once(default_cmd_pool.take_current_buffer())
                 .filter(|&x| x != vk::CommandBuffer::null()),
         )
         .map(|command_buffer| vk::CommandBufferSubmitInfo {
@@ -473,9 +492,9 @@ pub(crate) fn flush_system_graph<const Q: char>(
             ..Default::default()
         })
         .collect();
-    commands.recorded_command_buffers.0.clear();
-    commands.default_cmd_pool.current_buffer = commands.default_cmd_pool.barrier_buffer;
-    commands.default_cmd_pool.barrier_buffer = vk::CommandBuffer::null();
+    recorded_command_buffers.0.clear();
+    default_cmd_pool.current_buffer = default_cmd_pool.barrier_buffer;
+    default_cmd_pool.barrier_buffer = vk::CommandBuffer::null();
     let semaphore_signals = queue_ctx
         .binary_signals
         .iter()
