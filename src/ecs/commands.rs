@@ -46,7 +46,8 @@ use crate::{
 };
 
 use super::{
-    BoxedBarrierProducer, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemConfig,
+    BarrierProducerCell, BoxedBarrierProducer, PerFrameMut, PerFrameResource, PerFrameState,
+    RenderSystemConfig,
 };
 use crate::Access;
 
@@ -846,5 +847,51 @@ impl RenderSystemsBinarySemaphoreTracker {
                 sender: self.sender.clone(),
             })
         }
+    }
+}
+
+pub(crate) struct BarrierProducerOutConfig {
+    /// This is a pointer from Arc::<BarrierProducerCell<O>>::into_raw()
+    pub barrier_producer_output_cell: *const (),
+    pub barrier_producer_output_type: std::any::TypeId,
+}
+
+pub struct BarrierProducerOut<T>(pub T);
+unsafe impl<T: 'static> SystemParam for BarrierProducerOut<T> {
+    type State = Option<Arc<BarrierProducerCell<T>>>;
+
+    type Item<'world, 'state> = BarrierProducerOut<T>;
+
+    fn init_state(world: &mut World, system_meta: &mut SystemMeta) -> Self::State {
+        None
+    }
+
+    unsafe fn get_param<'world, 'state>(
+        state: &'state mut Self::State,
+        system_meta: &SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        change_tick: bevy::ecs::component::Tick,
+    ) -> Self::Item<'world, 'state> {
+        let state = state.as_mut().unwrap();
+        let cell = state.0.get().as_mut().unwrap();
+        Self(cell.take().unwrap())
+    }
+
+    fn configurate(state: &mut Self::State, config: &mut dyn Any, _world: &mut World) {
+        let Some(config) = config.downcast_mut::<Option<BarrierProducerOutConfig>>() else {
+            return;
+        };
+        let config = config.take().unwrap();
+        if config.barrier_producer_output_type != std::any::TypeId::of::<T>() {
+            panic!("Type mismatch");
+        }
+        if config.barrier_producer_output_cell.is_null() {
+            panic!()
+        }
+        let cell = unsafe {
+            Arc::from_raw(config.barrier_producer_output_cell as *const BarrierProducerCell<T>)
+        };
+        assert!(state.is_none());
+        state.replace(cell);
     }
 }

@@ -1,6 +1,11 @@
+use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
+use std::ptr::NonNull;
+use std::sync::Arc;
+
 use ash::vk;
 
-use bevy::ecs::system::IntoSystem;
+use bevy::ecs::system::{In, IntoSystem};
 use bevy::ecs::{
     schedule::{IntoSystemConfigs, SystemConfigs},
     system::BoxedSystem,
@@ -16,15 +21,23 @@ pub struct RenderSystemConfig {
     pub queue: QueueType,
     pub force_binary_semaphore: bool,
     pub is_queue_op: bool,
-    pub barrier_producer: Option<BoxedBarrierProducer>,
+    pub barrier_producer_config: Option<RenderSystemBarrierProducerConfig>,
 }
+pub struct RenderSystemBarrierProducerConfig {
+    pub barrier_producer: BoxedBarrierProducer,
+    /// This is a pointer from Arc::<BarrierProducerCell<O>>::into_raw()
+    pub barrier_producer_output_cell: *const (),
+    pub barrier_producer_output_type: std::any::TypeId,
+}
+unsafe impl Send for RenderSystemBarrierProducerConfig {}
+unsafe impl Sync for RenderSystemBarrierProducerConfig {}
 impl Default for RenderSystemConfig {
     fn default() -> Self {
         Self {
             queue: QueueType::Graphics,
             force_binary_semaphore: false,
             is_queue_op: false,
-            barrier_producer: None,
+            barrier_producer_config: None,
         }
     }
 }
@@ -95,6 +108,9 @@ impl ResourceTransitionCommands for Barriers {
 }
 
 pub type BoxedBarrierProducer = BoxedSystem<Barriers, ()>;
+pub struct BarrierProducerCell<O>(pub(crate) UnsafeCell<Option<O>>);
+unsafe impl<O> Send for BarrierProducerCell<O> {}
+unsafe impl<O> Sync for BarrierProducerCell<O> {}
 
 pub trait IntoRenderSystemConfigs<Marker>: IntoSystemConfigs<Marker>
 where
@@ -109,15 +125,40 @@ where
             config.queue = queue_type;
         })
     }
-    fn with_barriers<M, T: IntoSystem<Barriers, (), M>>(self, barriers: T) -> SystemConfigs {
-        let mut barriers: Option<BoxedBarrierProducer> = Some(Box::new(T::into_system(barriers)));
+    fn with_barriers<M, O: 'static, T: IntoSystem<Barriers, O, M>>(
+        self,
+        barriers: T,
+    ) -> SystemConfigs {
+        let cell: Option<Arc<BarrierProducerCell<O>>> = if std::mem::size_of::<O>() == 0 {
+            None
+        } else {
+            Some(Arc::new(BarrierProducerCell(UnsafeCell::new(None))))
+        };
+        let cell2 = cell.clone();
+        let system = barriers.pipe(move |In(input): In<O>| unsafe {
+            // Cell is only ever written to in the barrier producer and read from in the render system.
+            let Some(cell) = &cell else {
+                return;
+            };
+            let ptr = cell.0.get().as_mut().unwrap();
+            ptr.replace(input);
+        });
+        let mut barriers: Option<RenderSystemBarrierProducerConfig> =
+            Some(RenderSystemBarrierProducerConfig {
+                barrier_producer: Box::new(system),
+                barrier_producer_output_cell: cell2
+                    .map(Arc::into_raw)
+                    .map(|ptr| ptr as *const ())
+                    .unwrap_or(std::ptr::null()),
+                barrier_producer_output_type: std::any::TypeId::of::<O>(),
+            });
         self.with_option::<RenderSystemPass>(move |entry| {
             let config = entry.or_default();
             if barriers.is_none() {
                 unimplemented!();
                 // TODO: allow collective barriers for multiple systems
             }
-            config.barrier_producer = barriers.take();
+            config.barrier_producer_config = barriers.take();
         })
     }
 }

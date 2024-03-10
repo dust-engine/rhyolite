@@ -19,8 +19,9 @@ use bevy::{
 
 use crate::{
     ecs::{
-        BinarySemaphoreOp, QueueSystemDependencyConfig, QueueSystemInitialState,
-        RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker, TimelineSemaphoreOp,
+        BarrierProducerOutConfig, BinarySemaphoreOp, QueueSystemDependencyConfig,
+        QueueSystemInitialState, RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker,
+        TimelineSemaphoreOp,
     },
     queue::{QueueRef, QueuesRouter},
     semaphore::TimelineSemaphore,
@@ -632,12 +633,29 @@ impl ScheduleBuildPass for RenderSystemPass {
                 let barrier_producers: Vec<_> = stage
                     .iter()
                     .filter_map(|&i| {
-                        graph.systems[i]
+                        let Some(barrier_producer_config) = graph.systems[i]
                             .config
                             .get_mut::<RenderSystemConfig>()
                             .unwrap()
-                            .barrier_producer
-                            .take()
+                            .barrier_producer_config
+                            .take() else {
+                            return None;
+                            };
+                        let mut config = Some(BarrierProducerOutConfig {
+                            barrier_producer_output_cell: barrier_producer_config.barrier_producer_output_cell,
+                            barrier_producer_output_type: barrier_producer_config.barrier_producer_output_type,
+                        });
+                        graph.systems[i].get_mut().unwrap().configurate(&mut config, world);
+                        if let Some(config) = config {
+                            // If we still have the config, that means nobody took it.
+                            // In this case, we need to drop the Arc so that it doesn't leak.
+                            if !config.barrier_producer_output_cell.is_null() {
+                                unsafe { Arc::from_raw(config.barrier_producer_output_cell) };
+                                tracing::warn!("Barrier producer output was not consumed by the render system.");
+                            }
+                        }
+
+                        Some(barrier_producer_config.barrier_producer)
                     })
                     .collect();
                 if barrier_producers.is_empty() {
