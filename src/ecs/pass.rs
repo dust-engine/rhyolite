@@ -4,7 +4,6 @@ use std::{
 };
 
 use bevy::ecs::{
-    query::Access,
     schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
     system::{BoxedSystem, IntoSystem, System},
     world::World,

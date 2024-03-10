@@ -36,7 +36,7 @@ use queue_cap::*;
 
 use crate::{
     command_pool::ManagedCommandPool,
-    commands::{CommandRecorder, CommonCommands},
+    commands::{CommandRecorder, ImmediateTransitions},
     debug::DebugCommands,
     ecs::Barriers,
     queue::QueueType,
@@ -631,6 +631,7 @@ where
         let mut image_barriers = Vec::new();
         let mut buffer_barriers = Vec::new();
         let mut global_barriers = vk::MemoryBarrier2::default();
+        let mut dependency_flags = vk::DependencyFlags::empty();
         let change_tick = world.increment_change_tick();
         for i in self.barrier_producers.iter_mut() {
             let mut dropped = false;
@@ -638,6 +639,7 @@ where
                 image_barriers: &mut image_barriers,
                 buffer_barriers: &mut buffer_barriers,
                 global_barriers: &mut global_barriers,
+                dependency_flags: &mut dependency_flags,
                 dropped: &mut dropped,
             };
             i.run_unsafe(barrier, world);
@@ -650,11 +652,15 @@ where
             world,
             change_tick,
         );
-        let mut barriers = render_commands.transition_resources();
-        barriers.global_barriers = global_barriers;
-        barriers.image_barriers = image_barriers;
-        barriers.buffer_barriers = buffer_barriers;
-        barriers.end();
+        let barriers = ImmediateTransitions {
+            cmd_buf: render_commands.cmd_buf(),
+            device: render_commands.device(),
+            global_barriers,
+            image_barriers,
+            buffer_barriers,
+            dependency_flags,
+        };
+        drop(barriers);
         self.system_meta.last_run = change_tick;
     }
 

@@ -23,7 +23,10 @@ use rhyolite::{
     acquire_swapchain_image, ash,
     ash::vk,
     buffer::staging::StagingBelt,
-    commands::{CommonCommands, GraphicsCommands, RenderPassCommands, TransferCommands},
+    commands::{
+        CommonCommands, GraphicsCommands, RenderPassCommands, ResourceTransitionCommands,
+        TransferCommands,
+    },
     ecs::{Barriers, IntoRenderSystemConfigs},
     ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderImage, RenderRes},
     pipeline::{
@@ -875,16 +878,13 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     assert_eq!(current_indice as usize, device_buffer.total_indices_count);
     drop(pass);
 
-    commands
-        .transition_resources()
-        .image(
-            &mut swapchain_image,
-            Access {
-                stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-                access: vk::AccessFlags2::empty(),
-            },
-            vk::ImageLayout::PRESENT_SRC_KHR,
-            true,
-        )
-        .end();
+    commands.transition_resources().transition_image(
+        &mut swapchain_image,
+        Access {
+            stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+            access: vk::AccessFlags2::empty(),
+        },
+        vk::ImageLayout::PRESENT_SRC_KHR,
+        true,
+    );
 }

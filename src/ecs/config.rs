@@ -6,9 +6,10 @@ use bevy::ecs::{
     system::BoxedSystem,
 };
 
-use crate::{queue::QueueType, Access, BufferLike, ImageLike};
+use crate::commands::ResourceTransitionCommands;
+use crate::{queue::QueueType, Access};
 
-use super::{RenderImage, RenderRes, RenderSystemPass};
+use super::RenderSystemPass;
 
 pub struct RenderSystemConfig {
     /// The render system must be assigned onto a queue supporting these feature flags.
@@ -50,6 +51,7 @@ impl Default for QueueSystemDependencyConfig {
 
 /// GAT limitation. All references contained herein are valid for the duration of the system call.
 pub struct Barriers {
+    pub(crate) dependency_flags: *mut vk::DependencyFlags,
     pub(crate) image_barriers: *mut Vec<vk::ImageMemoryBarrier2>,
     pub(crate) buffer_barriers: *mut Vec<vk::BufferMemoryBarrier2>,
     pub(crate) global_barriers: *mut vk::MemoryBarrier2,
@@ -62,65 +64,33 @@ impl Drop for Barriers {
         }
     }
 }
-
-impl Barriers {
-    pub fn transition_resource<T>(&mut self, res: &mut RenderRes<T>, access: Access) {
-        let global_barriers = unsafe { &mut *self.global_barriers };
-        let barrier = res.state.transition(access, false);
-        global_barriers.src_stage_mask |= barrier.src_stage_mask;
-        global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
-        global_barriers.src_access_mask |= barrier.src_access_mask;
-        global_barriers.dst_access_mask |= barrier.dst_access_mask;
+impl ResourceTransitionCommands for Barriers {
+    fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self {
+        let current = unsafe { &mut *self.global_barriers };
+        current.src_stage_mask |= barrier.src_stage_mask;
+        current.dst_stage_mask |= barrier.dst_stage_mask;
+        current.src_access_mask |= barrier.src_access_mask;
+        current.dst_access_mask |= barrier.dst_access_mask;
+        self
     }
-    pub fn transition_image<T: ImageLike>(
-        &mut self,
-        image: &mut RenderImage<T>,
-        access: Access,
-        layout: vk::ImageLayout,
-        retain_data: bool,
-    ) {
-        if access.is_readonly() && !retain_data {
-            tracing::warn!("Transitioning an image to readonly access without retaining image data. This is likely an error.");
-        }
-        if access.is_writeonly() && retain_data {
-            tracing::warn!("Transitioning an image to writeonly access while retaining image data. This is likely inefficient.");
-        }
-        let image_barriers = unsafe { &mut *self.image_barriers };
-        let global_barriers = unsafe { &mut *self.global_barriers };
-        let has_layout_transition = image.layout != layout;
-        let barrier = image.res.state.transition(access, has_layout_transition);
 
-        if has_layout_transition {
-            image_barriers.push(vk::ImageMemoryBarrier2 {
-                src_stage_mask: barrier.src_stage_mask,
-                dst_stage_mask: barrier.dst_stage_mask,
-                src_access_mask: barrier.src_access_mask,
-                dst_access_mask: barrier.dst_access_mask,
-                old_layout: if retain_data {
-                    image.layout
-                } else {
-                    vk::ImageLayout::UNDEFINED
-                },
-                new_layout: layout,
-                image: image.raw_image(),
-                subresource_range: image.subresource_range(),
-                ..Default::default()
-            });
-            image.layout = layout;
-        } else {
-            global_barriers.src_stage_mask |= barrier.src_stage_mask;
-            global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
-            global_barriers.src_access_mask |= barrier.src_access_mask;
-            global_barriers.dst_access_mask |= barrier.dst_access_mask;
-        }
+    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self {
+        let current = unsafe { &mut *self.image_barriers };
+        current.push(barrier);
+        self
     }
-    pub fn transition_buffer<T: BufferLike>(&mut self, buffer: &mut RenderRes<T>, access: Access) {
-        let global_barriers = unsafe { &mut *self.global_barriers };
-        let barrier = buffer.state.transition(access, false);
-        global_barriers.src_stage_mask |= barrier.src_stage_mask;
-        global_barriers.dst_stage_mask |= barrier.dst_stage_mask;
-        global_barriers.src_access_mask |= barrier.src_access_mask;
-        global_barriers.dst_access_mask |= barrier.dst_access_mask;
+
+    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self {
+        let current = unsafe { &mut *self.buffer_barriers };
+        current.push(barrier);
+        self
+    }
+
+    fn set_dependency_flags(&mut self, flags: vk::DependencyFlags) -> &mut Self {
+        unsafe {
+            *self.dependency_flags |= flags;
+        }
+        self
     }
 }
 

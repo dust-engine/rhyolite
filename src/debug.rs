@@ -2,7 +2,7 @@ use ash::extensions::ext;
 use ash::{prelude::VkResult, vk};
 use bevy::app::Plugin;
 use bevy::ecs::system::Resource;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 use std::sync::RwLock;
 

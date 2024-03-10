@@ -8,6 +8,7 @@ use bevy::ecs::{
     system::{In, Query},
 };
 use bevy::window::PrimaryWindow;
+use rhyolite::commands::ResourceTransitionCommands;
 use rhyolite::debug::DebugUtilsPlugin;
 use rhyolite::{
     commands::CommonCommands,
@@ -100,18 +101,15 @@ fn clear_main_window_color(
             layer_count: 1,
         }],
     );
-    commands
-        .transition_resources()
-        .image(
-            &mut swapchain_image,
-            Access {
-                stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-                access: vk::AccessFlags2::empty(),
-            },
-            vk::ImageLayout::PRESENT_SRC_KHR,
-            true,
-        )
-        .end();
+    commands.transition_resources().transition_image(
+        &mut swapchain_image,
+        Access {
+            stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+            access: vk::AccessFlags2::empty(),
+        },
+        vk::ImageLayout::PRESENT_SRC_KHR,
+        true,
+    );
 }
 
 fn clear_main_window_color_barrier(
@@ -129,5 +127,5 @@ fn clear_main_window_color_barrier(
         },
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         false,
-    )
+    );
 }
