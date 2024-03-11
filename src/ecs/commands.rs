@@ -54,21 +54,18 @@ use crate::Access;
 #[derive(Resource)]
 pub(crate) struct DefaultCommandPool<const Q: char> {
     pool: ManagedCommandPool,
-    /// Command buffer for the current stage.
-    current_buffer: vk::CommandBuffer,
-    /// Command buffer for the next stage, for pre-recording pipeline barriers.
-    barrier_buffer: vk::CommandBuffer,
+    buffer: vk::CommandBuffer,
 }
 impl<const Q: char> DefaultCommandPool<Q> {
     /// Returns the command buffer currently being recorded.
     fn current_buffer(&mut self) -> vk::CommandBuffer {
-        if self.current_buffer == vk::CommandBuffer::null() {
-            self.current_buffer = self.pool.allocate();
+        if self.buffer == vk::CommandBuffer::null() {
+            self.buffer = self.pool.allocate();
             unsafe {
                 self.pool
                     .device()
                     .begin_command_buffer(
-                        self.current_buffer,
+                        self.buffer,
                         &vk::CommandBufferBeginInfo {
                             flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
                             ..Default::default()
@@ -77,28 +74,11 @@ impl<const Q: char> DefaultCommandPool<Q> {
                     .unwrap()
             }
         }
-        self.current_buffer
-    }
-    fn barrier_buffer(&mut self) -> vk::CommandBuffer {
-        if self.barrier_buffer == vk::CommandBuffer::null() {
-            self.barrier_buffer = self.pool.allocate();
-            unsafe {
-                self.pool
-                    .device()
-                    .begin_command_buffer(
-                        self.barrier_buffer,
-                        &vk::CommandBufferBeginInfo {
-                            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-                            ..Default::default()
-                        },
-                    )
-                    .unwrap()
-            }
-        }
-        self.barrier_buffer
+        self.buffer
     }
     fn take_current_buffer(&mut self) -> vk::CommandBuffer {
-        let current = self.current_buffer;
+        let current = self.buffer;
+        self.buffer = vk::CommandBuffer::null();
         if current != vk::CommandBuffer::null() {
             unsafe {
                 self.pool.device().end_command_buffer(current).unwrap();
@@ -120,18 +100,31 @@ impl<const Q: char> PerFrameResource for DefaultCommandPool<Q> {
         let pool = ManagedCommandPool::new(device.clone(), queue_family_index).unwrap();
         DefaultCommandPool {
             pool,
-            current_buffer: vk::CommandBuffer::null(),
-            barrier_buffer: vk::CommandBuffer::null(),
+            buffer: vk::CommandBuffer::null(),
         }
     }
     fn reset(&mut self, _: bevy::ecs::system::SystemParamItem<'_, '_, Self::Params>) {
         self.pool.reset();
+        self.buffer = vk::CommandBuffer::null();
     }
 }
 
 /// Command buffers scheduled for submission in the next call to vkQueueSubmit.
-#[derive(Resource)]
-pub(crate) struct RecordedCommandBuffers<const Q: char>(Vec<vk::CommandBuffer>);
+#[derive(Resource, Default)]
+pub(crate) struct RecordedCommandBuffers<const Q: char> {
+    curr_stage: Vec<vk::CommandBuffer>,
+
+    prev_stage: Vec<vk::CommandBuffer>,
+    /// true if the last buffer in `prev_stage` was the default command buffer.
+    /// if this is false, the last command buffer in `prev_stage` was recorded externally, and we don't
+    /// necessarily have ownership. In this case we'd need to allocate a new buffer from the default
+    /// command buffer to record the pipeline transfer barrier.
+    prev_stage_last_buf_open: bool,
+    prev_stage_buffer_barriers: Vec<vk::BufferMemoryBarrier2>,
+    prev_stage_image_barriers: Vec<vk::ImageMemoryBarrier2>,
+}
+unsafe impl<const Q: char> Send for RecordedCommandBuffers<Q> {}
+unsafe impl<const Q: char> Sync for RecordedCommandBuffers<Q> {}
 
 pub struct RenderCommands<'w, 's, const Q: char>
 where
@@ -156,9 +149,11 @@ where
     pub fn add_external_command_buffer(&mut self, command_buffer: vk::CommandBuffer) {
         let current = self.default_cmd_pool.take_current_buffer();
         if current != vk::CommandBuffer::null() {
-            self.recorded_command_buffers.0.push(current);
+            self.recorded_command_buffers.curr_stage.push(current);
         }
-        self.recorded_command_buffers.0.push(command_buffer);
+        self.recorded_command_buffers
+            .curr_stage
+            .push(command_buffer);
     }
 }
 impl<'w, 's, const Q: char> HasDevice for RenderCommands<'w, 's, Q>
@@ -201,9 +196,7 @@ where
             PerFrameMut::<DefaultCommandPool<Q>>::init_state(world, system_meta);
         let recorded_cmd_buf_state =
             ResMut::<RecordedCommandBuffers<Q>>::init_state(world, system_meta);
-        world.get_resource_or_insert_with::<RecordedCommandBuffers<Q>>(|| {
-            RecordedCommandBuffers(Vec::new())
-        });
+        world.get_resource_or_insert_with::<RecordedCommandBuffers<Q>>(Default::default);
         RenderCommandState {
             default_cmd_pool_state,
             recorded_cmd_buf_state,
@@ -485,11 +478,33 @@ where
     }
 }
 
+pub(crate) fn flush_system_graph<const Q: char>(
+    mut default_cmd_pool: PerFrameMut<DefaultCommandPool<Q>>,
+    mut recorded_command_buffers: ResMut<RecordedCommandBuffers<Q>>,
+) where
+    (): IsQueueCap<Q>,
+{
+    let recorded_command_buffers = &mut *recorded_command_buffers;
+    assert!(recorded_command_buffers.prev_stage.is_empty());
+    recorded_command_buffers
+        .prev_stage
+        .extend(recorded_command_buffers.curr_stage.drain(..));
+
+    if default_cmd_pool.buffer != vk::CommandBuffer::null() {
+        recorded_command_buffers
+            .prev_stage
+            .push(default_cmd_pool.buffer);
+        recorded_command_buffers.prev_stage_last_buf_open = true;
+        default_cmd_pool.buffer = vk::CommandBuffer::null();
+    } else {
+        recorded_command_buffers.prev_stage_last_buf_open = false;
+    }
+}
 // So, what happens if multiple systems get assigned to the same queue?
 // flush_system_graph will only run once for that particular queue.
 // If they were assigned to different queues,
 // flush_system_graph will run multiple times, once for each queue.
-pub(crate) fn flush_system_graph<const Q: char>(
+pub(crate) fn submit_system_graph<const Q: char>(
     mut default_cmd_pool: PerFrameMut<DefaultCommandPool<Q>>,
     mut recorded_command_buffers: ResMut<RecordedCommandBuffers<Q>>,
     queue_ctx: QueueContext<Q>,
@@ -498,23 +513,67 @@ pub(crate) fn flush_system_graph<const Q: char>(
 ) where
     (): IsQueueCap<Q>,
 {
+    // Record the trailing pipeline barrier
+    if !recorded_command_buffers
+        .prev_stage_buffer_barriers
+        .is_empty()
+        || !recorded_command_buffers
+            .prev_stage_image_barriers
+            .is_empty()
+    {
+        let cmd_buf = if recorded_command_buffers.prev_stage_last_buf_open {
+            recorded_command_buffers.prev_stage.last().unwrap().clone()
+        } else {
+            let buf = default_cmd_pool.pool.allocate();
+            unsafe {
+                device
+                    .begin_command_buffer(
+                        buf,
+                        &vk::CommandBufferBeginInfo {
+                            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+            recorded_command_buffers.prev_stage.push(buf);
+            buf
+        };
+        let buffer_barriers =
+            std::mem::take(&mut recorded_command_buffers.prev_stage_buffer_barriers);
+        let image_barriers =
+            std::mem::take(&mut recorded_command_buffers.prev_stage_image_barriers);
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                cmd_buf,
+                &vk::DependencyInfoKHR {
+                    p_buffer_memory_barriers: buffer_barriers.as_ptr(),
+                    buffer_memory_barrier_count: buffer_barriers.len() as u32,
+                    p_image_memory_barriers: image_barriers.as_ptr(),
+                    image_memory_barrier_count: image_barriers.len() as u32,
+                    ..Default::default()
+                },
+            );
+            drop((buffer_barriers, image_barriers));
+            device.end_command_buffer(cmd_buf).unwrap();
+        }
+    } else if recorded_command_buffers.prev_stage_last_buf_open {
+        let buf = recorded_command_buffers.prev_stage.last().unwrap();
+        unsafe {
+            device.end_command_buffer(*buf).unwrap();
+        }
+    }
     // Take all the command buffers recorded so far, plus the default one.
     let command_buffer: Vec<_> = recorded_command_buffers
-        .0
+        .prev_stage
         .iter()
         .cloned()
-        .chain(
-            std::iter::once(default_cmd_pool.take_current_buffer())
-                .filter(|&x| x != vk::CommandBuffer::null()),
-        )
         .map(|command_buffer| vk::CommandBufferSubmitInfo {
             command_buffer,
             ..Default::default()
         })
         .collect();
-    recorded_command_buffers.0.clear();
-    default_cmd_pool.current_buffer = default_cmd_pool.barrier_buffer;
-    default_cmd_pool.barrier_buffer = vk::CommandBuffer::null();
+    recorded_command_buffers.prev_stage.clear();
     let semaphore_signals = queue_ctx
         .binary_signals
         .iter()
@@ -655,12 +714,18 @@ where
         _input: Self::In,
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
     ) -> Self::Out {
-        let name = self.name();
+        let change_tick = world.increment_change_tick();
+        let mut render_commands = RenderCommands::<Q>::get_param(
+            self.render_command_state.as_mut().unwrap(),
+            &self.system_meta,
+            world,
+            change_tick,
+        );
+
         let mut image_barriers = Vec::new();
         let mut buffer_barriers = Vec::new();
         let mut global_barriers = vk::MemoryBarrier2::default();
         let mut dependency_flags = vk::DependencyFlags::empty();
-        let change_tick = world.increment_change_tick();
         for i in self.barrier_producers.iter_mut() {
             let mut dropped = false;
             let barrier = Barriers {
@@ -668,32 +733,38 @@ where
                 buffer_barriers: &mut buffer_barriers,
                 global_barriers: &mut global_barriers,
                 dependency_flags: &mut dependency_flags,
+
+                image_barriers_prev_stage: &mut render_commands
+                    .recorded_command_buffers
+                    .prev_stage_image_barriers,
+                buffer_barriers_prev_stage: &mut render_commands
+                    .recorded_command_buffers
+                    .prev_stage_buffer_barriers,
                 dropped: &mut dropped,
             };
             i.run_unsafe(barrier, world);
             assert!(dropped);
         }
 
-        let mut render_commands = RenderCommands::<Q>::get_param(
-            self.render_command_state.as_mut().unwrap(),
-            &self.system_meta,
-            world,
-            change_tick,
-        );
-        let cmd_buf = if self.record_to_next {
-            render_commands.default_cmd_pool.barrier_buffer()
-        } else {
-            render_commands.default_cmd_pool.current_buffer()
-        };
-        let barriers = ImmediateTransitions {
-            cmd_buf,
-            device: render_commands.device(),
-            global_barriers,
-            image_barriers,
-            buffer_barriers,
-            dependency_flags,
-        };
-        drop(barriers);
+        if global_barriers.dst_access_mask != vk::AccessFlags2::empty()
+            || global_barriers.src_access_mask != vk::AccessFlags2::empty()
+            || global_barriers.dst_stage_mask != vk::PipelineStageFlags2KHR::empty()
+            || global_barriers.src_stage_mask != vk::PipelineStageFlags2KHR::empty()
+            || !image_barriers.is_empty()
+            || !buffer_barriers.is_empty()
+        {
+            let cmd_buf = render_commands.default_cmd_pool.current_buffer();
+            let barriers = ImmediateTransitions {
+                cmd_buf,
+                device: render_commands.device(),
+                global_barriers,
+                image_barriers,
+                buffer_barriers,
+                dependency_flags,
+            };
+            drop(barriers);
+        }
+
         self.system_meta.last_run = change_tick;
     }
 

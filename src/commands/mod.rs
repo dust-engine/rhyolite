@@ -96,6 +96,9 @@ impl Drop for ImmediateTransitions<'_> {
     }
 }
 pub trait ResourceTransitionCommands {
+    fn add_image_barrier_prev_stage(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self;
+    fn add_buffer_barrier_prev_stage(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self;
+
     fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self;
     fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self;
     fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self;
@@ -173,6 +176,12 @@ pub trait ResourceTransitionCommands {
     }
 }
 impl ResourceTransitionCommands for ImmediateTransitions<'_> {
+    fn add_image_barrier_prev_stage(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self {
+        panic!()
+    }
+    fn add_buffer_barrier_prev_stage(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self {
+        panic!()
+    }
     fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self {
         self.global_barriers.src_stage_mask |= barrier.src_stage_mask;
         self.global_barriers.dst_stage_mask |= barrier.dst_stage_mask;

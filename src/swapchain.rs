@@ -689,15 +689,25 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
 fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut SwapchainImage>) {
     for mut i in query.iter_mut() {
         let image = i.0.as_mut().unwrap();
-        barriers.transition_image(
-            image,
+        let barrier = image.res.state.transition(
             Access {
                 stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
                 access: vk::AccessFlags2::empty(),
             },
-            vk::ImageLayout::PRESENT_SRC_KHR,
             true,
         );
+        barriers.add_image_barrier_prev_stage(vk::ImageMemoryBarrier2 {
+            src_stage_mask: barrier.src_stage_mask,
+            src_access_mask: barrier.src_access_mask,
+            dst_stage_mask: barrier.dst_stage_mask,
+            dst_access_mask: barrier.dst_access_mask,
+            old_layout: image.layout,
+            new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            image: image.raw_image(),
+            subresource_range: image.subresource_range(),
+            ..Default::default()
+        });
+        image.layout = vk::ImageLayout::PRESENT_SRC_KHR;
     }
 }
 pub fn present(

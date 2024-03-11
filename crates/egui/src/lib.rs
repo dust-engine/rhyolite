@@ -741,10 +741,11 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     assets: Res<Assets<ShaderModule>>,
     task_pool: Res<DeferredOperationTaskPool>,
 ) {
-    let Some((pipeline, old_pipeline)) = pipeline_cache
-        .retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool) else {
-            return;
-        };
+    let Some((pipeline, old_pipeline)) =
+        pipeline_cache.retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool)
+    else {
+        return;
+    };
     if let Some(old_pipeline) = old_pipeline {
         commands.retain(old_pipeline);
     }

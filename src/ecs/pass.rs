@@ -61,7 +61,7 @@ struct QueueGraphEdge {
     semaphore_id: Option<QueueGraphEdgeSemaphoreType>,
 }
 
-struct FlushSystemMarker;
+struct SubmitSystemMarker;
 
 #[derive(Clone, Debug)]
 struct QueueGraphNodeMeta {
@@ -69,6 +69,7 @@ struct QueueGraphNodeMeta {
     is_queue_op: bool,
     /// for the queue node, this is the system id of the "queue op" system?
     queue_node_index: usize,
+    flush_node_index: usize,
     nodes: Vec<usize>,
     selected_queue: QueueRef,
     queue_type: QueueType,
@@ -332,6 +333,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                     nodes: vec![*stage],
                     is_queue_op: true,
                     queue_node_index: 0,
+                    flush_node_index: 0,
                     selected_queue: meta.selected_queue,
                     queue_type: meta.queue_type,
                 });
@@ -369,6 +371,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                         nodes: std::mem::take(stage),
                         is_queue_op: false,
                         queue_node_index: 0,
+                        flush_node_index: 0,
                         selected_queue: queue_graph_node_info.queue,
                         queue_type: queue_graph_node_info.queue_type,
                     });
@@ -403,6 +406,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             if queue_node.is_queue_op {
                 assert!(queue_node.nodes.len() == 1);
                 queue_node.queue_node_index = queue_node.nodes[0];
+                queue_node.flush_node_index = queue_node.nodes[0];
                 continue;
             }
             let id_num = graph.systems.len();
@@ -421,8 +425,31 @@ impl ScheduleBuildPass for RenderSystemPass {
             };
 
             system.initialize(world);
+            let config_map = ConfigMap::new();
+            graph.systems.push(SystemNode::new(system, config_map));
+            graph.system_conditions.push(Vec::new());
+            graph.ambiguous_with_all.insert(id);
+
+            queue_node.flush_node_index = id_num;
+
+            let id_num = graph.systems.len();
+            let id: NodeId = NodeId::System(id_num);
+            let mut system: BoxedSystem = match queue_node.queue_type {
+                QueueType::Graphics => Box::new(IntoSystem::into_system(
+                    crate::ecs::submit_system_graph::<'g'>,
+                )),
+                QueueType::Compute => Box::new(IntoSystem::into_system(
+                    crate::ecs::submit_system_graph::<'c'>,
+                )),
+                QueueType::Transfer => Box::new(IntoSystem::into_system(
+                    crate::ecs::submit_system_graph::<'t'>,
+                )),
+                _ => unimplemented!(),
+            };
+
+            system.initialize(world);
             let mut config_map = ConfigMap::new();
-            config_map.insert(FlushSystemMarker);
+            config_map.insert::<SubmitSystemMarker>(SubmitSystemMarker);
             graph.systems.push(SystemNode::new(system, config_map));
             graph.system_conditions.push(Vec::new());
             graph.ambiguous_with_all.insert(id);
@@ -434,18 +461,40 @@ impl ScheduleBuildPass for RenderSystemPass {
             if queue_node.is_queue_op {
                 continue;
             }
-            let new_node = NodeId::System(queue_node.queue_node_index);
+            let submit_node = NodeId::System(queue_node.queue_node_index);
+            let flush_node = NodeId::System(queue_node.flush_node_index);
+            dependency_flattened.add_edge(flush_node, submit_node, ());
             for parent_command_node in queue_node.nodes.iter() {
                 // After all nodes within the corrent queue node
                 let command_node_id = NodeId::System(*parent_command_node);
-                dependency_flattened.add_edge(command_node_id, new_node, ());
+                dependency_flattened.add_edge(command_node_id, flush_node, ());
+                dependency_flattened.add_edge(command_node_id, submit_node, ());
             }
-            for parent in queue_graph.neighbors_directed(i as u32, Outgoing) {
-                // Before all command nodes in the queue nodes following the current
-                let child_meta = &queue_graph_nodes[parent as usize];
-                for child_command_node in child_meta.nodes.iter() {
-                    let command_node_id = NodeId::System(*child_command_node);
-                    dependency_flattened.add_edge(new_node, command_node_id, ());
+            for child in queue_graph.neighbors_directed(i as u32, Outgoing) {
+                let child_meta = &queue_graph_nodes[child as usize];
+                if child_meta.is_queue_op {
+                    assert_eq!(child_meta.queue_node_index, child_meta.flush_node_index);
+                    dependency_flattened.add_edge(
+                        flush_node,
+                        NodeId::System(child_meta.queue_node_index),
+                        (),
+                    );
+                    dependency_flattened.add_edge(
+                        submit_node,
+                        NodeId::System(child_meta.queue_node_index),
+                        (),
+                    );
+                } else {
+                    for child_command_node in child_meta.nodes.iter() {
+                        let command_node_id = NodeId::System(*child_command_node);
+                        dependency_flattened.add_edge(flush_node, command_node_id, ());
+                        dependency_flattened.add_edge(command_node_id, submit_node, ());
+                    }
+                    dependency_flattened.add_edge(
+                        submit_node,
+                        NodeId::System(child_meta.flush_node_index),
+                        (),
+                    );
                 }
             }
         }
@@ -693,31 +742,15 @@ impl ScheduleBuildPass for RenderSystemPass {
                         .neighbors_directed(NodeId::System(*i), Direction::Incoming)
                         .collect::<Vec<_>>()
                     {
-                        let is_flush_system = graph.systems[parent.index()]
+                        let is_submit_system = graph.systems[parent.index()]
                             .config
-                            .has::<FlushSystemMarker>();
-                        if !is_flush_system {
-                            // skip if the parent is a flush system we just added.
+                            .has::<SubmitSystemMarker>();
+                        if !is_submit_system {
+                            // skip if the parent is a submit system we just added.
                             dependency_flattened.add_edge(parent, id, ());
                         }
                     }
                     dependency_flattened.add_edge(id, NodeId::System(*i), ());
-                }
-
-                if i == 0 {
-                    // For the first stage, ensure the barrier producers are run before previous queue op submission
-                    for i in
-                        queue_graph.neighbors_directed(queue_node_i as u32, Direction::Incoming)
-                    {
-                        let meta = &self.queue_graph_nodes[i as usize];
-                        if !meta.is_queue_op {
-                            dependency_flattened.add_edge(
-                                id,
-                                NodeId::System(meta.queue_node_index),
-                                (),
-                            );
-                        }
-                    }
                 }
             }
         }

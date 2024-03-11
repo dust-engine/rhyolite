@@ -68,6 +68,9 @@ pub struct Barriers {
     pub(crate) buffer_barriers: *mut Vec<vk::BufferMemoryBarrier2>,
     pub(crate) global_barriers: *mut vk::MemoryBarrier2,
     pub(crate) dropped: *mut bool,
+
+    pub(crate) image_barriers_prev_stage: *mut Vec<vk::ImageMemoryBarrier2>,
+    pub(crate) buffer_barriers_prev_stage: *mut Vec<vk::BufferMemoryBarrier2>,
 }
 impl Drop for Barriers {
     fn drop(&mut self) {
@@ -77,6 +80,18 @@ impl Drop for Barriers {
     }
 }
 impl ResourceTransitionCommands for Barriers {
+    fn add_image_barrier_prev_stage(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self {
+        let current = unsafe { &mut *self.image_barriers_prev_stage };
+        current.push(barrier);
+        self
+    }
+
+    fn add_buffer_barrier_prev_stage(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self {
+        let current = unsafe { &mut *self.buffer_barriers_prev_stage };
+        current.push(barrier);
+        self
+    }
+
     fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self {
         let current = unsafe { &mut *self.global_barriers };
         current.src_stage_mask |= barrier.src_stage_mask;
