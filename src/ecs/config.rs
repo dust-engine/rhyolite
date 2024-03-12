@@ -61,6 +61,24 @@ impl Default for QueueSystemDependencyConfig {
     }
 }
 
+pub(crate) enum BarriersPrevStage {
+    Image {
+        barrier: vk::ImageMemoryBarrier2,
+        prev_queue_type: QueueType,
+    },
+    Buffer {
+        barrier: vk::BufferMemoryBarrier2,
+        prev_queue_type: QueueType,
+    },
+}
+impl BarriersPrevStage {
+    pub fn prev_queue_type(&self) -> QueueType {
+        match self {
+            Self::Image { prev_queue_type, .. } => *prev_queue_type,
+            Self::Buffer { prev_queue_type, .. } => *prev_queue_type,
+        }
+    }
+}
 /// GAT limitation. All references contained herein are valid for the duration of the system call.
 pub struct Barriers {
     pub(crate) dependency_flags: *mut vk::DependencyFlags,
@@ -69,8 +87,10 @@ pub struct Barriers {
     pub(crate) global_barriers: *mut vk::MemoryBarrier2,
     pub(crate) dropped: *mut bool,
 
-    pub(crate) image_barriers_prev_stage: *mut Vec<vk::ImageMemoryBarrier2>,
-    pub(crate) buffer_barriers_prev_stage: *mut Vec<vk::BufferMemoryBarrier2>,
+    /// Barriers to be added to the end of the previous stage.
+    pub(crate) prev_barriers: *mut Vec<BarriersPrevStage>,
+
+    pub(crate) queue_family: (QueueType, u32),
 }
 impl Drop for Barriers {
     fn drop(&mut self) {
@@ -80,15 +100,24 @@ impl Drop for Barriers {
     }
 }
 impl ResourceTransitionCommands for Barriers {
-    fn add_image_barrier_prev_stage(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self {
-        let current = unsafe { &mut *self.image_barriers_prev_stage };
-        current.push(barrier);
+    fn current_queue_family(&self) -> (QueueType, u32) {
+        self.queue_family
+    }
+    fn add_image_barrier_prev_stage(&mut self, barrier: vk::ImageMemoryBarrier2, prev_queue_type: QueueType) -> &mut Self {
+        let current = unsafe { &mut *self.prev_barriers };
+        current.push(BarriersPrevStage::Image {
+            barrier,
+            prev_queue_type,
+        });
         self
     }
 
-    fn add_buffer_barrier_prev_stage(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self {
-        let current = unsafe { &mut *self.buffer_barriers_prev_stage };
-        current.push(barrier);
+    fn add_buffer_barrier_prev_stage(&mut self, barrier: vk::BufferMemoryBarrier2, prev_queue_type: QueueType) -> &mut Self {
+        let current = unsafe { &mut *self.prev_barriers };
+        current.push(BarriersPrevStage::Buffer {
+            barrier,
+            prev_queue_type,
+        });
         self
     }
 

@@ -49,8 +49,7 @@ impl QueuesRouter {
         self.queue_type_to_index[ty as usize]
     }
     pub fn queue_family_of_type(&self, ty: QueueType) -> u32 {
-        let queue_ty = self.of_type(ty);
-        let queue_family = self.queue_type_to_family[queue_ty.0 as usize];
+        let queue_family = self.queue_type_to_family[ty as usize];
         queue_family
     }
     pub(crate) fn find_with_queue_family_properties(
@@ -69,7 +68,7 @@ impl QueuesRouter {
                 if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
                     priority -= 1;
                 }
-                (priority, family.timestamp_valid_bits)
+                priority
             })
             .unwrap()
             .0 as u32;
@@ -87,7 +86,16 @@ impl QueuesRouter {
                 if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
                     priority -= 1;
                 }
-                (priority, family.timestamp_valid_bits)
+                if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
+                    priority -= 10;
+                }
+                if family.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR) {
+                    priority -= 10;
+                }
+                if family.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR) {
+                    priority -= 10;
+                }
+                priority
             })
             .unwrap()
             .0 as u32;
@@ -110,7 +118,16 @@ impl QueuesRouter {
                 if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
                     priority -= 1;
                 }
-                (priority, family.timestamp_valid_bits)
+                if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
+                    priority -= 10;
+                }
+                if family.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR) {
+                    priority -= 10;
+                }
+                if family.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR) {
+                    priority -= 10;
+                }
+                priority
             })
             .unwrap()
             .0 as u32;
@@ -130,10 +147,20 @@ impl QueuesRouter {
                 if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
                     priority -= 20;
                 }
-                (priority, family.timestamp_valid_bits)
+                if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
+                    priority -= 10;
+                }
+                if family.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR) {
+                    priority -= 10;
+                }
+                if family.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR) {
+                    priority -= 10;
+                }
+                priority
             })
             .unwrap()
             .0 as u32;
+        tracing::info!(graphics = %graphics_queue_family, compute = %compute_queue_family, transfer = %transfer_queue_family, sparse_binding = %sparse_binding_queue_family, "Queue families");
 
         let mut queue_family_to_types: Vec<vk::QueueFlags> =
             vec![vk::QueueFlags::empty(); available_queue_family.len()];

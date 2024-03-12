@@ -1,6 +1,6 @@
 use ash::vk;
 
-use crate::access::utils::compare_pipeline_stages;
+use crate::{access::utils::compare_pipeline_stages, QueueType};
 
 #[derive(Debug, Clone, Default)]
 pub struct Access {
@@ -38,6 +38,7 @@ impl Access {
 pub struct ResourceState {
     pub(crate) read: Access,
     pub(crate) write: Access,
+    pub(crate) queue_family: Option<(QueueType, u32)>,
 }
 impl ResourceState {
     pub fn transition(&mut self, next: Access, with_layout_transition: bool) -> MemoryBarrier {

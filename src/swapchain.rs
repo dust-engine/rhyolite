@@ -706,7 +706,7 @@ fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut Swapch
             image: image.raw_image(),
             subresource_range: image.subresource_range(),
             ..Default::default()
-        });
+        }, QueueType::Graphics);
         image.layout = vk::ImageLayout::PRESENT_SRC_KHR;
     }
 }

@@ -1,6 +1,6 @@
 use ash::vk::{self};
 
-use crate::{ecs::queue_cap::IsGraphicsQueueCap, Device, HasDevice};
+use crate::{ecs::queue_cap::IsGraphicsQueueCap, Device, HasDevice, QueueType};
 
 use super::CommandRecorder;
 
@@ -229,6 +229,9 @@ where
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         self.recorder.cmd_buf()
     }
+    fn current_queue_family(&self) -> (QueueType, u32) {
+        self.recorder.current_queue_family()
+    }
 }
 impl<T> RenderPassCommands for DynamicRenderPass<'_, T> where T: GraphicsCommands {}
 
@@ -262,6 +265,9 @@ where
     const QUEUE_CAP: char = T::QUEUE_CAP;
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         self.recorder.cmd_buf()
+    }
+    fn current_queue_family(&self) -> (QueueType, u32) {
+        self.recorder.current_queue_family()
     }
 }
 impl<T> RenderPassCommands for RenderPass<'_, T> where T: GraphicsCommands {}

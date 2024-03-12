@@ -389,7 +389,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
 }
 
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'g'>,
+    mut commands: RenderCommands<'t'>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     allocator: Res<Allocator>,
@@ -502,7 +502,7 @@ fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
 }
 
 fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'g'>,
+    mut commands: RenderCommands<'t'>,
     device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     mut staging_belt: ResMut<StagingBelt>,
@@ -574,7 +574,7 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
 /// Resize the device buffers if necessary. Only runs on Discrete GPUs.
 fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'g'>,
+    mut commands: RenderCommands<'t'>,
     allocator: Res<Allocator>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
@@ -614,6 +614,7 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
                 access: vk::AccessFlags2::TRANSFER_WRITE,
                 stage: vk::PipelineStageFlags2::COPY,
             },
+            false,
         );
     }
 
@@ -624,13 +625,14 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
                 access: vk::AccessFlags2::TRANSFER_WRITE,
                 stage: vk::PipelineStageFlags2::COPY,
             },
+            false,
         );
     }
 }
 /// Copy data from the host buffers to the device buffers. Only runs on Discrete GPUs.
 fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'g'>,
+    mut commands: RenderCommands<'t'>,
     host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
@@ -714,6 +716,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
                 stage: vk::PipelineStageFlags2::VERTEX_INPUT,
                 access: vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
             },
+            true,
         );
     }
     if device_buffer.index_buffer.len() > 0 {
@@ -723,6 +726,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
                 stage: vk::PipelineStageFlags2::INDEX_INPUT,
                 access: vk::AccessFlags2::INDEX_READ,
             },
+            true,
         );
     }
     true
