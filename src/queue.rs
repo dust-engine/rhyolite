@@ -158,14 +158,16 @@ impl QueuesRouter {
                 }
                 priority
             })
-            .unwrap()
-            .0 as u32;
+            .map(|(i, _)| i as u32)
+            .unwrap_or(u32::MAX);
         tracing::info!(graphics = %graphics_queue_family, compute = %compute_queue_family, transfer = %transfer_queue_family, sparse_binding = %sparse_binding_queue_family, "Queue families");
 
         let mut queue_family_to_types: Vec<vk::QueueFlags> =
             vec![vk::QueueFlags::empty(); available_queue_family.len()];
-        queue_family_to_types[sparse_binding_queue_family as usize] |=
+        if sparse_binding_queue_family != u32::MAX {
+            queue_family_to_types[sparse_binding_queue_family as usize] |=
             vk::QueueFlags::SPARSE_BINDING;
+        }
         queue_family_to_types[transfer_queue_family as usize] |= vk::QueueFlags::TRANSFER;
         queue_family_to_types[compute_queue_family as usize] |= vk::QueueFlags::COMPUTE;
         queue_family_to_types[graphics_queue_family as usize] |= vk::QueueFlags::GRAPHICS;
@@ -196,7 +198,7 @@ impl QueuesRouter {
                 queue_type_to_index[QueueType::SparseBinding as usize] = QueueRef(i as u8);
             }
         }
-        for i in queue_type_to_index.iter() {
+        for i in queue_type_to_index.iter().take(3) {
             assert_ne!(i.0, u8::MAX, "All queue types should've been assigned")
         }
 

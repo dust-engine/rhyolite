@@ -21,7 +21,10 @@ use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::{
     acquire_swapchain_image, ash,
-    ash::vk,
+    ash::{
+        vk,
+        extensions::khr,
+    },
     buffer::staging::StagingBelt,
     commands::{
         CommonCommands, GraphicsCommands, RenderPassCommands, ResourceTransitionCommands,
@@ -76,8 +79,9 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
         );
         app.add_systems(Startup, initialize_pipelines);
         app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering)
+            .or_enable_in_extension::<khr::DynamicRendering, vk::PhysicalDeviceDynamicRenderingFeatures>(|x| &mut x.dynamic_rendering)
             .unwrap();
-        app.add_device_extension::<ash::extensions::khr::PushDescriptor>()
+        app.add_device_extension::<khr::PushDescriptor>()
             .unwrap();
     }
     fn finish(&self, app: &mut App) {

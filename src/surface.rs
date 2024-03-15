@@ -239,12 +239,10 @@ unsafe fn create_surface(
 
             let layer = match appkit::metal_layer_from_handle(window) {
                 Layer::Existing(layer) | Layer::Allocated(layer) => layer as *mut _,
-                Layer::None => return Err(vk::Result::ERROR_INITIALIZATION_FAILED),
             };
 
             let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
-            let surface_fn = ext::MetalSurface::new(entry, instance);
-            surface_fn.create_metal_surface(&surface_desc, allocation_callbacks)
+            instance.extension::<ash::extensions::ext::MetalSurface>().create_metal_surface(&surface_desc, None)
         }
 
         #[cfg(target_os = "ios")]
@@ -253,12 +251,10 @@ unsafe fn create_surface(
 
             let layer = match uikit::metal_layer_from_handle(window) {
                 Layer::Existing(layer) | Layer::Allocated(layer) => layer as *mut _,
-                Layer::None => return Err(vk::Result::ERROR_INITIALIZATION_FAILED),
             };
 
             let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
-            let surface_fn = ext::MetalSurface::new(entry, instance);
-            surface_fn.create_metal_surface(&surface_desc, allocation_callbacks)
+            instance.extension::<ash::extensions::ext::MetalSurface>().create_metal_surface(&surface_desc, None)
         }
 
         _ => Err(vk::Result::ERROR_EXTENSION_NOT_PRESENT),

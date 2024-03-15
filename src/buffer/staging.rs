@@ -242,6 +242,7 @@ mod tests {
         let instance = Instance::create(
             Arc::new(unsafe { ash::Entry::load().unwrap() }),
             crate::InstanceCreateInfo {
+                flags: vk::InstanceCreateFlags::empty(),
                 application_name: cstr!("Rhyolite Tests"),
                 application_version: Default::default(),
                 engine_name: cstr!("rhyolite"),

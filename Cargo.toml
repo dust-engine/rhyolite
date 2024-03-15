@@ -34,6 +34,9 @@ playout = { path = "../playout", optional = true }
 # GLSL
 shaderc = { version = "0.8", optional = true }
 
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+raw-window-metal = "0.4"
+
 [patch.crates-io]
 bevy = { path = "../bevy" }
 

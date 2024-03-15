@@ -1,4 +1,4 @@
-use crate::Version;
+use crate::{extensions::DeviceExtension, Version};
 
 use super::Instance;
 use ash::{prelude::VkResult, vk};
@@ -436,3 +436,5 @@ macro_rules! impl_feature {
 impl_feature!(vk::PhysicalDeviceVulkan11Features);
 impl_feature!(vk::PhysicalDeviceVulkan12Features);
 impl_feature!(vk::PhysicalDeviceVulkan13Features);
+impl_feature!(vk::PhysicalDeviceSynchronization2FeaturesKHR);
+impl_feature!(vk::PhysicalDeviceDynamicRenderingFeatures);

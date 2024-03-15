@@ -1,6 +1,7 @@
 use ash::{
     prelude::VkResult,
     vk::{self},
+    extensions::khr,
 };
 use bevy::ecs::prelude::*;
 use bevy::{app::prelude::*, asset::AssetApp};
@@ -195,6 +196,12 @@ unsafe impl Sync for InstanceLayers {}
 
 impl Plugin for RhyolitePlugin {
     fn build(&self, app: &mut App) {
+        let mut instance_create_flags = vk::InstanceCreateFlags::empty();
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+            app.add_instance_extension_named(ash::vk::KhrPortabilityEnumerationFn::name()).unwrap();
+        }
         let mut instance_extensions = app.world.remove_resource::<InstanceExtensions>();
         let instance_layers = app.world.remove_resource::<InstanceLayers>();
         let entry: &VulkanEntry = &app.world.get_resource_or_insert_with(VulkanEntry::default);
@@ -205,6 +212,7 @@ impl Plugin for RhyolitePlugin {
         let instance = Instance::create(
             entry.0.clone(),
             crate::InstanceCreateInfo {
+                flags: instance_create_flags,
                 enabled_extension_names: instance_extensions
                     .as_ref()
                     .map(|f| f.enabled_extensions.as_slice())
@@ -259,10 +267,11 @@ impl Plugin for RhyolitePlugin {
         app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore)
             .unwrap();
         app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|f| &mut f.synchronization2)
+            .or_enable_in_extension::<khr::Synchronization2, vk::PhysicalDeviceSynchronization2FeaturesKHR>(|f| &mut f.synchronization2)
             .unwrap();
 
         // Optional extensions
-        app.add_device_extension::<ash::extensions::khr::DeferredHostOperations>();
+        app.add_device_extension::<khr::DeferredHostOperations>();
 
         #[cfg(feature = "glsl")]
         app.add_plugins(crate::shader::loader::GlslPlugin);
@@ -325,7 +334,7 @@ pub trait RhyoliteApp {
     fn enable_feature<T: Feature + Default>(
         &mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,
-    ) -> Option<()>;
+    ) -> FeatureEnableResult;
 }
 
 impl RhyoliteApp for App {
@@ -474,11 +483,44 @@ impl RhyoliteApp for App {
             None
         }
     }
-    fn enable_feature<T: Feature + Default>(
-        &mut self,
+    fn enable_feature<'a, T: Feature + Default>(
+        &'a mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,
-    ) -> Option<()> {
+    ) -> FeatureEnableResult<'a> {
         let mut features = self.world.resource_mut::<PhysicalDeviceFeatures>();
-        features.enable_feature::<T>(selector)
+        if features.enable_feature::<T>(selector).is_none() {
+            return FeatureEnableResult::NotFound { app: self };
+        }
+        FeatureEnableResult::Success
+    }
+}
+
+pub enum FeatureEnableResult<'a> {
+    Success,
+    NotFound {
+        app: &'a mut App,
+    }
+}
+impl<'a> FeatureEnableResult<'a> {
+    pub fn or_enable_in_extension<T: DeviceExtension, F: Feature + Default>(&'a mut self, 
+        selector: impl FnMut(&mut F) -> &mut vk::Bool32) -> Self {
+        match self {
+            FeatureEnableResult::Success => Self::Success,
+            FeatureEnableResult::NotFound { app } => {
+                if app.add_device_extension::<T>().is_none() {
+                    return Self::NotFound { app: *app };
+                }
+                app.enable_feature(selector)
+            }
+        }
+    }
+    #[track_caller]
+    pub fn unwrap(&self) {
+        match self {
+            FeatureEnableResult::Success => (),
+            FeatureEnableResult::NotFound { .. } => {
+                panic!("Feature not found")
+            }
+        }
     }
 }

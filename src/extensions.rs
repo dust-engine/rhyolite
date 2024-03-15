@@ -1,5 +1,7 @@
 use ash::{Device, Entry, Instance};
 
+use crate::Feature;
+
 pub trait InstanceExtension: Send + Sync + 'static {
     fn new(entry: &Entry, instance: &Instance) -> Self;
     fn name() -> &'static std::ffi::CStr;

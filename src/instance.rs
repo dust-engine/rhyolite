@@ -79,6 +79,7 @@ impl From<Version> for String {
 }
 
 pub struct InstanceCreateInfo<'a> {
+    pub flags: vk::InstanceCreateFlags,
     pub application_name: &'a CStr,
     pub application_version: Version,
     pub engine_name: &'a CStr,
@@ -94,11 +95,12 @@ const DEFAULT_INSTANCE_EXTENSIONS: &[*const c_char] =
 impl<'a> Default for InstanceCreateInfo<'a> {
     fn default() -> Self {
         Self {
+            flags: vk::InstanceCreateFlags::empty(),
             application_name: cstr!(b"Unnamed Application"),
             application_version: Default::default(),
             engine_name: cstr!(b"Unnamed Engine"),
             engine_version: Default::default(),
-            api_version: Version::new(0, 1, 3, 0),
+            api_version: Version::new(0, 1, 2, 0),
             enabled_layer_names: Default::default(),
             enabled_extension_names: DEFAULT_INSTANCE_EXTENSIONS,
             meta_builders: Default::default(),
@@ -116,12 +118,14 @@ impl Instance {
             api_version: info.api_version.0,
             ..Default::default()
         };
+
         let create_info = vk::InstanceCreateInfo {
             p_application_info: &application_info,
             enabled_layer_count: info.enabled_layer_names.len() as u32,
             pp_enabled_layer_names: info.enabled_layer_names.as_ptr(),
             enabled_extension_count: info.enabled_extension_names.len() as u32,
             pp_enabled_extension_names: info.enabled_extension_names.as_ptr(),
+            flags: info.flags,
             ..Default::default()
         };
         // Safety: No Host Syncronization rules for vkCreateInstance.
