@@ -769,7 +769,6 @@ pub fn present(
             unsafe {
                 let fence = queue_ctx.fence_to_wait();
                 device
-                    .extension::<ash::extensions::khr::Synchronization2>()
                     .queue_submit2(
                         queue,
                         &[vk::SubmitInfo2 {

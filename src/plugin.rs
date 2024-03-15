@@ -69,7 +69,7 @@ impl Default for VulkanEntry {
 pub(crate) type InstanceMetaBuilder =
     Box<dyn FnOnce(&ash::Entry, &ash::Instance) -> Box<dyn Any + Send + Sync> + Send + Sync>;
 pub(crate) type DeviceMetaBuilder =
-    Box<dyn FnOnce(&ash::Instance, &ash::Device) -> Box<dyn Any + Send + Sync> + Send + Sync>;
+    Box<dyn FnOnce(&ash::Instance, &mut ash::Device) -> Option<Box<dyn Any + Send + Sync>> + Send + Sync>;
 #[derive(Resource)]
 struct DeviceExtensions {
     available_extensions: BTreeMap<CString, Version>,
@@ -371,7 +371,11 @@ impl RhyoliteApp for App {
             extension_settings
                 .extension_builders
                 .push(Box::new(|instance, device| {
-                    Box::new(T::new(instance, device))
+                    if let Some(t) = T::new(instance, device) {
+                        Some(Box::new(t))
+                    } else {
+                        None
+                    }
                 }));
             Some(v)
         } else {

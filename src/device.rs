@@ -54,7 +54,7 @@ impl Device {
             pp_enabled_extension_names: extensions.as_ptr(),
             ..Default::default()
         };
-        let device = unsafe {
+        let mut device = unsafe {
             physical_device
                 .instance()
                 .create_device(physical_device.raw(), &create_info, None)
@@ -68,9 +68,9 @@ impl Device {
             .collect::<Vec<_>>();
         let extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>> = meta
             .into_iter()
-            .map(|builder| {
-                let item = builder(&physical_device.instance(), &device);
-                (item.as_ref().type_id(), item)
+            .filter_map(|builder| {
+                let item = builder(&physical_device.instance(), &mut device)?;
+                Some((item.as_ref().type_id(), item))
             })
             .collect();
         Ok(Self(Arc::new(DeviceInner {
@@ -94,6 +94,7 @@ impl Device {
             .map(|item| item.downcast_ref::<T>().unwrap())
             .ok_or(ExtensionNotFoundError)
     }
+    #[track_caller]
     pub fn extension<T: DeviceExtension>(&self) -> &T {
         self.get_extension::<T>().unwrap()
     }
