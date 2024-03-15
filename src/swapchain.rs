@@ -1,7 +1,5 @@
 use std::{
-    borrow::BorrowMut,
-    ops::{Deref, DerefMut},
-    sync::Arc,
+    borrow::BorrowMut, collections::BTreeSet, ops::{Deref, DerefMut}, sync::Arc
 };
 
 use ash::{extensions::khr, prelude::VkResult, vk};
@@ -60,6 +58,8 @@ impl Plugin for SwapchainPlugin {
                     .before(present),
             ),
         );
+
+        app.add_event::<SuboptimalEvent>();
     }
 }
 
@@ -338,20 +338,30 @@ impl Default for SwapchainConfig {
     }
 }
 
+#[derive(Event)]
+pub struct SuboptimalEvent {
+    window: Entity,
+}
+
 pub(super) fn extract_swapchains(
     mut commands: Commands,
     device: Res<Device>,
     mut window_created_events: EventReader<bevy::window::WindowCreated>,
     mut window_resized_events: EventReader<bevy::window::WindowResized>,
+    mut suboptimal_events: EventReader<SuboptimalEvent>,
     mut query: Query<(
         &Window,
         Option<&SwapchainConfig>,
         Option<&mut Swapchain>,
         &Surface,
     )>,
+    #[cfg(any(target_os = "macos", target_os = "ios"))] _marker: Option<NonSend<bevy::core::NonSendMarker>>,
 ) {
-    for resize_event in window_resized_events.read() {
-        let (window, config, swapchain, surface) = query.get_mut(resize_event.window).unwrap();
+    let mut windows_to_rebuild: BTreeSet<Entity> = BTreeSet::new();
+    windows_to_rebuild.extend(window_resized_events.read().map(|a| a.window));
+    windows_to_rebuild.extend(suboptimal_events.read().map(|a| a.window));
+    for resized_window in windows_to_rebuild.into_iter() {
+        let (window, config, swapchain, surface) = query.get_mut(resized_window).unwrap();
         if let Some(mut swapchain) = swapchain {
             let default_config = SwapchainConfig::default();
             let config = config.unwrap_or(&default_config);
@@ -419,10 +429,7 @@ fn get_create_info<'a>(
             }),
         image_format: image_format.format,
         image_color_space: image_format.color_space,
-        image_extent: vk::Extent2D {
-            width: window.resolution.physical_width(),
-            height: window.resolution.physical_height(),
-        },
+        image_extent: surface_capabilities.current_extent,
         image_array_layers: config.image_array_layers,
         image_usage: config.image_usage,
         image_sharing_mode: match &config.sharing_mode {
@@ -635,12 +642,14 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     mut queue_ctx: QueueContext<'g'>,
     mut query: Query<
         (
+            Entity,
             &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
             &mut SwapchainImage,
         ),
         Filter,
     >,
     binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
+    mut suboptimal_events: EventWriter<SuboptimalEvent>,
 ) {
     assert!(queue_ctx.binary_waits.is_empty());
     assert!(queue_ctx.timeline_signals.is_empty());
@@ -648,7 +657,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     assert!(!queue_ctx.binary_signals.is_empty());
     assert!(queue_ctx.binary_signals.len() == 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously, but you have {}.", queue_ctx.binary_signals.len());
 
-    let (mut swapchain, mut swapchain_image) = match query.get_single_mut() {
+    let (entity, mut swapchain, mut swapchain_image) = match query.get_single_mut() {
         Ok(item) => item,
         Err(QuerySingleError::NoEntities(_str)) => {
             return;
@@ -675,6 +684,9 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     .unwrap();
     if suboptimal {
         tracing::warn!("Suboptimal swapchain");
+        suboptimal_events.send(SuboptimalEvent {
+            window: entity,
+        });
     }
     let image = swapchain.images[indice as usize]
         .take()
@@ -757,6 +769,7 @@ pub fn present(
             unsafe {
                 let fence = queue_ctx.fence_to_wait();
                 device
+                    .extension::<ash::extensions::khr::Synchronization2>()
                     .queue_submit2(
                         queue,
                         &[vk::SubmitInfo2 {
@@ -797,5 +810,6 @@ pub fn present(
                 },
             )
             .unwrap();
+        println!("Presented");
     }
 }

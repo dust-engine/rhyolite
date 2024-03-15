@@ -73,7 +73,7 @@ impl Drop for ImmediateTransitions<'_> {
             return;
         }
         unsafe {
-            self.device.cmd_pipeline_barrier2(
+            self.device.extension::<ash::extensions::khr::Synchronization2>().cmd_pipeline_barrier2(
                 self.cmd_buf,
                 &vk::DependencyInfo {
                     dependency_flags: self.dependency_flags,

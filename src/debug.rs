@@ -34,13 +34,13 @@ pub struct DebugUtilsMessengerCallbackData<'a> {
     /// Identifies the particular message ID that is associated with the provided message.
     /// If the message corresponds to a validation layer message, then this string may contain
     /// the portion of the Vulkan specification that is believed to have been violated.
-    pub message_id_name: &'a CStr,
+    pub message_id_name: Option<&'a CStr>,
     /// The ID number of the triggering message. If the message corresponds to a validation layer
     /// message, then this number is related to the internal number associated with the message
     /// being triggered.
     pub message_id_number: i32,
     /// Details on the trigger conditions
-    pub message: &'a CStr,
+    pub message: Option<&'a CStr>,
     pub queue_labels: &'a [vk::DebugUtilsLabelEXT],
     pub cmd_buf_labels: &'a [vk::DebugUtilsLabelEXT],
     pub objects: &'a [vk::DebugUtilsObjectNameInfoEXT],
@@ -119,8 +119,8 @@ unsafe extern "system" fn debug_utils_callback(
     let callback_data_raw = &*callback_data;
     let callback_data = DebugUtilsMessengerCallbackData {
         message_id_number: callback_data_raw.message_id_number,
-        message_id_name: CStr::from_ptr(callback_data_raw.p_message_id_name),
-        message: CStr::from_ptr(callback_data_raw.p_message),
+        message_id_name: if callback_data_raw.p_message_id_name.is_null() { None } else { Some(CStr::from_ptr(callback_data_raw.p_message_id_name)) },
+        message: if callback_data_raw.p_message.is_null() { None } else { Some(CStr::from_ptr(callback_data_raw.p_message))},
         queue_labels: if callback_data_raw.queue_label_count == 0 {
             &[]
         } else {

@@ -8,7 +8,7 @@ pub trait GraphicsCommands: Sized + CommandRecorder {
     fn begin_rendering(&mut self, info: &vk::RenderingInfo) -> DynamicRenderPass<Self> {
         unsafe {
             let cmd_buf = self.cmd_buf();
-            self.device().cmd_begin_rendering(cmd_buf, info);
+            self.device().extension::<ash::extensions::khr::DynamicRendering>().cmd_begin_rendering(cmd_buf, info);
             DynamicRenderPass { recorder: self }
         }
     }
@@ -43,7 +43,7 @@ where
     fn drop(&mut self) {
         let cmd_buf = self.recorder.cmd_buf();
         unsafe {
-            self.recorder.device().cmd_end_rendering(cmd_buf);
+            self.recorder.device().extension::<ash::extensions::khr::DynamicRendering>().cmd_end_rendering(cmd_buf);
         }
     }
 }

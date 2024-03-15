@@ -163,6 +163,7 @@ pub(super) fn extract_surfaces(
     instance: Res<Instance>,
     mut window_created_events: EventReader<bevy::window::WindowCreated>,
     query: Query<(&RawHandleWrapper, Option<&Surface>), With<Window>>,
+    #[cfg(any(target_os = "macos", target_os = "ios"))] _marker: Option<NonSend<bevy::core::NonSendMarker>>,
 ) {
     for create_event in window_created_events.read() {
         let (raw_handle, surface) = query.get(create_event.window).unwrap();

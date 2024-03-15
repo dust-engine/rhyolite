@@ -132,10 +132,10 @@ impl AssetLoader for GlslShadercCompiler {
 
             let binary = {
                 let mut options = CompileOptions::new().unwrap();
-                options.set_target_spirv(shaderc::SpirvVersion::V1_6);
+                options.set_target_spirv(shaderc::SpirvVersion::V1_5);
                 options.set_target_env(
                     shaderc::TargetEnv::Vulkan,
-                    crate::Version::new(0, 1, 3, 0).as_raw(),
+                    crate::Version::new(0, 1, 2, 0).as_raw(),
                 );
                 options.set_include_callback(|source_name, _ty, _, _include_depth| {
                     Ok(ResolvedInclude {

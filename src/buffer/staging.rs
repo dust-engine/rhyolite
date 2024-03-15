@@ -40,16 +40,24 @@ impl StagingBelt {
             .memory_types()
             .iter()
             .enumerate()
-            .find(|(_, memory_type)| {
+            .filter(|(_, memory_type)| 
                 memory_type
                     .property_flags
                     .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
-                    && !memory_type
-                        .property_flags
-                        .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                    && !memory_type
-                        .property_flags
-                        .contains(vk::MemoryPropertyFlags::HOST_CACHED)
+            )
+            .max_by_key(|(_, memory_type)| {
+                let mut priority: i32 = 0;
+                if memory_type
+                .property_flags
+                .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL) {
+                    priority -= 10;
+                }
+                if memory_type
+                .property_flags
+                .contains(vk::MemoryPropertyFlags::HOST_CACHED) {
+                    priority -= 1;
+                }
+                priority
             })
         else {
             return ash::prelude::VkResult::Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY);

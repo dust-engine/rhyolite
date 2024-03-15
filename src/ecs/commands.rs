@@ -552,7 +552,7 @@ pub(crate) fn submit_system_graph<const Q: char>(
         let image_barriers =
             std::mem::take(&mut recorded_command_buffers.prev_stage_image_barriers);
         unsafe {
-            device.cmd_pipeline_barrier2(
+            device.extension::<ash::extensions::khr::Synchronization2>().cmd_pipeline_barrier2(
                 cmd_buf,
                 &vk::DependencyInfoKHR {
                     p_buffer_memory_barriers: buffer_barriers.as_ptr(),
@@ -633,6 +633,7 @@ pub(crate) fn submit_system_graph<const Q: char>(
     unsafe {
         let queue = device.get_raw_queue(queue_ctx.queue);
         device
+            .extension::<ash::extensions::khr::Synchronization2>()
             .queue_submit2(
                 queue,
                 &[vk::SubmitInfo2KHR {

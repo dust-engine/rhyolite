@@ -273,6 +273,9 @@ impl Plugin for RhyolitePlugin {
         // Optional extensions
         app.add_device_extension::<khr::DeferredHostOperations>();
 
+        // IF supported, must be enabled.
+        app.add_device_extension_named(vk::KhrPortabilitySubsetFn::name());
+
         #[cfg(feature = "glsl")]
         app.add_plugins(crate::shader::loader::GlslPlugin);
     }
