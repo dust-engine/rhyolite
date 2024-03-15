@@ -1,6 +1,4 @@
-use ash::{Device, Entry, Instance, vk};
-
-use crate::Feature;
+use ash::{vk, Device, Entry, Instance};
 
 pub trait InstanceExtension: Send + Sync + 'static {
     fn new(entry: &Entry, instance: &Instance) -> Self;
@@ -8,6 +6,9 @@ pub trait InstanceExtension: Send + Sync + 'static {
 }
 
 pub trait DeviceExtension: Send + Sync + Sized + 'static {
+    /// Create a new instance of the extension.
+    /// For extensions promoted to Vulkan core, implementations shall patch the `device` function table and return None.
+    /// For other extensions, implementations shall return a new instance of the extension, so that the extension can be accessed through [`crate::Device::extension`]
     fn new(instance: &Instance, device: &mut Device) -> Option<Self>;
     fn name() -> &'static std::ffi::CStr;
 }
@@ -66,7 +67,6 @@ impl DeviceExtension for ash::extensions::khr::DynamicRendering {
     fn name() -> &'static std::ffi::CStr {
         ash::extensions::khr::DynamicRendering::name()
     }
-
 }
 impl_device_extension!(ash::extensions::khr::ExternalFenceFd);
 impl_device_extension!(ash::extensions::khr::ExternalFenceWin32);
@@ -135,7 +135,6 @@ impl_device_extension!(ash::extensions::nv::DeviceDiagnosticCheckpoints);
 impl_device_extension!(ash::extensions::nv::MeshShader);
 impl_device_extension!(ash::extensions::nv::RayTracing);
 
-
 pub struct ExposedDevice {
     handle: vk::Device,
     device_fn_1_0: vk::DeviceFnV1_0,
@@ -145,9 +144,6 @@ pub struct ExposedDevice {
 }
 impl ExposedDevice {
     pub fn new(device: &mut Device) -> &mut Self {
-        unsafe {
-            std::mem::transmute(device)
-        }
+        unsafe { std::mem::transmute(device) }
     }
 }
-

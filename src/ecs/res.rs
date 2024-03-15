@@ -3,7 +3,7 @@ use std::ops::Deref;
 use ash::vk;
 use bevy::ecs::{component::Component, system::Resource};
 
-use crate::{utils::Dispose, Access, QueueType, ResourceState};
+use crate::{utils::Dispose, ResourceState};
 
 pub enum State {
     None,

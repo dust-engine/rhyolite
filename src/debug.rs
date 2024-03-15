@@ -119,8 +119,16 @@ unsafe extern "system" fn debug_utils_callback(
     let callback_data_raw = &*callback_data;
     let callback_data = DebugUtilsMessengerCallbackData {
         message_id_number: callback_data_raw.message_id_number,
-        message_id_name: if callback_data_raw.p_message_id_name.is_null() { None } else { Some(CStr::from_ptr(callback_data_raw.p_message_id_name)) },
-        message: if callback_data_raw.p_message.is_null() { None } else { Some(CStr::from_ptr(callback_data_raw.p_message))},
+        message_id_name: if callback_data_raw.p_message_id_name.is_null() {
+            None
+        } else {
+            Some(CStr::from_ptr(callback_data_raw.p_message_id_name))
+        },
+        message: if callback_data_raw.p_message.is_null() {
+            None
+        } else {
+            Some(CStr::from_ptr(callback_data_raw.p_message))
+        },
         queue_labels: if callback_data_raw.queue_label_count == 0 {
             &[]
         } else {

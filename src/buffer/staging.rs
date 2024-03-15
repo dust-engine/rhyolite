@@ -40,21 +40,23 @@ impl StagingBelt {
             .memory_types()
             .iter()
             .enumerate()
-            .filter(|(_, memory_type)| 
+            .filter(|(_, memory_type)| {
                 memory_type
                     .property_flags
                     .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
-            )
+            })
             .max_by_key(|(_, memory_type)| {
                 let mut priority: i32 = 0;
                 if memory_type
-                .property_flags
-                .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL) {
+                    .property_flags
+                    .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+                {
                     priority -= 10;
                 }
                 if memory_type
-                .property_flags
-                .contains(vk::MemoryPropertyFlags::HOST_CACHED) {
+                    .property_flags
+                    .contains(vk::MemoryPropertyFlags::HOST_CACHED)
+                {
                     priority -= 1;
                 }
                 priority
@@ -255,7 +257,7 @@ mod tests {
                 application_version: Default::default(),
                 engine_name: cstr!("rhyolite"),
                 engine_version: Default::default(),
-                api_version: crate::Version::new(1, 3, 0, 0),
+                api_version: crate::Version::new(1, 2, 0, 0),
                 enabled_layer_names: &[],
                 enabled_extension_names: &[],
                 meta_builders: Vec::new(),

@@ -74,8 +74,12 @@ pub(crate) enum BarriersPrevStage {
 impl BarriersPrevStage {
     pub fn prev_queue_type(&self) -> QueueType {
         match self {
-            Self::Image { prev_queue_type, .. } => *prev_queue_type,
-            Self::Buffer { prev_queue_type, .. } => *prev_queue_type,
+            Self::Image {
+                prev_queue_type, ..
+            } => *prev_queue_type,
+            Self::Buffer {
+                prev_queue_type, ..
+            } => *prev_queue_type,
         }
     }
 }
@@ -103,7 +107,11 @@ impl ResourceTransitionCommands for Barriers {
     fn current_queue_family(&self) -> (QueueType, u32) {
         self.queue_family
     }
-    fn add_image_barrier_prev_stage(&mut self, barrier: vk::ImageMemoryBarrier2, prev_queue_type: QueueType) -> &mut Self {
+    fn add_image_barrier_prev_stage(
+        &mut self,
+        barrier: vk::ImageMemoryBarrier2,
+        prev_queue_type: QueueType,
+    ) -> &mut Self {
         let current = unsafe { &mut *self.prev_barriers };
         current.push(BarriersPrevStage::Image {
             barrier,
@@ -112,7 +120,11 @@ impl ResourceTransitionCommands for Barriers {
         self
     }
 
-    fn add_buffer_barrier_prev_stage(&mut self, barrier: vk::BufferMemoryBarrier2, prev_queue_type: QueueType) -> &mut Self {
+    fn add_buffer_barrier_prev_stage(
+        &mut self,
+        barrier: vk::BufferMemoryBarrier2,
+        prev_queue_type: QueueType,
+    ) -> &mut Self {
         let current = unsafe { &mut *self.prev_barriers };
         current.push(BarriersPrevStage::Buffer {
             barrier,

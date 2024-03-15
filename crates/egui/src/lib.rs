@@ -21,10 +21,7 @@ use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::{
     acquire_swapchain_image, ash,
-    ash::{
-        vk,
-        extensions::khr,
-    },
+    ash::{extensions::khr, vk},
     buffer::staging::StagingBelt,
     commands::{
         CommonCommands, GraphicsCommands, RenderPassCommands, ResourceTransitionCommands,
@@ -79,10 +76,11 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
         );
         app.add_systems(Startup, initialize_pipelines);
         app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering)
-            .or_enable_in_extension::<khr::DynamicRendering, vk::PhysicalDeviceDynamicRenderingFeatures>(|x| &mut x.dynamic_rendering)
+            .or_enable_in_extension::<vk::PhysicalDeviceDynamicRenderingFeatures>(|x| {
+                &mut x.dynamic_rendering
+            })
             .unwrap();
-        app.add_device_extension::<khr::PushDescriptor>()
-            .unwrap();
+        app.add_device_extension::<khr::PushDescriptor>().unwrap();
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
@@ -393,7 +391,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
 }
 
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'g'>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     allocator: Res<Allocator>,
@@ -506,7 +504,7 @@ fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
 }
 
 fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'g'>,
     device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     mut staging_belt: ResMut<StagingBelt>,
@@ -578,7 +576,7 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
 /// Resize the device buffers if necessary. Only runs on Discrete GPUs.
 fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'g'>,
     allocator: Res<Allocator>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
@@ -636,7 +634,7 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
 /// Copy data from the host buffers to the device buffers. Only runs on Discrete GPUs.
 fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'g'>,
     host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
@@ -883,6 +881,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
             current_vertex as i32,
             0,
         );
+        println!("Drawn");
         current_vertex += mesh.vertices.len() as u32;
         current_indice += mesh.indices.len() as u32;
     }

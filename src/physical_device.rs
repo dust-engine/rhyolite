@@ -1,7 +1,11 @@
-use crate::{extensions::DeviceExtension, Version};
+use crate::{extensions::DeviceExtension, utils::VkTaggedObject, Version};
 
 use super::Instance;
-use ash::{prelude::VkResult, vk};
+use ash::{
+    extensions::khr,
+    prelude::VkResult,
+    vk::{self, TaggedStructure},
+};
 use bevy::ecs::system::Resource;
 use core::ffi::c_void;
 use std::{
@@ -262,7 +266,7 @@ pub struct MemoryHeap {
 #[derive(Default)]
 struct FeatureMap {
     physical_device_features: vk::PhysicalDeviceFeatures,
-    features: BTreeMap<TypeId, Box<dyn Feature>>,
+    features: BTreeMap<vk::StructureType, Box<VkTaggedObject>>,
 }
 unsafe impl Send for FeatureMap {}
 unsafe impl Sync for FeatureMap {}
@@ -278,16 +282,14 @@ enum PhysicalDeviceFeaturesInner {
     },
     Finalized {
         physical_device_features: vk::PhysicalDeviceFeatures2,
-        enabled_features: BTreeMap<TypeId, Box<dyn Feature>>,
+        enabled_features: BTreeMap<vk::StructureType, Box<VkTaggedObject>>,
     },
 }
 unsafe impl Send for PhysicalDeviceFeaturesInner {}
 unsafe impl Sync for PhysicalDeviceFeaturesInner {}
 
-pub unsafe trait Feature: 'static {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-    fn p_next(&mut self) -> &mut *mut c_void;
+pub unsafe trait Feature: TaggedStructure + 'static {
+    type Extension;
 }
 
 impl PhysicalDeviceFeatures {
@@ -303,9 +305,9 @@ impl PhysicalDeviceFeatures {
         else {
             panic!("Cannot enable features outside plugin build phase");
         };
-        let feature: &mut Box<dyn Feature> = available_features
+        let feature: &mut Box<VkTaggedObject> = available_features
             .features
-            .entry(TypeId::of::<T>())
+            .entry(T::STRUCTURE_TYPE)
             .or_insert_with(|| {
                 let mut feature = T::default();
                 let mut wrapper = vk::PhysicalDeviceFeatures2::default();
@@ -315,13 +317,9 @@ impl PhysicalDeviceFeatures {
                         .instance()
                         .get_physical_device_features2(physical_device.raw(), &mut wrapper);
                 };
-                Box::new(feature)
+                VkTaggedObject::new(feature)
             });
-        let feature = feature
-            .deref_mut()
-            .as_any_mut()
-            .downcast_mut::<T>()
-            .unwrap();
+        let feature = feature.deref_mut().downcast_mut::<T>().unwrap();
         let feature_available: vk::Bool32 = *selector(feature);
         if feature_available == vk::FALSE {
             // feature unavailable
@@ -330,13 +328,9 @@ impl PhysicalDeviceFeatures {
 
         let enabled_features = enabled_features
             .features
-            .entry(TypeId::of::<T>())
-            .or_insert_with(|| Box::new(T::default()));
-        let enabled_features = enabled_features
-            .deref_mut()
-            .as_any_mut()
-            .downcast_mut::<T>()
-            .unwrap();
+            .entry(T::STRUCTURE_TYPE)
+            .or_insert_with(|| VkTaggedObject::new(T::default()));
+        let enabled_features = enabled_features.deref_mut().downcast_mut::<T>().unwrap();
         let feature_to_enable = selector(enabled_features);
         *feature_to_enable = vk::TRUE;
         Some(())
@@ -351,12 +345,8 @@ impl PhysicalDeviceFeatures {
                 enabled_features, ..
             } => enabled_features,
         };
-        let enabled_features = enabled_features.get(&TypeId::of::<T>())?;
-        let enabled_features = enabled_features
-            .deref()
-            .as_any()
-            .downcast_ref::<T>()
-            .unwrap();
+        let enabled_features = enabled_features.get(&T::STRUCTURE_TYPE)?;
+        let enabled_features = enabled_features.deref().downcast_ref::<T>().unwrap();
         Some(enabled_features)
     }
 
@@ -394,7 +384,7 @@ impl PhysicalDeviceFeatures {
                 let mut last = &mut physical_device_features.p_next;
                 for f in features.values_mut() {
                     *last = f.as_mut() as *mut _ as *mut c_void;
-                    last = f.p_next();
+                    last = &mut f.p_next;
                 }
             }
             *self = Self(PhysicalDeviceFeaturesInner::Finalized {
@@ -419,22 +409,20 @@ impl PhysicalDeviceFeatures {
 }
 
 macro_rules! impl_feature {
-    ($feature:ty) => {
+    ($feature:ty, $ext:ty) => {
         unsafe impl Feature for $feature {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-            fn as_any_mut(&mut self) -> &mut dyn Any {
-                self
-            }
-            fn p_next(&mut self) -> &mut *mut c_void {
-                &mut self.p_next
-            }
+            type Extension = $ext;
         }
     };
 }
-impl_feature!(vk::PhysicalDeviceVulkan11Features);
-impl_feature!(vk::PhysicalDeviceVulkan12Features);
-impl_feature!(vk::PhysicalDeviceVulkan13Features);
-impl_feature!(vk::PhysicalDeviceSynchronization2FeaturesKHR);
-impl_feature!(vk::PhysicalDeviceDynamicRenderingFeatures);
+impl_feature!(vk::PhysicalDeviceVulkan11Features, ());
+impl_feature!(vk::PhysicalDeviceVulkan12Features, ());
+impl_feature!(vk::PhysicalDeviceVulkan13Features, ());
+impl_feature!(
+    vk::PhysicalDeviceSynchronization2FeaturesKHR,
+    khr::Synchronization2
+);
+impl_feature!(
+    vk::PhysicalDeviceDynamicRenderingFeatures,
+    khr::DynamicRendering
+);

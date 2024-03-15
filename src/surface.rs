@@ -163,7 +163,9 @@ pub(super) fn extract_surfaces(
     instance: Res<Instance>,
     mut window_created_events: EventReader<bevy::window::WindowCreated>,
     query: Query<(&RawHandleWrapper, Option<&Surface>), With<Window>>,
-    #[cfg(any(target_os = "macos", target_os = "ios"))] _marker: Option<NonSend<bevy::core::NonSendMarker>>,
+    #[cfg(any(target_os = "macos", target_os = "ios"))] _marker: Option<
+        NonSend<bevy::core::NonSendMarker>,
+    >,
 ) {
     for create_event in window_created_events.read() {
         let (raw_handle, surface) = query.get(create_event.window).unwrap();
@@ -243,7 +245,9 @@ unsafe fn create_surface(
             };
 
             let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
-            instance.extension::<ash::extensions::ext::MetalSurface>().create_metal_surface(&surface_desc, None)
+            instance
+                .extension::<ash::extensions::ext::MetalSurface>()
+                .create_metal_surface(&surface_desc, None)
         }
 
         #[cfg(target_os = "ios")]
@@ -255,7 +259,9 @@ unsafe fn create_surface(
             };
 
             let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
-            instance.extension::<ash::extensions::ext::MetalSurface>().create_metal_surface(&surface_desc, None)
+            instance
+                .extension::<ash::extensions::ext::MetalSurface>()
+                .create_metal_surface(&surface_desc, None)
         }
 
         _ => Err(vk::Result::ERROR_EXTENSION_NOT_PRESENT),

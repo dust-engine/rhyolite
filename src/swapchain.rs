@@ -1,5 +1,8 @@
 use std::{
-    borrow::BorrowMut, collections::BTreeSet, ops::{Deref, DerefMut}, sync::Arc
+    borrow::BorrowMut,
+    collections::BTreeSet,
+    ops::{Deref, DerefMut},
+    sync::Arc,
 };
 
 use ash::{extensions::khr, prelude::VkResult, vk};
@@ -355,7 +358,9 @@ pub(super) fn extract_swapchains(
         Option<&mut Swapchain>,
         &Surface,
     )>,
-    #[cfg(any(target_os = "macos", target_os = "ios"))] _marker: Option<NonSend<bevy::core::NonSendMarker>>,
+    #[cfg(any(target_os = "macos", target_os = "ios"))] _marker: Option<
+        NonSend<bevy::core::NonSendMarker>,
+    >,
 ) {
     let mut windows_to_rebuild: BTreeSet<Entity> = BTreeSet::new();
     windows_to_rebuild.extend(window_resized_events.read().map(|a| a.window));
@@ -684,9 +689,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     .unwrap();
     if suboptimal {
         tracing::warn!("Suboptimal swapchain");
-        suboptimal_events.send(SuboptimalEvent {
-            window: entity,
-        });
+        suboptimal_events.send(SuboptimalEvent { window: entity });
     }
     let image = swapchain.images[indice as usize]
         .take()
@@ -708,17 +711,20 @@ fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut Swapch
             },
             true,
         );
-        barriers.add_image_barrier_prev_stage(vk::ImageMemoryBarrier2 {
-            src_stage_mask: barrier.src_stage_mask,
-            src_access_mask: barrier.src_access_mask,
-            dst_stage_mask: barrier.dst_stage_mask,
-            dst_access_mask: barrier.dst_access_mask,
-            old_layout: image.layout,
-            new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-            image: image.raw_image(),
-            subresource_range: image.subresource_range(),
-            ..Default::default()
-        }, QueueType::Graphics);
+        barriers.add_image_barrier_prev_stage(
+            vk::ImageMemoryBarrier2 {
+                src_stage_mask: barrier.src_stage_mask,
+                src_access_mask: barrier.src_access_mask,
+                dst_stage_mask: barrier.dst_stage_mask,
+                dst_access_mask: barrier.dst_access_mask,
+                old_layout: image.layout,
+                new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                image: image.raw_image(),
+                subresource_range: image.subresource_range(),
+                ..Default::default()
+            },
+            QueueType::Graphics,
+        );
         image.layout = vk::ImageLayout::PRESENT_SRC_KHR;
     }
 }

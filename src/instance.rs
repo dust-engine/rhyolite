@@ -100,7 +100,7 @@ impl<'a> Default for InstanceCreateInfo<'a> {
             application_version: Default::default(),
             engine_name: cstr!(b"Unnamed Engine"),
             engine_version: Default::default(),
-            api_version: Version::new(0,1, 2, 0),
+            api_version: Version::new(0, 1, 2, 0),
             enabled_layer_names: Default::default(),
             enabled_extension_names: DEFAULT_INSTANCE_EXTENSIONS,
             meta_builders: Default::default(),

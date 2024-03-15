@@ -46,7 +46,8 @@ use crate::{
 };
 
 use super::{
-    BarrierProducerCell, BarriersPrevStage, BoxedBarrierProducer, PerFrameMut, PerFrameResource, PerFrameState, RenderSystemConfig
+    BarrierProducerCell, BarriersPrevStage, BoxedBarrierProducer, PerFrameMut, PerFrameResource,
+    PerFrameState, RenderSystemConfig,
 };
 use crate::Access;
 
@@ -169,12 +170,15 @@ where
 {
     const QUEUE_CAP: char = Q;
     fn current_queue_family(&self) -> (QueueType, u32) {
-        (        match Q {
-            'g' => QueueType::Graphics,
-            'c' => QueueType::Compute,
-            't' => QueueType::Transfer,
-            _ => unreachable!(),
-        },self.default_cmd_pool.pool.queue_family_index())
+        (
+            match Q {
+                'g' => QueueType::Graphics,
+                'c' => QueueType::Compute,
+                't' => QueueType::Transfer,
+                _ => unreachable!(),
+            },
+            self.default_cmd_pool.pool.queue_family_index(),
+        )
     }
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         self.default_cmd_pool.current_buffer()
@@ -520,7 +524,12 @@ pub(crate) fn submit_system_graph<const Q: char>(
 ) where
     (): IsQueueCap<Q>,
 {
-    println!("Recording prev pipeline barrier: {} {} {}", Q, recorded_command_buffers.prev_stage_buffer_barriers.len(), recorded_command_buffers.prev_stage_image_barriers.len());
+    println!(
+        "Recording prev pipeline barrier: {} {} {}",
+        Q,
+        recorded_command_buffers.prev_stage_buffer_barriers.len(),
+        recorded_command_buffers.prev_stage_image_barriers.len()
+    );
     // Record the trailing pipeline barrier
     if !recorded_command_buffers
         .prev_stage_buffer_barriers
@@ -750,12 +759,15 @@ where
                 dependency_flags: &mut dependency_flags,
                 prev_barriers: &mut prev_stage_barriers,
                 dropped: &mut dropped,
-                queue_family: (match Q {
-                    'g' => QueueType::Graphics,
-                    'c' => QueueType::Compute,
-                    't' => QueueType::Transfer,
-                    _ => panic!(),
-                }, render_commands.default_cmd_pool.pool.queue_family_index()),
+                queue_family: (
+                    match Q {
+                        'g' => QueueType::Graphics,
+                        'c' => QueueType::Compute,
+                        't' => QueueType::Transfer,
+                        _ => panic!(),
+                    },
+                    render_commands.default_cmd_pool.pool.queue_family_index(),
+                ),
             };
             i.run_unsafe(barrier, world);
             assert!(dropped);
@@ -776,12 +788,15 @@ where
                 image_barriers,
                 buffer_barriers,
                 dependency_flags,
-                queue_family: (match Q {
-                    'g' => QueueType::Graphics,
-                    'c' => QueueType::Compute,
-                    't' => QueueType::Transfer,
-                    _ => panic!(),
-                },render_commands.default_cmd_pool.pool.queue_family_index()),
+                queue_family: (
+                    match Q {
+                        'g' => QueueType::Graphics,
+                        'c' => QueueType::Compute,
+                        't' => QueueType::Transfer,
+                        _ => panic!(),
+                    },
+                    render_commands.default_cmd_pool.pool.queue_family_index(),
+                ),
             };
             drop(barriers);
         }
@@ -790,27 +805,54 @@ where
             let prev_queue_type = i.prev_queue_type();
             match prev_queue_type {
                 QueueType::Graphics => {
-                    let mut render_commands = ResMut::<RecordedCommandBuffers<'g'>>::get_param(&mut self.graphics_recording_commands, &self.system_meta, world, change_tick);
+                    let mut render_commands = ResMut::<RecordedCommandBuffers<'g'>>::get_param(
+                        &mut self.graphics_recording_commands,
+                        &self.system_meta,
+                        world,
+                        change_tick,
+                    );
                     match i {
-                        BarriersPrevStage::Buffer { barrier, .. } => render_commands.prev_stage_buffer_barriers.push(barrier),
-                        BarriersPrevStage::Image { barrier, .. } => render_commands.prev_stage_image_barriers.push(barrier),
+                        BarriersPrevStage::Buffer { barrier, .. } => {
+                            render_commands.prev_stage_buffer_barriers.push(barrier)
+                        }
+                        BarriersPrevStage::Image { barrier, .. } => {
+                            render_commands.prev_stage_image_barriers.push(barrier)
+                        }
                     }
                 }
                 QueueType::Compute => {
-                    let mut render_commands = ResMut::<RecordedCommandBuffers<'c'>>::get_param(&mut self.compute_recording_commands, &self.system_meta, world, change_tick);
+                    let mut render_commands = ResMut::<RecordedCommandBuffers<'c'>>::get_param(
+                        &mut self.compute_recording_commands,
+                        &self.system_meta,
+                        world,
+                        change_tick,
+                    );
                     match i {
-                        BarriersPrevStage::Buffer { barrier, .. } => render_commands.prev_stage_buffer_barriers.push(barrier),
-                        BarriersPrevStage::Image { barrier, .. } => render_commands.prev_stage_image_barriers.push(barrier),
+                        BarriersPrevStage::Buffer { barrier, .. } => {
+                            render_commands.prev_stage_buffer_barriers.push(barrier)
+                        }
+                        BarriersPrevStage::Image { barrier, .. } => {
+                            render_commands.prev_stage_image_barriers.push(barrier)
+                        }
                     }
                 }
                 QueueType::Transfer => {
-                    let mut render_commands = ResMut::<RecordedCommandBuffers<'t'>>::get_param(&mut self.transfer_recording_commands, &self.system_meta, world, change_tick);
+                    let mut render_commands = ResMut::<RecordedCommandBuffers<'t'>>::get_param(
+                        &mut self.transfer_recording_commands,
+                        &self.system_meta,
+                        world,
+                        change_tick,
+                    );
                     match i {
-                        BarriersPrevStage::Buffer { barrier, .. } => render_commands.prev_stage_buffer_barriers.push(barrier),
-                        BarriersPrevStage::Image { barrier, .. } => render_commands.prev_stage_image_barriers.push(barrier),
+                        BarriersPrevStage::Buffer { barrier, .. } => {
+                            render_commands.prev_stage_buffer_barriers.push(barrier)
+                        }
+                        BarriersPrevStage::Image { barrier, .. } => {
+                            render_commands.prev_stage_image_barriers.push(barrier)
+                        }
                     }
                 }
-                _ => unimplemented!()
+                _ => unimplemented!(),
             };
         }
 
@@ -832,9 +874,12 @@ where
             &mut self.system_meta,
         ));
 
-        self.graphics_recording_commands = world.initialize_resource::<RecordedCommandBuffers<'g'>>();
-        self.compute_recording_commands = world.initialize_resource::<RecordedCommandBuffers<'c'>>();
-        self.transfer_recording_commands = world.initialize_resource::<RecordedCommandBuffers<'t'>>();
+        self.graphics_recording_commands =
+            world.initialize_resource::<RecordedCommandBuffers<'g'>>();
+        self.compute_recording_commands =
+            world.initialize_resource::<RecordedCommandBuffers<'c'>>();
+        self.transfer_recording_commands =
+            world.initialize_resource::<RecordedCommandBuffers<'t'>>();
         self.system_meta
             .component_access_set
             .add_unfiltered_write(self.graphics_recording_commands);
@@ -845,20 +890,21 @@ where
             .component_access_set
             .add_unfiltered_write(self.transfer_recording_commands);
 
-        self.system_meta
-            .archetype_component_access
-            .add_write(world
+        self.system_meta.archetype_component_access.add_write(
+            world
                 .get_resource_archetype_component_id(self.graphics_recording_commands)
-                .unwrap());
-            self.system_meta
-            .archetype_component_access
-            .add_write(world
+                .unwrap(),
+        );
+        self.system_meta.archetype_component_access.add_write(
+            world
                 .get_resource_archetype_component_id(self.graphics_recording_commands)
-                .unwrap());        self.system_meta
-            .archetype_component_access
-            .add_write(world
+                .unwrap(),
+        );
+        self.system_meta.archetype_component_access.add_write(
+            world
                 .get_resource_archetype_component_id(self.graphics_recording_commands)
-                .unwrap());
+                .unwrap(),
+        );
     }
 
     fn update_archetype_component_access(

@@ -99,8 +99,16 @@ impl Drop for ImmediateTransitions<'_> {
     }
 }
 pub trait ResourceTransitionCommands {
-    fn add_image_barrier_prev_stage(&mut self, barrier: vk::ImageMemoryBarrier2, prev_queue_type: QueueType) -> &mut Self;
-    fn add_buffer_barrier_prev_stage(&mut self, barrier: vk::BufferMemoryBarrier2, prev_queue_type: QueueType) -> &mut Self;
+    fn add_image_barrier_prev_stage(
+        &mut self,
+        barrier: vk::ImageMemoryBarrier2,
+        prev_queue_type: QueueType,
+    ) -> &mut Self;
+    fn add_buffer_barrier_prev_stage(
+        &mut self,
+        barrier: vk::BufferMemoryBarrier2,
+        prev_queue_type: QueueType,
+    ) -> &mut Self;
 
     fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self;
     fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self;
@@ -135,11 +143,12 @@ pub trait ResourceTransitionCommands {
             tracing::warn!("Transitioning an image to writeonly access while retaining image data. This is likely inefficient.");
         }
         let has_layout_transition = image.layout != layout;
-        let has_queue_family_ownership_transfer = if let Some(queue_family) = image.res.state.queue_family {
-            queue_family != self.current_queue_family()
-        } else {
-            false
-        };
+        let has_queue_family_ownership_transfer =
+            if let Some(queue_family) = image.res.state.queue_family {
+                queue_family != self.current_queue_family()
+            } else {
+                false
+            };
         let barrier = image.res.state.transition(access, has_layout_transition);
         if has_layout_transition || (has_queue_family_ownership_transfer && retain_data) {
             let mut barrier = vk::ImageMemoryBarrier2 {
@@ -164,16 +173,18 @@ pub trait ResourceTransitionCommands {
                 barrier.src_queue_family_index = image.res.state.queue_family.unwrap().1;
                 barrier.dst_queue_family_index = self.current_queue_family().1;
 
-                
-                self.add_image_barrier_prev_stage(vk::ImageMemoryBarrier2 {
-                    src_stage_mask: barrier.src_stage_mask,
-                    src_access_mask: barrier.src_access_mask,
-                    src_queue_family_index: image.state.queue_family.unwrap().1,
-                    dst_queue_family_index: self.current_queue_family().1,
-                    image: image.raw_image(),
-                    subresource_range: image.subresource_range(),
-                    ..Default::default()
-                }, image.state.queue_family.unwrap().0);
+                self.add_image_barrier_prev_stage(
+                    vk::ImageMemoryBarrier2 {
+                        src_stage_mask: barrier.src_stage_mask,
+                        src_access_mask: barrier.src_access_mask,
+                        src_queue_family_index: image.state.queue_family.unwrap().1,
+                        dst_queue_family_index: self.current_queue_family().1,
+                        image: image.raw_image(),
+                        subresource_range: image.subresource_range(),
+                        ..Default::default()
+                    },
+                    image.state.queue_family.unwrap().0,
+                );
             }
             self.add_image_barrier(barrier);
             image.layout = layout;
@@ -196,11 +207,12 @@ pub trait ResourceTransitionCommands {
         retain_data: bool,
     ) -> &mut Self {
         let barrier = buffer.state.transition(access, false);
-        let has_queue_family_ownership_transfer = if let Some(queue_family) = buffer.state.queue_family {
-            queue_family != self.current_queue_family()
-        } else {
-            false
-        };
+        let has_queue_family_ownership_transfer =
+            if let Some(queue_family) = buffer.state.queue_family {
+                queue_family != self.current_queue_family()
+            } else {
+                false
+            };
         if has_queue_family_ownership_transfer && retain_data {
             self.add_buffer_barrier(vk::BufferMemoryBarrier2 {
                 dst_stage_mask: barrier.dst_stage_mask,
@@ -212,16 +224,19 @@ pub trait ResourceTransitionCommands {
                 size: buffer.size(),
                 ..Default::default()
             });
-            self.add_buffer_barrier_prev_stage(vk::BufferMemoryBarrier2 {
-                src_stage_mask: barrier.src_stage_mask,
-                src_access_mask: barrier.src_access_mask,
-                src_queue_family_index: buffer.state.queue_family.unwrap().1,
-                dst_queue_family_index: self.current_queue_family().1,
-                buffer: buffer.raw_buffer(),
-                offset: buffer.offset(),
-                size: buffer.size(),
-                ..Default::default()
-            }, buffer.state.queue_family.unwrap().0);
+            self.add_buffer_barrier_prev_stage(
+                vk::BufferMemoryBarrier2 {
+                    src_stage_mask: barrier.src_stage_mask,
+                    src_access_mask: barrier.src_access_mask,
+                    src_queue_family_index: buffer.state.queue_family.unwrap().1,
+                    dst_queue_family_index: self.current_queue_family().1,
+                    buffer: buffer.raw_buffer(),
+                    offset: buffer.offset(),
+                    size: buffer.size(),
+                    ..Default::default()
+                },
+                buffer.state.queue_family.unwrap().0,
+            );
         } else {
             self.add_global_barrier(vk::MemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
@@ -239,10 +254,18 @@ impl ResourceTransitionCommands for ImmediateTransitions<'_> {
     fn current_queue_family(&self) -> (QueueType, u32) {
         self.queue_family
     }
-    fn add_image_barrier_prev_stage(&mut self, barrier: vk::ImageMemoryBarrier2, queue_type: QueueType) -> &mut Self {
+    fn add_image_barrier_prev_stage(
+        &mut self,
+        barrier: vk::ImageMemoryBarrier2,
+        queue_type: QueueType,
+    ) -> &mut Self {
         panic!()
     }
-    fn add_buffer_barrier_prev_stage(&mut self, barrier: vk::BufferMemoryBarrier2, queue_type: QueueType) -> &mut Self {
+    fn add_buffer_barrier_prev_stage(
+        &mut self,
+        barrier: vk::BufferMemoryBarrier2,
+        queue_type: QueueType,
+    ) -> &mut Self {
         panic!()
     }
     fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self {

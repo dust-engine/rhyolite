@@ -12,10 +12,10 @@ use vk_mem::Alloc;
 
 pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
-    fn offset(&self) -> vk::DeviceSize{
+    fn offset(&self) -> vk::DeviceSize {
         0
     }
-    fn size(&self) -> vk::DeviceSize{
+    fn size(&self) -> vk::DeviceSize {
         vk::WHOLE_SIZE
     }
 }

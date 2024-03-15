@@ -24,7 +24,11 @@ impl CommandPool {
                 None,
             )?
         };
-        Ok(Self { device, raw, queue_family_index })
+        Ok(Self {
+            device,
+            raw,
+            queue_family_index,
+        })
     }
     pub fn queue_family_index(&self) -> u32 {
         self.queue_family_index

@@ -1,7 +1,7 @@
 use ash::{
+    extensions::khr,
     prelude::VkResult,
     vk::{self},
-    extensions::khr,
 };
 use bevy::ecs::prelude::*;
 use bevy::{app::prelude::*, asset::AssetApp};
@@ -48,7 +48,7 @@ impl Default for RhyolitePlugin {
             application_version: Default::default(),
             engine_name: cstr!(b"Unnamed Engine").to_owned(),
             engine_version: Default::default(),
-            api_version: Version::new(0, 1, 3, 0),
+            api_version: Version::new(0, 1, 2, 0),
             physical_device_index: 0,
         }
     }
@@ -68,8 +68,11 @@ impl Default for VulkanEntry {
 }
 pub(crate) type InstanceMetaBuilder =
     Box<dyn FnOnce(&ash::Entry, &ash::Instance) -> Box<dyn Any + Send + Sync> + Send + Sync>;
-pub(crate) type DeviceMetaBuilder =
-    Box<dyn FnOnce(&ash::Instance, &mut ash::Device) -> Option<Box<dyn Any + Send + Sync>> + Send + Sync>;
+pub(crate) type DeviceMetaBuilder = Box<
+    dyn FnOnce(&ash::Instance, &mut ash::Device) -> Option<Box<dyn Any + Send + Sync>>
+        + Send
+        + Sync,
+>;
 #[derive(Resource)]
 struct DeviceExtensions {
     available_extensions: BTreeMap<CString, Version>,
@@ -200,7 +203,8 @@ impl Plugin for RhyolitePlugin {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
-            app.add_instance_extension_named(ash::vk::KhrPortabilityEnumerationFn::name()).unwrap();
+            app.add_instance_extension_named(ash::vk::KhrPortabilityEnumerationFn::name())
+                .unwrap();
         }
         let mut instance_extensions = app.world.remove_resource::<InstanceExtensions>();
         let instance_layers = app.world.remove_resource::<InstanceLayers>();
@@ -267,7 +271,9 @@ impl Plugin for RhyolitePlugin {
         app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore)
             .unwrap();
         app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|f| &mut f.synchronization2)
-            .or_enable_in_extension::<khr::Synchronization2, vk::PhysicalDeviceSynchronization2FeaturesKHR>(|f| &mut f.synchronization2)
+            .or_enable_in_extension::<vk::PhysicalDeviceSynchronization2FeaturesKHR>(|f| {
+                &mut f.synchronization2
+            })
             .unwrap();
 
         // Optional extensions
@@ -504,17 +510,20 @@ impl RhyoliteApp for App {
 
 pub enum FeatureEnableResult<'a> {
     Success,
-    NotFound {
-        app: &'a mut App,
-    }
+    NotFound { app: &'a mut App },
 }
 impl<'a> FeatureEnableResult<'a> {
-    pub fn or_enable_in_extension<T: DeviceExtension, F: Feature + Default>(&'a mut self, 
-        selector: impl FnMut(&mut F) -> &mut vk::Bool32) -> Self {
+    pub fn or_enable_in_extension<F: Feature + Default>(
+        &'a mut self,
+        selector: impl FnMut(&mut F) -> &mut vk::Bool32,
+    ) -> Self
+    where
+        F::Extension: DeviceExtension,
+    {
         match self {
             FeatureEnableResult::Success => Self::Success,
             FeatureEnableResult::NotFound { app } => {
-                if app.add_device_extension::<T>().is_none() {
+                if app.add_device_extension::<F::Extension>().is_none() {
                     return Self::NotFound { app: *app };
                 }
                 app.enable_feature(selector)

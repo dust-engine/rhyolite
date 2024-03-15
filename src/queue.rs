@@ -89,10 +89,16 @@ impl QueuesRouter {
                 if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
                     priority -= 10;
                 }
-                if family.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR) {
+                if family
+                    .queue_flags
+                    .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
+                {
                     priority -= 10;
                 }
-                if family.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR) {
+                if family
+                    .queue_flags
+                    .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
+                {
                     priority -= 10;
                 }
                 priority
@@ -121,10 +127,16 @@ impl QueuesRouter {
                 if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
                     priority -= 10;
                 }
-                if family.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR) {
+                if family
+                    .queue_flags
+                    .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
+                {
                     priority -= 10;
                 }
-                if family.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR) {
+                if family
+                    .queue_flags
+                    .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
+                {
                     priority -= 10;
                 }
                 priority
@@ -150,10 +162,16 @@ impl QueuesRouter {
                 if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
                     priority -= 10;
                 }
-                if family.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR) {
+                if family
+                    .queue_flags
+                    .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
+                {
                     priority -= 10;
                 }
-                if family.queue_flags.contains(vk::QueueFlags::VIDEO_ENCODE_KHR) {
+                if family
+                    .queue_flags
+                    .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
+                {
                     priority -= 10;
                 }
                 priority
@@ -166,7 +184,7 @@ impl QueuesRouter {
             vec![vk::QueueFlags::empty(); available_queue_family.len()];
         if sparse_binding_queue_family != u32::MAX {
             queue_family_to_types[sparse_binding_queue_family as usize] |=
-            vk::QueueFlags::SPARSE_BINDING;
+                vk::QueueFlags::SPARSE_BINDING;
         }
         queue_family_to_types[transfer_queue_family as usize] |= vk::QueueFlags::TRANSFER;
         queue_family_to_types[compute_queue_family as usize] |= vk::QueueFlags::COMPUTE;
