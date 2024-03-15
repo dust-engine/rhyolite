@@ -21,28 +21,29 @@ struct InstanceInner {
     entry: Arc<ash::Entry>,
     instance: ash::Instance,
     extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    api_version: Version,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version(pub u32);
 impl Version {
-    pub fn new(variant: u32, major: u32, minor: u32, patch: u32) -> Self {
+    pub const fn new(variant: u32, major: u32, minor: u32, patch: u32) -> Self {
         let num = vk::make_api_version(variant, major, minor, patch);
         Self(num)
     }
-    pub fn major(&self) -> u32 {
+    pub const fn major(&self) -> u32 {
         vk::api_version_major(self.0)
     }
-    pub fn minor(&self) -> u32 {
+    pub const fn minor(&self) -> u32 {
         vk::api_version_minor(self.0)
     }
-    pub fn patch(&self) -> u32 {
+    pub const fn patch(&self) -> u32 {
         vk::api_version_patch(self.0)
     }
-    pub fn variant(&self) -> u32 {
+    pub const fn variant(&self) -> u32 {
         vk::api_version_patch(self.0)
     }
-    pub fn as_raw(&self) -> u32 {
+    pub const fn as_raw(&self) -> u32 {
         self.0
     }
 }
@@ -142,6 +143,7 @@ impl Instance {
             entry,
             instance,
             extensions,
+            api_version: info.api_version,
         })))
     }
     pub fn entry(&self) -> &Arc<ash::Entry> {
@@ -156,6 +158,10 @@ impl Instance {
     }
     pub fn extension<T: InstanceExtension>(&self) -> &T {
         self.get_extension::<T>().unwrap()
+    }
+    /// Returns the version of the Vulkan API used when creating the instance.
+    pub fn api_version(&self) -> Version {
+        self.0.api_version
     }
 }
 

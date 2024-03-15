@@ -199,6 +199,7 @@ unsafe impl Sync for InstanceLayers {}
 
 impl Plugin for RhyolitePlugin {
     fn build(&self, app: &mut App) {
+        #[allow(unused_mut)]
         let mut instance_create_flags = vk::InstanceCreateFlags::empty();
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
@@ -225,7 +226,7 @@ impl Plugin for RhyolitePlugin {
                     .as_ref()
                     .map(|f| f.enabled_layers.as_slice())
                     .unwrap_or(&[]),
-                api_version: self.api_version.clone(),
+                api_version: self.api_version,
                 engine_name: self.engine_name.as_c_str(),
                 engine_version: self.engine_version,
                 application_name: self.application_name.as_c_str(),

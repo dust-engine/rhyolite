@@ -881,7 +881,6 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
             current_vertex as i32,
             0,
         );
-        println!("Drawn");
         current_vertex += mesh.vertices.len() as u32;
         current_indice += mesh.indices.len() as u32;
     }

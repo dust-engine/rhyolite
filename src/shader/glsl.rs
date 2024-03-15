@@ -11,6 +11,8 @@ use bevy::utils::BoxedFuture;
 use shaderc::ResolvedInclude;
 use thiserror::Error;
 
+use crate::{Instance, Version};
+
 use super::spirv::SpirvShaderSource;
 
 #[derive(TypePath, Asset)]
@@ -53,8 +55,16 @@ pub enum ShadercLoadingError {
     LoadingError(#[from] LoadDirectError),
 }
 
+pub use shaderc::SpirvVersion;
+
 /// Asset loader that compiles the GLSL source code into SPIR-V using Shaderc.
-pub struct GlslShadercCompiler;
+pub struct GlslShadercCompiler {
+    pub target_spirv: SpirvVersion,
+    pub target_vk_version: Version,
+}
+const GLSL_EXTENSIONS: &[&str] = &[
+    "rgen", "rmiss", "rchit", "rahit", "rint", "frag", "vert", "comp",
+];
 impl AssetLoader for GlslShadercCompiler {
     type Asset = SpirvShaderSource;
 
@@ -62,9 +72,7 @@ impl AssetLoader for GlslShadercCompiler {
     type Error = ShadercLoadingError;
 
     fn extensions(&self) -> &[&str] {
-        &[
-            "rgen", "rmiss", "rchit", "rahit", "rint", "frag", "vert", "comp",
-        ]
+        GLSL_EXTENSIONS
     }
 
     fn load<'a>(
@@ -132,11 +140,8 @@ impl AssetLoader for GlslShadercCompiler {
 
             let binary = {
                 let mut options = CompileOptions::new().unwrap();
-                options.set_target_spirv(shaderc::SpirvVersion::V1_5);
-                options.set_target_env(
-                    shaderc::TargetEnv::Vulkan,
-                    crate::Version::new(0, 1, 2, 0).as_raw(),
-                );
+                options.set_target_spirv(self.target_spirv);
+                options.set_target_env(shaderc::TargetEnv::Vulkan, self.target_vk_version.as_raw());
                 options.set_include_callback(|source_name, _ty, _, _include_depth| {
                     Ok(ResolvedInclude {
                         resolved_name: source_name.to_string(),
@@ -179,10 +184,14 @@ pub struct GlslPlugin;
 impl Plugin for GlslPlugin {
     fn build(&self, app: &mut App) {
         use super::loader::SpirvSaver;
+        let target_vk_version = app.world.resource::<Instance>().api_version();
         app.init_asset::<GlslShaderSource>()
             .register_asset_loader(GlslSourceLoader)
             .register_asset_loader(PlayoutGlslLoader)
-            .register_asset_loader(GlslShadercCompiler);
+            .register_asset_loader(GlslShadercCompiler {
+                target_spirv: SpirvVersion::V1_5,
+                target_vk_version: target_vk_version,
+            });
         if let Some(processor) = app
             .world
             .get_resource::<bevy::asset::processor::AssetProcessor>()
@@ -192,7 +201,7 @@ impl Plugin for GlslPlugin {
             // Load GLSL source, compile with shaderc, and save as SPIR-V
             type GlslToSpirv = LoadAndSave<GlslShadercCompiler, SpirvSaver>;
             processor.register_processor::<GlslToSpirv>(SpirvSaver.into());
-            for ext in GlslShadercCompiler.extensions() {
+            for ext in GLSL_EXTENSIONS {
                 if *ext != "glsl" {
                     processor.set_default_processor::<GlslToSpirv>(ext);
                 }

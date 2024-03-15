@@ -225,6 +225,7 @@ impl PhysicalDeviceProperties {
             .unwrap()
         }
     }
+    /// Returns the maximum supported API version for this physical device.
     pub fn api_version(&self) -> Version {
         Version(self.inner.api_version)
     }
@@ -279,6 +280,7 @@ enum PhysicalDeviceFeaturesInner {
         physical_device: PhysicalDevice,
         available_features: FeatureMap,
         enabled_features: FeatureMap,
+        vulkan_version: Version,
     },
     Finalized {
         physical_device_features: vk::PhysicalDeviceFeatures2,
@@ -290,6 +292,7 @@ unsafe impl Sync for PhysicalDeviceFeaturesInner {}
 
 pub unsafe trait Feature: TaggedStructure + 'static {
     type Extension;
+    const REQUIRED_VK_VERSION: Version;
 }
 
 impl PhysicalDeviceFeatures {
@@ -301,10 +304,15 @@ impl PhysicalDeviceFeatures {
             physical_device,
             available_features,
             enabled_features,
+            vulkan_version,
         } = &mut self.0
         else {
             panic!("Cannot enable features outside plugin build phase");
         };
+        if &*vulkan_version < &T::REQUIRED_VK_VERSION {
+            // feature requires a higher Vulkan version
+            return None;
+        }
         let feature: &mut Box<VkTaggedObject> = available_features
             .features
             .entry(T::STRUCTURE_TYPE)
@@ -360,6 +368,7 @@ impl PhysicalDeviceFeatures {
             features: Default::default(),
         };
         Self(PhysicalDeviceFeaturesInner::Setup {
+            vulkan_version: pdevice.instance().api_version(),
             physical_device: pdevice,
             available_features,
             enabled_features: Default::default(),
@@ -412,12 +421,22 @@ macro_rules! impl_feature {
     ($feature:ty, $ext:ty) => {
         unsafe impl Feature for $feature {
             type Extension = $ext;
+            const REQUIRED_VK_VERSION: Version = Version::new(0, 1, 0, 0);
         }
     };
 }
-impl_feature!(vk::PhysicalDeviceVulkan11Features, ());
-impl_feature!(vk::PhysicalDeviceVulkan12Features, ());
-impl_feature!(vk::PhysicalDeviceVulkan13Features, ());
+unsafe impl Feature for vk::PhysicalDeviceVulkan11Features {
+    type Extension = ();
+    const REQUIRED_VK_VERSION: Version = Version::new(0, 1, 1, 0);
+}
+unsafe impl Feature for vk::PhysicalDeviceVulkan12Features {
+    type Extension = ();
+    const REQUIRED_VK_VERSION: Version = Version::new(0, 1, 2, 0);
+}
+unsafe impl Feature for vk::PhysicalDeviceVulkan13Features {
+    type Extension = ();
+    const REQUIRED_VK_VERSION: Version = Version::new(0, 1, 3, 0);
+}
 impl_feature!(
     vk::PhysicalDeviceSynchronization2FeaturesKHR,
     khr::Synchronization2
