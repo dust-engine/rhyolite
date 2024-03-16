@@ -1,8 +1,7 @@
 pub mod staging;
 
 use std::{
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut, Index, IndexMut},
+    alloc::Layout, mem::MaybeUninit, ops::{Deref, DerefMut, Index, IndexMut, Range, RangeBounds}
 };
 
 use ash::{prelude::VkResult, vk};
@@ -70,7 +69,7 @@ impl<T> BufferArray<T> {
             }
             let (buffer, allocation) = self.allocator.create_buffer(
                 &vk::BufferCreateInfo {
-                    size: new_capacity as u64 * std::mem::size_of::<T>() as u64,
+                    size: Layout::new::<T>().repeat(new_capacity).unwrap().0.pad_to_align().size() as vk::DeviceSize,
                     usage: self.usage,
                     sharing_mode: self.sharing_mode.as_raw(),
                     queue_family_index_count: self.sharing_mode.queue_family_indices().len() as u32,
@@ -142,6 +141,25 @@ impl<T> BufferArray<T> {
             len: 0,
         };
         res
+    }
+
+    pub fn flush(&mut self, range: impl RangeBounds<usize>) -> VkResult<()> {
+        if let Some(allocation) = &self.allocation {
+            let item_size = Layout::new::<T>().pad_to_align().size();
+            let start = match range.start_bound() {
+                std::ops::Bound::Included(&start) => start * item_size,
+                std::ops::Bound::Excluded(&start) => (start + 1) * item_size,
+                std::ops::Bound::Unbounded => 0,
+            };
+            let len = match range.end_bound() {
+                std::ops::Bound::Included(&end) => (end + 1) * item_size - start,
+                std::ops::Bound::Excluded(&end) => end * item_size - start,
+                std::ops::Bound::Unbounded => vk::WHOLE_SIZE as usize,
+            };
+            return self.allocator.flush_allocation(allocation, start, len);
+        } else {
+            return Ok(())
+        }
     }
 }
 

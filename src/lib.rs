@@ -4,6 +4,7 @@
 #![feature(get_mut_unchecked)]
 #![feature(noop_waker)]
 #![feature(ptr_metadata)]
+#![feature(alloc_layout_extra)]
 
 mod access;
 mod alloc;

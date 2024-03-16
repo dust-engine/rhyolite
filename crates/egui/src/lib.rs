@@ -388,6 +388,8 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     }
     assert_eq!(total_indices_count, device_buffers.total_indices_count);
     assert_eq!(total_vertices_count, device_buffers.total_vertices_count);
+    host_buffers.vertex_buffer.flush(..total_vertices_count).unwrap();
+    host_buffers.index_buffer.flush(..total_indices_count).unwrap();
 }
 
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
@@ -637,6 +639,7 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut commands: RenderCommands<'g'>,
     host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
 ) {
+    println!("Copy buffers");
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
     if device_buffers.total_vertices_count > 0 {
         commands.copy_buffer(

@@ -815,6 +815,5 @@ pub fn present(
                 },
             )
             .unwrap();
-        println!("Presented");
     }
 }
