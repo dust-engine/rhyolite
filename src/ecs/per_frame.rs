@@ -26,10 +26,7 @@ pub struct PerFrame<T: PerFrameResource> {
 }
 impl<T: PerFrameResource> Default for PerFrame<T> {
     fn default() -> Self {
-        Self {
-            frame_index: 0,
-            items: SmallVec::from_buf([PerFrameResourceFrame::Empty, PerFrameResourceFrame::Empty, PerFrameResourceFrame::Empty])
-        }
+        Self::new()
     }
 }
 
@@ -41,8 +38,8 @@ enum PerFrameResourceFrame<T> {
 impl<T: PerFrameResource> PerFrame<T> {
     pub fn new() -> Self {
         Self {
-            frame_index: 0,
-            items: SmallVec::new(),
+            frame_index: u64::MAX,
+            items: SmallVec::from_buf([PerFrameResourceFrame::Empty, PerFrameResourceFrame::Empty, PerFrameResourceFrame::Empty])
         }
     }
     pub(crate) fn on_frame_index<const Q: char>(&mut self, frame_index: u64, submission_info: &Mutex<QueueSubmissionInfo>, device: &Device, param: T::Param<'_>) -> &mut T where (): IsQueueCap<Q> {
@@ -53,9 +50,7 @@ impl<T: PerFrameResource> PerFrame<T> {
                     self.items[i] = PerFrameResourceFrame::Some { frame: T::create(param), semaphores: SmallVec::new() };
                 },
                 PerFrameResourceFrame::Some { frame, semaphores } => {
-                    println!("waiting for semaphores: {:?}", semaphores);
                     TimelineSemaphore::wait_all_blocked(semaphores.iter().map(|(s, v)| (s.as_ref(), *v)), !0).unwrap();
-                    println!("waited");
                     frame.reset(param);
                     semaphores.clear();
                 },

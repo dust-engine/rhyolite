@@ -50,8 +50,8 @@ impl Plugin for SwapchainPlugin {
                     .with_option::<RenderSystemPass>(|entry| {
                         let item = entry.or_default();
                         item.force_binary_semaphore = true;
-                    }),
-                    //.with_barriers(present_barriers),
+                    })
+                    .with_barriers(present_barriers),
                 acquire_swapchain_image::<With<PrimaryWindow>>
                     .with_option::<RenderSystemPass>(|entry| {
                         let item = entry.or_default();

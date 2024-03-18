@@ -22,7 +22,7 @@ use std::{
 };
 
 use ash::vk::{self, Handle};
-use bevy::{ecs::{
+use bevy::{core::FrameCount, ecs::{
     archetype::ArchetypeComponentId,
     component::ComponentId,
     system::{lifetimeless::SRes, Local, Res, ResMut, Resource, System, SystemMeta, SystemParam},
@@ -151,7 +151,6 @@ impl QueueSubmissionInfo {
                 return (current_semaphore.clone(), *current_value);
             }
         }
-        println!("Creating new semaphore");
         let semaphore = Arc::new(TimelineSemaphore::new(device.clone()).unwrap());
         self.available_semaphores.push((stage, semaphore.clone(), 1));
         self.signal_semaphores.push((stage, semaphore.clone(), 1));
@@ -226,7 +225,7 @@ pub struct RenderCommandState<const Q: char> {
     retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
     prev_stage_submission_info: SmallVec<[Arc<Mutex<QueueSubmissionInfo>>; 4]>,
-    frame_index: u64,
+    frame_index_state: ComponentId,
 }
 
 unsafe impl<'w, 's, const Q: char> SystemParam for RenderCommands<'w, 's, Q>
@@ -245,6 +244,7 @@ where
             ResMut::<PerFrame::<DefaultCommandPool<Q>>>::init_state(world, system_meta);
             let queues_router_state =
                 Res::<QueuesRouter>::init_state(world, system_meta);
+            let frame_index_state = Res::<FrameCount>::init_state(world, system_meta);
         RenderCommandState {
             device: world.resource::<Device>().clone(),
             default_cmd_pool_state,
@@ -252,7 +252,7 @@ where
             retained_objects: BTreeMap::new(),
             submission_info: None,
             prev_stage_submission_info: SmallVec::new(),
-            frame_index: 0,
+            frame_index_state,
         }
     }
     fn default_configs(config: &mut bevy::utils::ConfigMap) {
@@ -278,7 +278,7 @@ where
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        state.frame_index += 1;
+        let current_frame_index = Res::<FrameCount>::get_param(&mut state.frame_index_state, system_meta, world, change_tick).into_inner().0;
         let default_cmd_pool: ResMut<'world, _> = ResMut::<PerFrame<DefaultCommandPool<Q>>>::get_param(
             &mut state.default_cmd_pool_state,
             system_meta,
@@ -287,16 +287,16 @@ where
         );
         let queues_router = Res::<QueuesRouter>::get_param(&mut state.queues_router_state, system_meta, world, change_tick);
         let default_cmd_pool: &'world mut _ = default_cmd_pool.into_inner();
-        let default_cmd_pool = default_cmd_pool.on_frame_index(state.frame_index, state.submission_info.as_ref().unwrap(), &state.device, (&state.device, &queues_router));
+        let default_cmd_pool = default_cmd_pool.on_frame_index(current_frame_index, state.submission_info.as_ref().unwrap(), &state.device, (&state.device, &queues_router));
         let num_frame_in_flight: u32 = 3;
-        if state.frame_index > num_frame_in_flight as u64 {
+        if current_frame_index >= num_frame_in_flight as u64 {
             state
                 .retained_objects
-                .remove(&(state.frame_index - num_frame_in_flight as u64));
+                .remove(&(current_frame_index - num_frame_in_flight as u64));
         }
 
         let mut this = RenderCommands {
-            frame_index: state.frame_index,
+            frame_index: current_frame_index,
             default_cmd_pool,
             retained_objects: &mut state.retained_objects,
             submission_info: state.submission_info.as_ref().unwrap(),
@@ -366,7 +366,6 @@ pub struct TimelineSemaphoreOp {
 
 pub struct QueueSystemState {
     pub queue: QueueRef,
-    pub frame_index: u64,
     pub binary_signals: Vec<BinarySemaphoreOp>,
     pub binary_waits: Vec<BinarySemaphoreOp>,
     device: Device,
@@ -374,6 +373,7 @@ pub struct QueueSystemState {
     /// Map from frame index to retained objects
     pub retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     pub fence_to_wait: BTreeMap<u64, vk::Fence>,
+    pub frame_count_state: ComponentId,
 }
 impl Drop for QueueSystemState {
     fn drop(&mut self) {
@@ -472,14 +472,15 @@ where
         world: &mut World,
         _system_meta: &mut bevy::ecs::system::SystemMeta,
     ) -> Self::State {
+        let frame_count_state: ComponentId = Res::<FrameCount>::init_state(world, _system_meta);
         QueueSystemState {
             device: world.resource::<Device>().clone(),
             queue: QueueRef::default(),
             binary_signals: Vec::new(),
             binary_waits: Vec::new(),
-            frame_index: 0,
             retained_objects: BTreeMap::new(),
             fence_to_wait: BTreeMap::new(),
+            frame_count_state,
         }
     }
 
@@ -506,16 +507,16 @@ where
 
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
-        _system_meta: &bevy::ecs::system::SystemMeta,
-        _world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        _change_tick: bevy::ecs::component::Tick,
+        system_meta: &bevy::ecs::system::SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        state.frame_index += 1;
+        let current_frame_index = Res::<FrameCount>::get_param(&mut state.frame_count_state, system_meta, world, change_tick).into_inner().0;
 
         let num_frame_in_flight = 3;
 
-        if state.frame_index > num_frame_in_flight {
-            let wait_value = state.frame_index - num_frame_in_flight;
+        if current_frame_index >= num_frame_in_flight {
+            let wait_value = current_frame_index - num_frame_in_flight;
             if let Some(&fence) = state.fence_to_wait.get(&wait_value) {
                 unsafe {
                     state.device.wait_for_fences(&[fence], true, !0).unwrap();
@@ -528,12 +529,12 @@ where
         }
 
         let retained_objects: &mut Vec<Box<dyn Send + Sync>> =
-            state.retained_objects.entry(state.frame_index).or_default();
+            state.retained_objects.entry(current_frame_index).or_default();
 
         QueueContext {
             device: &state.device,
             queue: state.queue,
-            frame_index: state.frame_index,
+            frame_index: current_frame_index,
             binary_signals: &state.binary_signals,
             binary_waits: &state.binary_waits,
             retained_objects,
@@ -544,15 +545,14 @@ where
 
 pub(crate) fn flush_system_graph<const Q: char>(
     mut default_cmd_pool: ResMut<PerFrame<DefaultCommandPool<Q>>>,
-    mut frame_index: Local<u64>,
+    mut frame_index: Res<FrameCount>,
     submission_info: SubmissionInfo,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
 ) where
     (): IsQueueCap<Q>,
 {
-    *frame_index += 1;
-    let default_cmd_pool = default_cmd_pool.on_frame_index(*frame_index, submission_info.0, &device, (&device, &queues_router));
+    let default_cmd_pool = default_cmd_pool.on_frame_index(frame_index.0, submission_info.0, &device, (&device, &queues_router));
 
     let mut submission_info = submission_info.0.lock().unwrap();
     if default_cmd_pool.buffer != vk::CommandBuffer::null() {
@@ -576,13 +576,12 @@ pub(crate) fn submit_system_graph<const Q: char>(
     queue_ctx: QueueContext<Q>,
     binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
     device: Res<Device>,
-    mut frame_index: Local<u64>,
+    frame_index: Res<FrameCount>,
     queues_router: Res<QueuesRouter>,
 ) where
     (): IsQueueCap<Q>,
 {
-    *frame_index += 1;
-    let default_cmd_pool = default_cmd_pool.on_frame_index(*frame_index, submission_info.0, &device, (&device, &queues_router));
+    let default_cmd_pool = default_cmd_pool.on_frame_index(frame_index.0, submission_info.0, &device, (&device, &queues_router));
 
 
     let mut submission_info = submission_info.0.lock().unwrap();
@@ -693,9 +692,6 @@ pub(crate) fn submit_system_graph<const Q: char>(
                 }),
         )
         .collect::<Vec<_>>();
-    
-        println!("QueueSubmit Semaphore signals: {:?}", semaphore_signals);
-        println!("QueueSubmit Semaphore waits: {:?}", semaphore_waits);
     submission_info.signal_semaphores.clear();
     submission_info.wait_semaphores.clear();
     unsafe {
@@ -725,6 +721,11 @@ pub(crate) struct InsertPipelineBarrier<const Q: char> {
     render_command_state: Option<RenderCommandState<Q>>,
     /// If true, will record to `barrier_buffer` instead of `current_buffer`.
     record_to_next: bool,
+
+    
+    queue_submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
+    device: Option<Device>,
+    queue_family_index: u32,
 }
 impl<const Q: char> InsertPipelineBarrier<Q> {
     pub(crate) fn new() -> Self {
@@ -733,6 +734,9 @@ impl<const Q: char> InsertPipelineBarrier<Q> {
             system_meta: SystemMeta::new::<Self>(),
             render_command_state: None,
             record_to_next: false,
+            queue_submission_info: None,
+            device: None,
+            queue_family_index: 0,
         }
     }
 }
@@ -791,12 +795,6 @@ where
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
     ) -> Self::Out {
         let change_tick = world.increment_change_tick();
-        let render_commands = RenderCommands::<Q>::get_param(
-            self.render_command_state.as_mut().unwrap(),
-            &self.system_meta,
-            world,
-            change_tick,
-        );
 
         let mut image_barriers = SmallVec::new();
         let mut buffer_barriers = SmallVec::new();
@@ -806,13 +804,13 @@ where
         for i in self.barrier_producers.iter_mut() {
             let mut dropped = false;
             let barrier = Barriers {
-                device: render_commands.device(),
+                device: self.device.as_ref().unwrap(),
                 image_barriers: &mut image_barriers,
                 buffer_barriers: &mut buffer_barriers,
                 global_barriers: &mut global_barriers,
                 dependency_flags: &mut dependency_flags,
                 prev_barriers: &mut prev_stage_barriers,
-                submission_info: render_commands.submission_info,
+                submission_info: self.queue_submission_info.as_ref().map(|a| a.as_ref()).unwrap(),
                 dropped: &mut dropped,
                 queue_family: (
                     match Q {
@@ -821,7 +819,7 @@ where
                         't' => QueueType::Transfer,
                         _ => panic!(),
                     },
-                    render_commands.default_cmd_pool.pool.queue_family_index(),
+                    self.queue_family_index,
                 ),
             };
             i.run_unsafe(barrier, world);
@@ -835,6 +833,12 @@ where
             || !image_barriers.is_empty()
             || !buffer_barriers.is_empty()
         {
+            let render_commands = RenderCommands::<Q>::get_param(
+                self.render_command_state.as_mut().unwrap(),
+                &self.system_meta,
+                world,
+                change_tick,
+            );
             let cmd_buf = render_commands.default_cmd_pool.current_buffer();
             let barriers = ImmediateTransitions {
                 cmd_buf,
@@ -886,6 +890,13 @@ where
             world,
             &mut self.system_meta,
         ));
+        self.device = Some(world.resource::<Device>().clone());
+        self.queue_family_index = world.resource::<QueuesRouter>().queue_family_of_type(match Q {
+            'g' => QueueType::Graphics,
+            'c' => QueueType::Compute,
+            't' => QueueType::Transfer,
+            _ => panic!(),
+        });
     }
 
     fn update_archetype_component_access(
@@ -933,7 +944,8 @@ where
                 .extend_combined_access(&component_access);
             self.system_meta.archetype_component_access = archetype_component_access;
             self.system_meta.name = self.name();
-        } else {
+        } else if let Some(state) = config.downcast_mut::<RenderSystemInitialState>() {
+            self.queue_submission_info = state.queue_submission_info.clone();
             RenderCommands::<Q>::configurate(
                 self.render_command_state.as_mut().unwrap(),
                 config,
