@@ -100,7 +100,7 @@ pub struct Barriers {
     pub(crate) prev_barriers: *mut SmallVec<[BarriersPrevStage; 4]>,
 
     pub(crate) queue_family: (QueueType, u32),
-    pub(crate) submission_info: *const Mutex<QueueSubmissionInfo>
+    pub(crate) submission_info: *const Mutex<QueueSubmissionInfo>,
 }
 impl Drop for Barriers {
     fn drop(&mut self) {
@@ -166,13 +166,21 @@ impl ResourceTransitionCommands for Barriers {
         }
         self
     }
-    
-    fn wait_semaphore(&mut self, semaphore: Cow<Arc<TimelineSemaphore>>, value: u64, stage: vk::PipelineStageFlags2) {
+
+    fn wait_semaphore(
+        &mut self,
+        semaphore: Cow<Arc<TimelineSemaphore>>,
+        value: u64,
+        stage: vk::PipelineStageFlags2,
+    ) {
         let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
         submission_info.wait_semaphore(semaphore, value, stage);
     }
-    
-    fn signal_semaphore(&mut self, stage: vk::PipelineStageFlags2) -> (Arc<TimelineSemaphore>, u64) {
+
+    fn signal_semaphore(
+        &mut self,
+        stage: vk::PipelineStageFlags2,
+    ) -> (Arc<TimelineSemaphore>, u64) {
         let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
         let device = unsafe { &*self.device };
         submission_info.signal_semaphore(stage, device)

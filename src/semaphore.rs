@@ -9,14 +9,15 @@ pub struct TimelineSemaphore {
     semaphore: vk::Semaphore,
     current_value: AtomicU64,
 }
-impl Debug for TimelineSemaphore{
+impl Debug for TimelineSemaphore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = self.current_value.load(std::sync::atomic::Ordering::Relaxed);
+        let value = self
+            .current_value
+            .load(std::sync::atomic::Ordering::Relaxed);
         f.debug_tuple("TimelineSemaphore")
             .field(&self.semaphore)
             .field(&value)
             .finish()
-    
     }
 }
 

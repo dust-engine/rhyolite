@@ -28,7 +28,7 @@ use rhyolite::{
         TransferCommands,
     },
     ecs::{BarrierProducerOut, Barriers, IntoRenderSystemConfigs},
-    ecs::{PerFrameResource, RenderCommands, RenderImage, RenderRes, PerFrame},
+    ecs::{PerFrame, PerFrameResource, RenderCommands, RenderImage, RenderRes},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
         PipelineCache, PipelineLayout,
@@ -393,8 +393,14 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     }
     assert_eq!(total_indices_count, device_buffers.total_indices_count);
     assert_eq!(total_vertices_count, device_buffers.total_vertices_count);
-    host_buffers.vertex_buffer.flush(..total_vertices_count).unwrap();
-    host_buffers.index_buffer.flush(..total_indices_count).unwrap();
+    host_buffers
+        .vertex_buffer
+        .flush(..total_vertices_count)
+        .unwrap();
+    host_buffers
+        .index_buffer
+        .flush(..total_indices_count)
+        .unwrap();
 }
 
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
@@ -755,7 +761,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
 
     assets: Res<Assets<ShaderModule>>,
     task_pool: Res<DeferredOperationTaskPool>,
-    allocator: Res<Allocator>
+    allocator: Res<Allocator>,
 ) {
     let Some((pipeline, old_pipeline)) =
         pipeline_cache.retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool)

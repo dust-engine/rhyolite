@@ -44,7 +44,7 @@ pub struct ResourceState {
     pub(crate) queue_family: Option<(QueueType, u32)>,
 
     pub(crate) write_semaphore: Option<(Arc<TimelineSemaphore>, u64)>,
-    pub(crate) read_semaphores: SmallVec<[(Arc<TimelineSemaphore>, u64); 2]>
+    pub(crate) read_semaphores: SmallVec<[(Arc<TimelineSemaphore>, u64); 2]>,
 }
 impl ResourceState {
     pub(crate) fn add_read_semaphore(&mut self, semaphore: Arc<TimelineSemaphore>, value: u64) {

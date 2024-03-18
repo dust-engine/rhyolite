@@ -3,11 +3,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use bevy::utils::{petgraph::{
-    graphmap::DiGraphMap,
-    visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
-    Direction::{self, Incoming, Outgoing},
-}, smallvec::SmallVec};
+use bevy::utils::{
+    petgraph::{
+        graphmap::DiGraphMap,
+        visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
+        Direction::{self, Incoming, Outgoing},
+    },
+    smallvec::SmallVec,
+};
 use bevy::{
     ecs::{
         schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
@@ -19,10 +22,11 @@ use bevy::{
 
 use crate::{
     ecs::{
-        BarrierProducerOutConfig, BinarySemaphoreOp, QueueSubmissionInfo, QueueSystemDependencyConfig, QueueSystemInitialState, RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker, TimelineSemaphoreOp
+        BarrierProducerOutConfig, BinarySemaphoreOp, QueueSubmissionInfo,
+        QueueSystemDependencyConfig, QueueSystemInitialState, RenderSystemInitialState,
+        RenderSystemsBinarySemaphoreTracker,
     },
     queue::{QueueRef, QueuesRouter},
-    semaphore::TimelineSemaphore,
     Device, QueueType,
 };
 
@@ -70,7 +74,7 @@ struct QueueGraphNodeMeta {
     nodes: Vec<usize>,
     selected_queue: QueueRef,
     queue_type: QueueType,
-    submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>
+    submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
 }
 
 impl ScheduleBuildPass for RenderSystemPass {
@@ -426,7 +430,6 @@ impl ScheduleBuildPass for RenderSystemPass {
                 _ => unimplemented!(),
             };
 
-            
             let mut config = RenderSystemInitialState {
                 queue: queue_node.selected_queue,
                 queue_submission_info: Some(queue_submission_info.clone()),
@@ -570,8 +573,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                             access: edge.config.signal.clone(),
                         })
                     }
-                    QueueGraphEdgeSemaphoreType::Timeline(u32) => {
-                    }
+                    QueueGraphEdgeSemaphoreType::Timeline(u32) => {}
                 });
             let mut binary_waits: Vec<BinarySemaphoreOp> = Vec::new();
             self.queue_graph
@@ -583,8 +585,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                             access: edge.config.wait.clone(),
                         })
                     }
-                    QueueGraphEdgeSemaphoreType::Timeline(u32) => {
-                    }
+                    QueueGraphEdgeSemaphoreType::Timeline(u32) => {}
                 });
             for i in queue_node.nodes.iter() {
                 if *i == queue_node.queue_node_index {

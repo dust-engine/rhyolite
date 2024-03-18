@@ -1,10 +1,13 @@
-use std::{borrow::Cow, ops::Deref, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 
 use ash::vk;
 use bevy::utils::smallvec::SmallVec;
 
 use crate::{
-    buffer::BufferLike, ecs::{RenderImage, RenderRes}, semaphore::TimelineSemaphore, Access, Device, HasDevice, ImageLike, QueueType
+    buffer::BufferLike,
+    ecs::{RenderImage, RenderRes},
+    semaphore::TimelineSemaphore,
+    Access, Device, HasDevice, ImageLike, QueueType,
 };
 
 mod render;
@@ -119,9 +122,15 @@ pub trait ResourceTransitionCommands {
     fn current_queue_family(&self) -> (QueueType, u32);
 
     /// Specify that the current submission must wait on a semaphore before executing.
-    fn wait_semaphore(&mut self, semaphore: Cow<Arc<TimelineSemaphore>>, value: u64, stage: vk::PipelineStageFlags2);
+    fn wait_semaphore(
+        &mut self,
+        semaphore: Cow<Arc<TimelineSemaphore>>,
+        value: u64,
+        stage: vk::PipelineStageFlags2,
+    );
     /// Ask the current submission to signal a semaphore after executing.
-    fn signal_semaphore(&mut self, stage: vk::PipelineStageFlags2) -> (Arc<TimelineSemaphore>, u64);
+    fn signal_semaphore(&mut self, stage: vk::PipelineStageFlags2)
+        -> (Arc<TimelineSemaphore>, u64);
 
     fn transition<T>(&mut self, res: &mut RenderRes<T>, access: Access) -> &mut Self {
         let barrier = res.state.transition(access, false);
@@ -140,7 +149,11 @@ pub trait ResourceTransitionCommands {
                 self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
-            if let Some((sem, val)) = res.state.write_semaphore.replace((semaphore.clone(), value)) {
+            if let Some((sem, val)) = res
+                .state
+                .write_semaphore
+                .replace((semaphore.clone(), value))
+            {
                 self.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
             for (sem, val) in res.state.read_semaphores.drain(..) {
@@ -220,7 +233,6 @@ pub trait ResourceTransitionCommands {
         }
         image.res.state.queue_family = Some(self.current_queue_family());
 
-        
         let (semaphore, value) = self.signal_semaphore(access.stage);
         if access.is_readonly() {
             image.res.state.add_read_semaphore(semaphore, value);
@@ -228,7 +240,12 @@ pub trait ResourceTransitionCommands {
                 self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
-            if let Some((sem, val)) = image.res.state.write_semaphore.replace((semaphore.clone(), value)) {
+            if let Some((sem, val)) = image
+                .res
+                .state
+                .write_semaphore
+                .replace((semaphore.clone(), value))
+            {
                 self.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
             for (sem, val) in image.res.state.read_semaphores.drain(..) {
@@ -285,7 +302,6 @@ pub trait ResourceTransitionCommands {
         }
         buffer.state.queue_family = Some(self.current_queue_family());
 
-        
         let (semaphore, value) = self.signal_semaphore(access.stage);
         if access.is_readonly() {
             buffer.state.add_read_semaphore(semaphore, value);
@@ -293,7 +309,11 @@ pub trait ResourceTransitionCommands {
                 self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
-            if let Some((sem, val)) = buffer.state.write_semaphore.replace((semaphore.clone(), value)) {
+            if let Some((sem, val)) = buffer
+                .state
+                .write_semaphore
+                .replace((semaphore.clone(), value))
+            {
                 self.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
             for (sem, val) in buffer.state.read_semaphores.drain(..) {
@@ -340,12 +360,20 @@ impl ResourceTransitionCommands for ImmediateTransitions<'_> {
         self.dependency_flags = flags;
         self
     }
-    
-    fn wait_semaphore(&mut self, semaphore: Cow<Arc<TimelineSemaphore>>, value: u64, stage: vk::PipelineStageFlags2) {
+
+    fn wait_semaphore(
+        &mut self,
+        semaphore: Cow<Arc<TimelineSemaphore>>,
+        value: u64,
+        stage: vk::PipelineStageFlags2,
+    ) {
         todo!()
     }
-    
-    fn signal_semaphore(&mut self, stage: vk::PipelineStageFlags2) -> (Arc<TimelineSemaphore>, u64) {
+
+    fn signal_semaphore(
+        &mut self,
+        stage: vk::PipelineStageFlags2,
+    ) -> (Arc<TimelineSemaphore>, u64) {
         todo!()
     }
 }

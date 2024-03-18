@@ -1,7 +1,9 @@
 pub mod staging;
 
 use std::{
-    alloc::Layout, mem::MaybeUninit, ops::{Deref, DerefMut, Index, IndexMut, Range, RangeBounds}
+    alloc::Layout,
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut, Index, IndexMut, RangeBounds},
 };
 
 use ash::{prelude::VkResult, vk};
@@ -69,7 +71,12 @@ impl<T> BufferArray<T> {
             }
             let (buffer, allocation) = self.allocator.create_buffer(
                 &vk::BufferCreateInfo {
-                    size: Layout::new::<T>().repeat(new_capacity).unwrap().0.pad_to_align().size() as vk::DeviceSize,
+                    size: Layout::new::<T>()
+                        .repeat(new_capacity)
+                        .unwrap()
+                        .0
+                        .pad_to_align()
+                        .size() as vk::DeviceSize,
                     usage: self.usage,
                     sharing_mode: self.sharing_mode.as_raw(),
                     queue_family_index_count: self.sharing_mode.queue_family_indices().len() as u32,
@@ -158,7 +165,7 @@ impl<T> BufferArray<T> {
             };
             return self.allocator.flush_allocation(allocation, start, len);
         } else {
-            return Ok(())
+            return Ok(());
         }
     }
 }

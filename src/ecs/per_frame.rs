@@ -1,16 +1,11 @@
-use std::{
-    ops::{Deref, DerefMut},
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
-use bevy::{ecs::{
-    component::ComponentId, schedule::IntoSystemSet, system::{ResMut, Resource, System, SystemParam, SystemParamItem}
-}, utils::smallvec::SmallVec};
+use bevy::{ecs::system::Resource, utils::smallvec::SmallVec};
 
-use crate::{semaphore::{self, TimelineSemaphore}, Device, HasDevice};
+use crate::{semaphore::TimelineSemaphore, Device, HasDevice};
 
-use super::{queue_cap::IsQueueCap, QueueSubmissionInfo, RenderCommands, RenderRes, RenderSystemInitialState};
+use super::{queue_cap::IsQueueCap, QueueSubmissionInfo, RenderCommands};
 
 pub trait PerFrameResource: Send + Sync + 'static {
     type Param<'a>;
@@ -32,34 +27,58 @@ impl<T: PerFrameResource> Default for PerFrame<T> {
 
 enum PerFrameResourceFrame<T> {
     Empty,
-    Some { frame: T, semaphores: SmallVec<[(Arc<TimelineSemaphore>, u64); 4]> },
+    Some {
+        frame: T,
+        semaphores: SmallVec<[(Arc<TimelineSemaphore>, u64); 4]>,
+    },
 }
 
 impl<T: PerFrameResource> PerFrame<T> {
     pub fn new() -> Self {
         Self {
             frame_index: u64::MAX,
-            items: SmallVec::from_buf([PerFrameResourceFrame::Empty, PerFrameResourceFrame::Empty, PerFrameResourceFrame::Empty])
+            items: SmallVec::from_buf([
+                PerFrameResourceFrame::Empty,
+                PerFrameResourceFrame::Empty,
+                PerFrameResourceFrame::Empty,
+            ]),
         }
     }
-    pub(crate) fn on_frame_index<const Q: char>(&mut self, frame_index: u64, submission_info: &Mutex<QueueSubmissionInfo>, device: &Device, param: T::Param<'_>) -> &mut T where (): IsQueueCap<Q> {
+    pub(crate) fn on_frame_index<const Q: char>(
+        &mut self,
+        frame_index: u64,
+        submission_info: &Mutex<QueueSubmissionInfo>,
+        device: &Device,
+        param: T::Param<'_>,
+    ) -> &mut T
+    where
+        (): IsQueueCap<Q>,
+    {
         let i = (frame_index % self.items.len() as u64) as usize;
         if frame_index != self.frame_index {
             match &mut self.items[i] {
                 PerFrameResourceFrame::Empty => {
-                    self.items[i] = PerFrameResourceFrame::Some { frame: T::create(param), semaphores: SmallVec::new() };
-                },
+                    self.items[i] = PerFrameResourceFrame::Some {
+                        frame: T::create(param),
+                        semaphores: SmallVec::new(),
+                    };
+                }
                 PerFrameResourceFrame::Some { frame, semaphores } => {
-                    TimelineSemaphore::wait_all_blocked(semaphores.iter().map(|(s, v)| (s.as_ref(), *v)), !0).unwrap();
+                    TimelineSemaphore::wait_all_blocked(
+                        semaphores.iter().map(|(s, v)| (s.as_ref(), *v)),
+                        !0,
+                    )
+                    .unwrap();
                     frame.reset(param);
                     semaphores.clear();
-                },
+                }
             }
             self.frame_index = frame_index;
         }
         if let PerFrameResourceFrame::Some { frame, semaphores } = &mut self.items[i as usize] {
             let mut submission_info = submission_info.lock().unwrap();
-            let (semaphore, value) = submission_info.signal_semaphore(vk::PipelineStageFlags2::ALL_COMMANDS, device);
+            let (semaphore, value) =
+                submission_info.signal_semaphore(vk::PipelineStageFlags2::ALL_COMMANDS, device);
             for (current_semaphore, current_value) in semaphores.iter_mut() {
                 if Arc::ptr_eq(current_semaphore, &semaphore) {
                     *current_value = value;
@@ -72,7 +91,19 @@ impl<T: PerFrameResource> PerFrame<T> {
             panic!()
         }
     }
-    pub fn on_frame<const Q: char>(&mut self, commands: &RenderCommands<Q>, param: T::Param<'_>) -> &mut T where (): IsQueueCap<Q> {
-        self.on_frame_index(commands.frame_index, &commands.submission_info, &commands.device(), param)
+    pub fn on_frame<const Q: char>(
+        &mut self,
+        commands: &RenderCommands<Q>,
+        param: T::Param<'_>,
+    ) -> &mut T
+    where
+        (): IsQueueCap<Q>,
+    {
+        self.on_frame_index(
+            commands.frame_index,
+            &commands.submission_info,
+            &commands.device(),
+            param,
+        )
     }
 }
