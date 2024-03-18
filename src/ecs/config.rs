@@ -1,6 +1,7 @@
+use std::borrow::Cow;
 use std::cell::UnsafeCell;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
@@ -9,11 +10,14 @@ use bevy::ecs::{
     schedule::{IntoSystemConfigs, SystemConfigs},
     system::BoxedSystem,
 };
+use bevy::utils::smallvec::SmallVec;
 
 use crate::commands::ResourceTransitionCommands;
+use crate::semaphore::TimelineSemaphore;
+use crate::Device;
 use crate::{queue::QueueType, Access};
 
-use super::RenderSystemPass;
+use super::{QueueSubmissionInfo, RenderSystemPass};
 
 pub struct RenderSystemConfig {
     /// The render system must be assigned onto a queue supporting these feature flags.
@@ -85,16 +89,18 @@ impl BarriersPrevStage {
 }
 /// GAT limitation. All references contained herein are valid for the duration of the system call.
 pub struct Barriers {
+    pub(crate) device: *const Device,
     pub(crate) dependency_flags: *mut vk::DependencyFlags,
-    pub(crate) image_barriers: *mut Vec<vk::ImageMemoryBarrier2>,
-    pub(crate) buffer_barriers: *mut Vec<vk::BufferMemoryBarrier2>,
+    pub(crate) image_barriers: *mut SmallVec<[vk::ImageMemoryBarrier2; 4]>,
+    pub(crate) buffer_barriers: *mut SmallVec<[vk::BufferMemoryBarrier2; 4]>,
     pub(crate) global_barriers: *mut vk::MemoryBarrier2,
     pub(crate) dropped: *mut bool,
 
     /// Barriers to be added to the end of the previous stage.
-    pub(crate) prev_barriers: *mut Vec<BarriersPrevStage>,
+    pub(crate) prev_barriers: *mut SmallVec<[BarriersPrevStage; 4]>,
 
     pub(crate) queue_family: (QueueType, u32),
+    pub(crate) submission_info: *const Mutex<QueueSubmissionInfo>
 }
 impl Drop for Barriers {
     fn drop(&mut self) {
@@ -159,6 +165,17 @@ impl ResourceTransitionCommands for Barriers {
             *self.dependency_flags |= flags;
         }
         self
+    }
+    
+    fn wait_semaphore(&mut self, semaphore: Cow<Arc<TimelineSemaphore>>, value: u64, stage: vk::PipelineStageFlags2) {
+        let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
+        submission_info.wait_semaphore(semaphore, value, stage);
+    }
+    
+    fn signal_semaphore(&mut self, stage: vk::PipelineStageFlags2) -> (Arc<TimelineSemaphore>, u64) {
+        let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
+        let device = unsafe { &*self.device };
+        submission_info.signal_semaphore(stage, device)
     }
 }
 

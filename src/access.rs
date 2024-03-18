@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use ash::vk;
+use bevy::utils::smallvec::SmallVec;
 
-use crate::{access::utils::compare_pipeline_stages, QueueType};
+use crate::{access::utils::compare_pipeline_stages, semaphore::TimelineSemaphore, QueueType};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Copy)]
 pub struct Access {
     pub stage: vk::PipelineStageFlags2,
     pub access: vk::AccessFlags2,
@@ -39,8 +42,20 @@ pub struct ResourceState {
     pub(crate) read: Access,
     pub(crate) write: Access,
     pub(crate) queue_family: Option<(QueueType, u32)>,
+
+    pub(crate) write_semaphore: Option<(Arc<TimelineSemaphore>, u64)>,
+    pub(crate) read_semaphores: SmallVec<[(Arc<TimelineSemaphore>, u64); 2]>
 }
 impl ResourceState {
+    pub(crate) fn add_read_semaphore(&mut self, semaphore: Arc<TimelineSemaphore>, value: u64) {
+        for (s, i) in self.read_semaphores.iter_mut() {
+            if Arc::ptr_eq(s, &semaphore) {
+                *i = (*i).max(value);
+                return;
+            }
+        }
+        self.read_semaphores.push((semaphore, value));
+    }
     pub fn transition(&mut self, next: Access, with_layout_transition: bool) -> MemoryBarrier {
         let mut barrier = MemoryBarrier {
             src_stage_mask: self.write.stage,

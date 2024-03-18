@@ -1,13 +1,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
-use bevy::utils::petgraph::{
+use bevy::utils::{petgraph::{
     graphmap::DiGraphMap,
     visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
     Direction::{self, Incoming, Outgoing},
-};
+}, smallvec::SmallVec};
 use bevy::{
     ecs::{
         schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
@@ -19,9 +19,7 @@ use bevy::{
 
 use crate::{
     ecs::{
-        BarrierProducerOutConfig, BinarySemaphoreOp, QueueSystemDependencyConfig,
-        QueueSystemInitialState, RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker,
-        TimelineSemaphoreOp,
+        BarrierProducerOutConfig, BinarySemaphoreOp, QueueSubmissionInfo, QueueSystemDependencyConfig, QueueSystemInitialState, RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker, TimelineSemaphoreOp
     },
     queue::{QueueRef, QueuesRouter},
     semaphore::TimelineSemaphore,
@@ -30,7 +28,6 @@ use crate::{
 
 use super::RenderSystemConfig;
 
-#[derive(Debug)]
 pub struct RenderSystemPass {
     edge_graph: BTreeMap<(NodeId, NodeId), QueueSystemDependencyConfig>,
     queue_graph: bevy::utils::petgraph::graphmap::DiGraphMap<u32, QueueGraphEdge>,
@@ -63,7 +60,7 @@ struct QueueGraphEdge {
 
 struct SubmitSystemMarker;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct QueueGraphNodeMeta {
     force_binary_semaphore: bool,
     is_queue_op: bool,
@@ -73,6 +70,7 @@ struct QueueGraphNodeMeta {
     nodes: Vec<usize>,
     selected_queue: QueueRef,
     queue_type: QueueType,
+    submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>
 }
 
 impl ScheduleBuildPass for RenderSystemPass {
@@ -336,6 +334,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                     flush_node_index: 0,
                     selected_queue: meta.selected_queue,
                     queue_type: meta.queue_type,
+                    submission_info: None,
                 });
             }
         }
@@ -374,6 +373,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                         flush_node_index: 0,
                         selected_queue: queue_graph_node_info.queue,
                         queue_type: queue_graph_node_info.queue_type,
+                        submission_info: None,
                     });
                 }
             }
@@ -403,10 +403,12 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         // Step 1.4: Insert queue submission systems
         for (_i, queue_node) in queue_graph_nodes.iter_mut().enumerate() {
+            let queue_submission_info = Arc::new(Mutex::new(QueueSubmissionInfo::default()));
             if queue_node.is_queue_op {
                 assert!(queue_node.nodes.len() == 1);
                 queue_node.queue_node_index = queue_node.nodes[0];
                 queue_node.flush_node_index = queue_node.nodes[0];
+                queue_node.submission_info = Some(queue_submission_info.clone());
                 continue;
             }
             let id_num = graph.systems.len();
@@ -424,7 +426,15 @@ impl ScheduleBuildPass for RenderSystemPass {
                 _ => unimplemented!(),
             };
 
+            
+            let mut config = RenderSystemInitialState {
+                queue: queue_node.selected_queue,
+                queue_submission_info: Some(queue_submission_info.clone()),
+                prev_stage_queue_submission_info: SmallVec::new(),
+            };
             system.initialize(world);
+            system.configurate(&mut config, world);
+
             let config_map = ConfigMap::new();
             graph.systems.push(SystemNode::new(system, config_map));
             graph.system_conditions.push(Vec::new());
@@ -447,7 +457,13 @@ impl ScheduleBuildPass for RenderSystemPass {
                 _ => unimplemented!(),
             };
 
+            let mut config = RenderSystemInitialState {
+                queue: queue_node.selected_queue,
+                queue_submission_info: Some(queue_submission_info.clone()),
+                prev_stage_queue_submission_info: SmallVec::new(),
+            };
             system.initialize(world);
+            system.configurate(&mut config, world);
             let mut config_map = ConfigMap::new();
             config_map.insert::<SubmitSystemMarker>(SubmitSystemMarker);
             graph.systems.push(SystemNode::new(system, config_map));
@@ -455,6 +471,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             graph.ambiguous_with_all.insert(id);
 
             queue_node.queue_node_index = id_num;
+            queue_node.submission_info = Some(queue_submission_info);
         }
         // Connect queue submission systems with parents and children
         for (i, queue_node) in queue_graph_nodes.iter().enumerate() {
@@ -541,14 +558,8 @@ impl ScheduleBuildPass for RenderSystemPass {
         self.queue_graph_nodes = queue_graph_nodes;
         self.num_binary_semaphores = binary_semaphore_id;
         let device = world.resource::<Device>();
-        let timeline_semaphores: Vec<_> = {
-            (0..timeline_semaphore_id)
-                .map(|_| Arc::new(TimelineSemaphore::new(device.clone()).unwrap()))
-                .collect()
-        };
         // distribute timeline semaphores
-        for (i, queue_node) in self.queue_graph_nodes.iter().enumerate() {
-            let mut signals: Vec<TimelineSemaphoreOp> = Vec::new();
+        for (i, queue_node) in self.queue_graph_nodes.iter_mut().enumerate() {
             let mut binary_signals: Vec<BinarySemaphoreOp> = Vec::new();
             self.queue_graph
                 .edges_directed(i as u32, Outgoing)
@@ -560,13 +571,8 @@ impl ScheduleBuildPass for RenderSystemPass {
                         })
                     }
                     QueueGraphEdgeSemaphoreType::Timeline(u32) => {
-                        signals.push(TimelineSemaphoreOp {
-                            semaphore: timeline_semaphores[*u32 as usize].clone(),
-                            access: edge.config.signal.clone(),
-                        })
                     }
                 });
-            let mut waits: Vec<TimelineSemaphoreOp> = Vec::new();
             let mut binary_waits: Vec<BinarySemaphoreOp> = Vec::new();
             self.queue_graph
                 .edges_directed(i as u32, Incoming)
@@ -578,30 +584,19 @@ impl ScheduleBuildPass for RenderSystemPass {
                         })
                     }
                     QueueGraphEdgeSemaphoreType::Timeline(u32) => {
-                        waits.push(TimelineSemaphoreOp {
-                            semaphore: timeline_semaphores[*u32 as usize].clone(),
-                            access: edge.config.wait.clone(),
-                        });
                     }
                 });
             for i in queue_node.nodes.iter() {
                 if *i == queue_node.queue_node_index {
                     continue;
                 }
-                if signals.is_empty() {
-                    // Make sure we signal at least one timeline semaphore.
-                    let device = world.resource::<Device>();
-                    signals.push(TimelineSemaphoreOp {
-                        access: Default::default(),
-                        semaphore: Arc::new(TimelineSemaphore::new(device.clone()).unwrap()),
-                    })
-                }
                 // Set config for all nodes in system
                 let node = &mut graph.systems[*i];
                 node.get_mut().unwrap().configurate(
                     &mut RenderSystemInitialState {
                         queue: queue_node.selected_queue,
-                        timeline_signal: signals[0].semaphore.clone(),
+                        queue_submission_info: queue_node.submission_info.clone(),
+                        prev_stage_queue_submission_info: SmallVec::new(),
                     },
                     world,
                 );
@@ -610,8 +605,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             system.get_mut().unwrap().configurate(
                 &mut QueueSystemInitialState {
                     queue: queue_node.selected_queue,
-                    timeline_signals: signals,
-                    timeline_waits: waits,
                     binary_signals,
                     binary_waits,
                 },
@@ -727,10 +720,17 @@ impl ScheduleBuildPass for RenderSystemPass {
                     producers: barrier_producers,
                     record_to_next: i == 0 && !queue_node.is_queue_op,
                 };
+                // This is fine to be before .initialize, because InsertPipelineBarrierConfig was sent to the system, not the system configs
                 system.configurate(&mut config, world);
                 assert!(config.producers.is_empty());
-
                 system.initialize(world);
+                let mut config = RenderSystemInitialState {
+                    queue: queue_node.selected_queue,
+                    queue_submission_info: queue_node.submission_info.clone(),
+                    prev_stage_queue_submission_info: SmallVec::new(),
+                };
+                system.configurate(&mut config, world);
+
                 graph
                     .systems
                     .push(SystemNode::new(system, Default::default()));

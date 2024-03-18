@@ -50,8 +50,8 @@ impl Plugin for SwapchainPlugin {
                     .with_option::<RenderSystemPass>(|entry| {
                         let item = entry.or_default();
                         item.force_binary_semaphore = true;
-                    })
-                    .with_barriers(present_barriers),
+                    }),
+                    //.with_barriers(present_barriers),
                 acquire_swapchain_image::<With<PrimaryWindow>>
                     .with_option::<RenderSystemPass>(|entry| {
                         let item = entry.or_default();
@@ -657,8 +657,6 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     mut suboptimal_events: EventWriter<SuboptimalEvent>,
 ) {
     assert!(queue_ctx.binary_waits.is_empty());
-    assert!(queue_ctx.timeline_signals.is_empty());
-    assert!(queue_ctx.timeline_waits.is_empty());
     assert!(!queue_ctx.binary_signals.is_empty());
     assert!(queue_ctx.binary_signals.len() == 1, "Due to Vulkan constraints, you may not have more than two tasks dependent on the same swapchain acquire operation simultaneously, but you have {}.", queue_ctx.binary_signals.len());
 
@@ -735,8 +733,6 @@ pub fn present(
     mut query: Query<(&mut Swapchain, &mut SwapchainImage)>,
     binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
 ) {
-    assert!(queue_ctx.timeline_signals.is_empty());
-    assert!(queue_ctx.timeline_waits.is_empty());
     assert!(queue_ctx.binary_signals.is_empty());
 
     // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then

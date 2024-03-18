@@ -1,192 +1,83 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
-use bevy::ecs::{
-    component::ComponentId,
-    system::{ResMut, Resource, System, SystemParam, SystemParamItem},
-};
+use ash::vk;
+use bevy::{ecs::{
+    component::ComponentId, schedule::IntoSystemSet, system::{ResMut, Resource, System, SystemParam, SystemParamItem}
+}, utils::smallvec::SmallVec};
 
-use crate::semaphore::TimelineSemaphore;
+use crate::{semaphore::{self, TimelineSemaphore}, Device, HasDevice};
 
-use super::RenderSystemInitialState;
+use super::{queue_cap::IsQueueCap, QueueSubmissionInfo, RenderCommands, RenderRes, RenderSystemInitialState};
 
 pub trait PerFrameResource: Send + Sync + 'static {
-    type Params: SystemParam;
-    fn reset(&mut self, _params: SystemParamItem<'_, '_, Self::Params>) {}
-    fn create(params: SystemParamItem<'_, '_, Self::Params>) -> Self;
-}
-impl<T: Default + Send + Sync + 'static> PerFrameResource for T {
-    type Params = ();
-
-    fn create(_params: SystemParamItem<'_, '_, Self::Params>) -> Self {
-        Default::default()
-    }
+    type Param<'a>;
+    fn reset(&mut self, _params: Self::Param<'_>) {}
+    fn create(params: Self::Param<'_>) -> Self;
 }
 
 /// Wraps a host-owned resource, allowing the GPU to borrow it.
-pub struct PerFrameMut<'a, T: PerFrameResource> {
-    index: usize,
-    items: ResMut<'a, PerFrameResourceContainer<T>>,
+#[derive(Resource)]
+pub struct PerFrame<T: PerFrameResource> {
+    frame_index: u64,
+    items: SmallVec<[PerFrameResourceFrame<T>; 3]>,
 }
-
-impl<'a, T: PerFrameResource> Deref for PerFrameMut<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        match &self.items.frames[self.index] {
-            PerFrameResourceFrame::Some {
-                frame,
-                last_used: _,
-            } => frame,
-            _ => panic!(),
-        }
-    }
-}
-impl<'a, T: PerFrameResource> DerefMut for PerFrameMut<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match &mut self.items.frames[self.index] {
-            PerFrameResourceFrame::Some {
-                frame,
-                last_used: _,
-            } => frame,
-            _ => panic!(),
+impl<T: PerFrameResource> Default for PerFrame<T> {
+    fn default() -> Self {
+        Self {
+            frame_index: 0,
+            items: SmallVec::from_buf([PerFrameResourceFrame::Empty, PerFrameResourceFrame::Empty, PerFrameResourceFrame::Empty])
         }
     }
 }
 
 enum PerFrameResourceFrame<T> {
     Empty,
-    Some { frame: T, last_used: u64 },
-}
-#[derive(Resource)]
-struct PerFrameResourceContainer<T> {
-    semaphores: Vec<Arc<TimelineSemaphore>>,
-    frames: Vec<PerFrameResourceFrame<T>>,
+    Some { frame: T, semaphores: SmallVec<[(Arc<TimelineSemaphore>, u64); 4]> },
 }
 
-pub struct PerFrameState<T: PerFrameResource> {
-    param_state: <T::Params as SystemParam>::State,
-    pub(crate) frame_index: u64,
-    component_id: ComponentId,
-}
-
-// The problem we face rn is that the same resource may be used by different systems in different
-// submission passes right?
-// So an earlier pass now needs to wait on the later pass. It seems that there's no escape from this.
-// If most resources use the same resource, then why don't we just perform the syncronization once
-// at the beginning of the frame...
-
-// The resource needs to know all the semaphores it needs to wait on.
-
-// Command pools.
-// Intermediate command buffers are stored in command pools. We call this struct "Command Recorder".
-// Applications choose the command recorder they'd like      use.
-// When flushing, all command recorders must be notified to flush.
-
-// Where to record those pipeline barriers.
-// We record them with the default command recorder. We also flush the command recorder.
-// Not using the default command recorder, and you'll have to do these things manually.
-
-unsafe impl<'a, T: PerFrameResource> SystemParam for PerFrameMut<'a, T> {
-    type State = PerFrameState<T>;
-
-    type Item<'world, 'state> = PerFrameMut<'world, T>;
-
-    fn init_state(
-        world: &mut bevy::ecs::world::World,
-        system_meta: &mut bevy::ecs::system::SystemMeta,
-    ) -> Self::State {
-        let component_id = ResMut::<PerFrameResourceContainer<T>>::init_state(world, system_meta);
-        let param_state = T::Params::init_state(world, system_meta);
-        let num_frame_in_flight = 3;
-
-        if world.get_resource_by_id(component_id).is_none() {
-            world.insert_resource(PerFrameResourceContainer::<T> {
-                semaphores: Vec::new(),
-                frames: (0..num_frame_in_flight)
-                    .map(|_| PerFrameResourceFrame::Empty)
-                    .collect(),
-            });
-        }
-        PerFrameState {
+impl<T: PerFrameResource> PerFrame<T> {
+    pub fn new() -> Self {
+        Self {
             frame_index: 0,
-            component_id,
-            param_state,
+            items: SmallVec::new(),
         }
     }
-    fn new_archetype(
-        state: &mut Self::State,
-        archetype: &bevy::ecs::archetype::Archetype,
-        system_meta: &mut bevy::ecs::system::SystemMeta,
-    ) {
-        ResMut::<PerFrameResourceContainer<T>>::new_archetype(
-            &mut state.component_id,
-            archetype,
-            system_meta,
-        );
-        T::Params::new_archetype(&mut state.param_state, archetype, system_meta);
-    }
-
-    fn configurate(
-        state: &mut Self::State,
-        config: &mut dyn std::any::Any,
-        world: &mut bevy::ecs::world::World,
-    ) {
-        if config.is::<RenderSystemInitialState>() {
-            let initial_state: &mut RenderSystemInitialState = config.downcast_mut().unwrap();
-            let res = world.get_resource_mut_by_id(state.component_id).unwrap();
-            let mut res = unsafe { res.with_type::<PerFrameResourceContainer<T>>() };
-            if !res
-                .semaphores
-                .iter()
-                .any(|s| Arc::ptr_eq(s, &initial_state.timeline_signal))
-            {
-                res.semaphores.push(initial_state.timeline_signal.clone());
+    pub(crate) fn on_frame_index<const Q: char>(&mut self, frame_index: u64, submission_info: &Mutex<QueueSubmissionInfo>, device: &Device, param: T::Param<'_>) -> &mut T where (): IsQueueCap<Q> {
+        let i = (frame_index % self.items.len() as u64) as usize;
+        if frame_index != self.frame_index {
+            match &mut self.items[i] {
+                PerFrameResourceFrame::Empty => {
+                    self.items[i] = PerFrameResourceFrame::Some { frame: T::create(param), semaphores: SmallVec::new() };
+                },
+                PerFrameResourceFrame::Some { frame, semaphores } => {
+                    println!("waiting for semaphores: {:?}", semaphores);
+                    TimelineSemaphore::wait_all_blocked(semaphores.iter().map(|(s, v)| (s.as_ref(), *v)), !0).unwrap();
+                    println!("waited");
+                    frame.reset(param);
+                    semaphores.clear();
+                },
             }
+            self.frame_index = frame_index;
         }
-        T::Params::configurate(&mut state.param_state, config, world);
-    }
-
-    unsafe fn get_param<'world, 'state>(
-        state: &'state mut Self::State,
-        system_meta: &bevy::ecs::system::SystemMeta,
-        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        change_tick: bevy::ecs::component::Tick,
-    ) -> Self::Item<'world, 'state> {
-        state.frame_index += 1;
-        let mut res = ResMut::<PerFrameResourceContainer<T>>::get_param(
-            &mut state.component_id,
-            system_meta,
-            world,
-            change_tick,
-        );
-        let num_frame_in_flight = 3;
-        if state.frame_index > num_frame_in_flight {
-            let value = state.frame_index - num_frame_in_flight;
-            let semaphores = res.semaphores.iter().map(|s| (s.as_ref(), value));
-            TimelineSemaphore::wait_all_blocked(semaphores, !0).unwrap();
-        }
-        let index = (state.frame_index % num_frame_in_flight) as usize;
-        let params = T::Params::get_param(&mut state.param_state, system_meta, world, change_tick);
-        match &mut res.frames[index] {
-            PerFrameResourceFrame::Empty => {
-                res.frames[index] = PerFrameResourceFrame::Some {
-                    frame: T::create(params),
-                    last_used: state.frame_index,
-                };
-            }
-            PerFrameResourceFrame::Some { frame, last_used } => {
-                if *last_used < state.frame_index {
-                    frame.reset(params);
-                    *last_used = state.frame_index;
+        if let PerFrameResourceFrame::Some { frame, semaphores } = &mut self.items[i as usize] {
+            let mut submission_info = submission_info.lock().unwrap();
+            let (semaphore, value) = submission_info.signal_semaphore(vk::PipelineStageFlags2::ALL_COMMANDS, device);
+            for (current_semaphore, current_value) in semaphores.iter_mut() {
+                if Arc::ptr_eq(current_semaphore, &semaphore) {
+                    *current_value = value;
+                    return frame;
                 }
             }
+            semaphores.push((semaphore, value));
+            return frame;
+        } else {
+            panic!()
         }
-        PerFrameMut {
-            index: (state.frame_index % num_frame_in_flight) as usize,
-            items: res,
-        }
+    }
+    pub fn on_frame<const Q: char>(&mut self, commands: &RenderCommands<Q>, param: T::Param<'_>) -> &mut T where (): IsQueueCap<Q> {
+        self.on_frame_index(commands.frame_index, &commands.submission_info, &commands.device(), param)
     }
 }

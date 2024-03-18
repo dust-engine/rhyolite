@@ -28,7 +28,7 @@ use rhyolite::{
         TransferCommands,
     },
     ecs::{BarrierProducerOut, Barriers, IntoRenderSystemConfigs},
-    ecs::{PerFrameMut, PerFrameResource, RenderCommands, RenderImage, RenderRes},
+    ecs::{PerFrameResource, RenderCommands, RenderImage, RenderRes, PerFrame},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
         PipelineCache, PipelineLayout,
@@ -74,6 +74,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
                     .before(present),
             ),
         );
+        app.init_resource::<PerFrame<EguiHostBuffer<Filter>>>();
         app.add_systems(Startup, initialize_pipelines);
         app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering)
             .or_enable_in_extension::<vk::PhysicalDeviceDynamicRenderingFeatures>(|x| {
@@ -273,8 +274,8 @@ pub struct EguiHostBuffer<Filter: QueryFilter> {
     marker: std::marker::PhantomData<Filter>,
 }
 impl<Filter: QueryFilter + Send + Sync + 'static> PerFrameResource for EguiHostBuffer<Filter> {
-    type Params = Res<'static, Allocator>;
-    fn create(allocator: Res<Allocator>) -> Self {
+    type Param<'s> = &'s Allocator;
+    fn create(allocator: &Allocator) -> Self {
         Self {
             index_buffer: BufferArray::new_upload(
                 allocator.clone(),
@@ -327,13 +328,17 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer
 /// Collect output from egui and copy it into a host-side buffer
 /// Create textures
 fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
-    mut host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+    mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(Entity, &mut EguiRenderOutput), Filter>,
+    commands: RenderCommands<'g'>,
+    allocator: Res<Allocator>,
 ) {
     let Ok((window, output)) = egui_render_output.get_single_mut() else {
         return;
     };
+
+    let host_buffers = host_buffers.on_frame(&commands, &allocator);
 
     let device_buffers = &mut *device_buffers;
     let mut total_indices_count: usize = 0;
@@ -637,9 +642,10 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
 fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut commands: RenderCommands<'g'>,
-    host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+    mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
+    allocator: Res<Allocator>,
 ) {
-    println!("Copy buffers");
+    let host_buffers = host_buffers.on_frame(&commands, &allocator);
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
     if device_buffers.total_vertices_count > 0 {
         commands.copy_buffer(
@@ -740,7 +746,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
 pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     BarrierProducerOut(should_draw): BarrierProducerOut<bool>,
     mut commands: RenderCommands<'g'>,
-    host_buffers: PerFrameMut<EguiHostBuffer<Filter>>,
+    mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
     device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage, &WindowSize), Filter>,
     mut egui_pipeline: ResMut<EguiPipelines>,
@@ -749,6 +755,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
 
     assets: Res<Assets<ShaderModule>>,
     task_pool: Res<DeferredOperationTaskPool>,
+    allocator: Res<Allocator>
 ) {
     let Some((pipeline, old_pipeline)) =
         pipeline_cache.retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool)
@@ -766,6 +773,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
         Err(QuerySingleError::NoEntities(_)) => return,
         Err(QuerySingleError::MultipleEntities(_)) => panic!(),
     };
+    let host_buffers = host_buffers.on_frame(&commands, &allocator);
     let mut pass = commands.begin_rendering(&vk::RenderingInfo {
         flags: vk::RenderingFlags::empty(),
         render_area: vk::Rect2D {

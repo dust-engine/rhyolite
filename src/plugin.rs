@@ -14,7 +14,7 @@ use std::{
 };
 
 use crate::{
-    ecs::RenderSystemPass,
+    ecs::{DefaultCommandPool, PerFrame, RenderSystemPass},
     extensions::{DeviceExtension, InstanceExtension},
     Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, QueuesRouter, Version,
 };
@@ -259,8 +259,10 @@ impl Plugin for RhyolitePlugin {
             .insert_resource(features)
             .insert_resource(queue_router)
             .init_asset::<crate::shader::ShaderModule>()
-            .init_asset::<crate::shader::loader::SpirvShaderSource>();
-
+            .init_asset::<crate::shader::loader::SpirvShaderSource>()
+            .init_resource::<PerFrame<DefaultCommandPool<'g'>>>()
+            .init_resource::<PerFrame<DefaultCommandPool<'c'>>>()
+            .init_resource::<PerFrame<DefaultCommandPool<'t'>>>();
         // Add build pass
         app.get_schedule_mut(PostUpdate)
             .as_mut()

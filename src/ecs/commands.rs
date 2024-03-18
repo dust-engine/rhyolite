@@ -18,19 +18,16 @@ pub mod queue_cap {
 }
 
 use std::{
-    any::Any,
-    collections::BTreeMap,
-    ffi::CString,
-    sync::{atomic::AtomicU64, Arc},
+    any::Any, borrow::Cow, collections::BTreeMap, ffi::CString, sync::{atomic::AtomicU64, Arc, Mutex}
 };
 
 use ash::vk::{self, Handle};
-use bevy::ecs::{
+use bevy::{ecs::{
     archetype::ArchetypeComponentId,
     component::ComponentId,
-    system::{lifetimeless::SRes, Res, ResMut, Resource, System, SystemMeta, SystemParam},
+    system::{lifetimeless::SRes, Local, Res, ResMut, Resource, System, SystemMeta, SystemParam},
     world::World,
-};
+}, utils::smallvec::SmallVec};
 use itertools::Itertools;
 use queue_cap::*;
 
@@ -46,8 +43,7 @@ use crate::{
 };
 
 use super::{
-    BarrierProducerCell, BarriersPrevStage, BoxedBarrierProducer, PerFrameMut, PerFrameResource,
-    PerFrameState, RenderSystemConfig,
+    BarrierProducerCell, BarriersPrevStage, BoxedBarrierProducer, PerFrame, PerFrameResource, RenderSystemConfig
 };
 use crate::Access;
 
@@ -88,9 +84,9 @@ impl<const Q: char> DefaultCommandPool<Q> {
     }
 }
 impl<const Q: char> PerFrameResource for DefaultCommandPool<Q> {
-    type Params = (SRes<Device>, SRes<QueuesRouter>);
+    type Param<'a> = (&'a Device, &'a QueuesRouter);
 
-    fn create((device, router): bevy::ecs::system::SystemParamItem<'_, '_, Self::Params>) -> Self {
+    fn create((device, router): (&Device, &QueuesRouter)) -> Self {
         let queue_family_index = router.queue_family_of_type(match Q {
             'g' => QueueType::Graphics,
             'c' => QueueType::Compute,
@@ -103,37 +99,75 @@ impl<const Q: char> PerFrameResource for DefaultCommandPool<Q> {
             buffer: vk::CommandBuffer::null(),
         }
     }
-    fn reset(&mut self, _: bevy::ecs::system::SystemParamItem<'_, '_, Self::Params>) {
+    fn reset(&mut self, _: (&Device, &QueuesRouter)) {
         self.pool.reset();
         self.buffer = vk::CommandBuffer::null();
     }
 }
 
-/// Command buffers scheduled for submission in the next call to vkQueueSubmit.
-#[derive(Resource, Default)]
-pub(crate) struct RecordedCommandBuffers<const Q: char> {
-    curr_stage: Vec<vk::CommandBuffer>,
+#[derive(Default)]
+pub struct QueueSubmissionInfo {
+    pub(crate) cmd_bufs: SmallVec<[vk::CommandBuffer; 4]>,
+    pub(crate) last_buf_open: bool,
+    pub(crate) trailing_buffer_barriers: Vec<vk::BufferMemoryBarrier2>,
+    pub(crate) trailing_image_barriers: Vec<vk::ImageMemoryBarrier2>,
 
-    prev_stage: Vec<vk::CommandBuffer>,
-    /// true if the last buffer in `prev_stage` was the default command buffer.
-    /// if this is false, the last command buffer in `prev_stage` was recorded externally, and we don't
-    /// necessarily have ownership. In this case we'd need to allocate a new buffer from the default
-    /// command buffer to record the pipeline transfer barrier.
-    prev_stage_last_buf_open: bool,
-    prev_stage_buffer_barriers: Vec<vk::BufferMemoryBarrier2>,
-    prev_stage_image_barriers: Vec<vk::ImageMemoryBarrier2>,
+    
+    pub(crate) signal_semaphores: SmallVec<[(vk::PipelineStageFlags2, Arc<TimelineSemaphore>, u64); 4]>,
+    pub(crate) wait_semaphores: SmallVec<[(vk::PipelineStageFlags2, Arc<TimelineSemaphore>, u64); 4]>,
+    pub(crate) available_semaphores: Vec<(vk::PipelineStageFlags2, Arc<TimelineSemaphore>, u64)>,
 }
-unsafe impl<const Q: char> Send for RecordedCommandBuffers<Q> {}
-unsafe impl<const Q: char> Sync for RecordedCommandBuffers<Q> {}
+unsafe impl Send for QueueSubmissionInfo {}
+unsafe impl Sync for QueueSubmissionInfo {}
+impl QueueSubmissionInfo {
+    pub fn wait_semaphore(&mut self, semaphore: Cow<Arc<TimelineSemaphore>>, value: u64, stage: vk::PipelineStageFlags2) {
+        for (_, current_semaphore, current_value) in self.signal_semaphores.iter() {
+            if Arc::ptr_eq(current_semaphore, semaphore.as_ref()) {
+                if current_value >= &value {
+                    return;
+                }
+                break;
+            }
+        }
+        for (current_stage, current_semaphore, current_value) in self.wait_semaphores.iter_mut() {
+            if Arc::ptr_eq(current_semaphore, semaphore.as_ref()) {
+                *current_value = (*current_value).max(value);
+                *current_stage |= stage;
+            }
+        }
+        self.wait_semaphores.push((stage, semaphore.into_owned(), value));
+    }
+    
+    pub fn signal_semaphore(&mut self, stage: vk::PipelineStageFlags2, device: &Device) -> (Arc<TimelineSemaphore>, u64) {
+        for (current_stage, current_semaphore, current_value) in self.signal_semaphores.iter_mut() {
+            if *current_stage == stage {
+                return (current_semaphore.clone(), *current_value);
+            }
+        }
+        for (current_stage, current_semaphore, current_value) in self.available_semaphores.iter_mut() {
+            if *current_stage == stage {
+                self.signal_semaphores.push((*current_stage, current_semaphore.clone(), *current_value + 1));
+                *current_value += 1;
+                return (current_semaphore.clone(), *current_value);
+            }
+        }
+        println!("Creating new semaphore");
+        let semaphore = Arc::new(TimelineSemaphore::new(device.clone()).unwrap());
+        self.available_semaphores.push((stage, semaphore.clone(), 1));
+        self.signal_semaphores.push((stage, semaphore.clone(), 1));
+        (semaphore, 1)
+    }
+}
 
 pub struct RenderCommands<'w, 's, const Q: char>
 where
     (): IsQueueCap<Q>,
 {
-    default_cmd_pool: PerFrameMut<'w, DefaultCommandPool<Q>>,
-    recorded_command_buffers: ResMut<'w, RecordedCommandBuffers<Q>>,
+    default_cmd_pool: &'w mut DefaultCommandPool<Q>,
     retained_objects: &'s mut BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
-    frame_index: u64,
+    pub(crate) frame_index: u64,
+    pub(crate) submission_info: &'s Mutex<QueueSubmissionInfo>,
+    prev_stage_submission_info: &'s [Arc<Mutex<QueueSubmissionInfo>>]
 }
 
 impl<'w, 's, const Q: char> RenderCommands<'w, 's, Q>
@@ -148,11 +182,11 @@ where
     }
     pub fn add_external_command_buffer(&mut self, command_buffer: vk::CommandBuffer) {
         let current = self.default_cmd_pool.take_current_buffer();
+        let mut submission_info = self.submission_info.lock().unwrap();
         if current != vk::CommandBuffer::null() {
-            self.recorded_command_buffers.curr_stage.push(current);
+            submission_info.cmd_bufs.push(current);
         }
-        self.recorded_command_buffers
-            .curr_stage
+        submission_info.cmd_bufs
             .push(command_buffer);
     }
 }
@@ -186,9 +220,13 @@ where
 }
 
 pub struct RenderCommandState<const Q: char> {
-    default_cmd_pool_state: PerFrameState<DefaultCommandPool<Q>>,
-    recorded_cmd_buf_state: ComponentId,
+    device: Device,
+    default_cmd_pool_state: ComponentId,
+    queues_router_state: ComponentId,
     retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
+    submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
+    prev_stage_submission_info: SmallVec<[Arc<Mutex<QueueSubmissionInfo>>; 4]>,
+    frame_index: u64,
 }
 
 unsafe impl<'w, 's, const Q: char> SystemParam for RenderCommands<'w, 's, Q>
@@ -204,14 +242,17 @@ where
         system_meta: &mut bevy::ecs::system::SystemMeta,
     ) -> Self::State {
         let default_cmd_pool_state =
-            PerFrameMut::<DefaultCommandPool<Q>>::init_state(world, system_meta);
-        let recorded_cmd_buf_state =
-            ResMut::<RecordedCommandBuffers<Q>>::init_state(world, system_meta);
-        world.get_resource_or_insert_with::<RecordedCommandBuffers<Q>>(Default::default);
+            ResMut::<PerFrame::<DefaultCommandPool<Q>>>::init_state(world, system_meta);
+            let queues_router_state =
+                Res::<QueuesRouter>::init_state(world, system_meta);
         RenderCommandState {
+            device: world.resource::<Device>().clone(),
             default_cmd_pool_state,
-            recorded_cmd_buf_state,
+            queues_router_state,
             retained_objects: BTreeMap::new(),
+            submission_info: None,
+            prev_stage_submission_info: SmallVec::new(),
+            frame_index: 0,
         }
     }
     fn default_configs(config: &mut bevy::utils::ConfigMap) {
@@ -225,7 +266,11 @@ where
         config.queue = flags;
     }
     fn configurate(state: &mut Self::State, config: &mut dyn Any, world: &mut World) {
-        PerFrameMut::configurate(&mut state.default_cmd_pool_state, config, world)
+        if let Some(a) = config.downcast_mut::<RenderSystemInitialState>() {
+            state.submission_info = a.queue_submission_info.clone();
+            state.prev_stage_submission_info = a.prev_stage_queue_submission_info.clone();
+            return;
+        }
     }
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
@@ -233,30 +278,29 @@ where
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
-        let default_cmd_pool = PerFrameMut::<DefaultCommandPool<Q>>::get_param(
+        state.frame_index += 1;
+        let default_cmd_pool: ResMut<'world, _> = ResMut::<PerFrame<DefaultCommandPool<Q>>>::get_param(
             &mut state.default_cmd_pool_state,
             system_meta,
             world,
             change_tick,
         );
+        let queues_router = Res::<QueuesRouter>::get_param(&mut state.queues_router_state, system_meta, world, change_tick);
+        let default_cmd_pool: &'world mut _ = default_cmd_pool.into_inner();
+        let default_cmd_pool = default_cmd_pool.on_frame_index(state.frame_index, state.submission_info.as_ref().unwrap(), &state.device, (&state.device, &queues_router));
         let num_frame_in_flight: u32 = 3;
-        if state.default_cmd_pool_state.frame_index > num_frame_in_flight as u64 {
+        if state.frame_index > num_frame_in_flight as u64 {
             state
                 .retained_objects
-                .remove(&(state.default_cmd_pool_state.frame_index - num_frame_in_flight as u64));
+                .remove(&(state.frame_index - num_frame_in_flight as u64));
         }
-        let recorded_command_buffers = ResMut::<RecordedCommandBuffers<Q>>::get_param(
-            &mut state.recorded_cmd_buf_state,
-            system_meta,
-            world,
-            change_tick,
-        );
 
         let mut this = RenderCommands {
-            frame_index: state.default_cmd_pool_state.frame_index,
+            frame_index: state.frame_index,
             default_cmd_pool,
             retained_objects: &mut state.retained_objects,
-            recorded_command_buffers,
+            submission_info: state.submission_info.as_ref().unwrap(),
+            prev_stage_submission_info: &state.prev_stage_submission_info,
         };
         #[cfg(debug_assertions)]
         {
@@ -277,6 +321,37 @@ where
     }
 }
 
+pub struct SubmissionInfo<'s>(&'s Mutex<QueueSubmissionInfo>);
+
+unsafe impl<'s> SystemParam for SubmissionInfo<'s>
+{
+    type State = Option<Arc<Mutex<QueueSubmissionInfo>>>;
+
+    type Item<'world, 'state> = SubmissionInfo<'state>;
+
+    fn init_state(
+        world: &mut World,
+        system_meta: &mut bevy::ecs::system::SystemMeta,
+    ) -> Self::State {
+        None
+    }
+    fn configurate(state: &mut Self::State, config: &mut dyn Any, world: &mut World) {
+        if let Some(a) = config.downcast_mut::<RenderSystemInitialState>() {
+            *state = a.queue_submission_info.clone();
+            return;
+        }
+    }
+    unsafe fn get_param<'world, 'state>(
+        state: &'state mut Self::State,
+        system_meta: &bevy::ecs::system::SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        change_tick: bevy::ecs::component::Tick,
+    ) -> Self::Item<'world, 'state> {
+        SubmissionInfo(state.as_ref().unwrap())
+    }
+}
+
+
 #[derive(Debug)]
 pub struct BinarySemaphoreOp {
     pub index: u32,
@@ -294,8 +369,6 @@ pub struct QueueSystemState {
     pub frame_index: u64,
     pub binary_signals: Vec<BinarySemaphoreOp>,
     pub binary_waits: Vec<BinarySemaphoreOp>,
-    pub timeline_signals: Vec<TimelineSemaphoreOp>,
-    pub timeline_waits: Vec<TimelineSemaphoreOp>,
     device: Device,
 
     /// Map from frame index to retained objects
@@ -306,12 +379,6 @@ impl Drop for QueueSystemState {
     fn drop(&mut self) {
         // On destuction, wait for everything to finish execution.
         unsafe {
-            if !self.timeline_signals.is_empty() {
-                self.timeline_signals[0]
-                    .semaphore
-                    .wait_blocked(self.frame_index, !0)
-                    .unwrap();
-            }
             if !self.fence_to_wait.is_empty() {
                 let fence_to_wait: Vec<vk::Fence> = self.fence_to_wait.values().cloned().collect();
                 self.device
@@ -328,15 +395,14 @@ impl Drop for QueueSystemState {
 
 pub struct QueueSystemInitialState {
     pub queue: QueueRef,
-    pub timeline_signals: Vec<TimelineSemaphoreOp>,
-    pub timeline_waits: Vec<TimelineSemaphoreOp>,
     pub binary_signals: Vec<BinarySemaphoreOp>,
     pub binary_waits: Vec<BinarySemaphoreOp>,
 }
 
 pub struct RenderSystemInitialState {
     pub queue: QueueRef,
-    pub timeline_signal: Arc<TimelineSemaphore>,
+    pub queue_submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
+    pub prev_stage_queue_submission_info: SmallVec<[Arc<Mutex<QueueSubmissionInfo>>; 4]>
 }
 
 pub struct QueueContext<'state, const Q: char>
@@ -348,8 +414,6 @@ where
     pub frame_index: u64,
     pub binary_signals: &'state [BinarySemaphoreOp],
     pub binary_waits: &'state [BinarySemaphoreOp],
-    pub timeline_signals: &'state [TimelineSemaphoreOp],
-    pub timeline_waits: &'state [TimelineSemaphoreOp],
     pub(crate) retained_objects: &'state mut Vec<Box<dyn Send + Sync>>,
     fences: &'state mut BTreeMap<u64, vk::Fence>,
 }
@@ -413,8 +477,6 @@ where
             queue: QueueRef::default(),
             binary_signals: Vec::new(),
             binary_waits: Vec::new(),
-            timeline_signals: Vec::new(),
-            timeline_waits: Vec::new(),
             frame_index: 0,
             retained_objects: BTreeMap::new(),
             fence_to_wait: BTreeMap::new(),
@@ -436,8 +498,6 @@ where
         if config.is::<QueueSystemInitialState>() {
             let initial_state: &mut QueueSystemInitialState = config.downcast_mut().unwrap();
             state.queue = initial_state.queue;
-            state.timeline_signals = std::mem::take(&mut initial_state.timeline_signals);
-            state.timeline_waits = std::mem::take(&mut initial_state.timeline_waits);
             state.binary_signals = std::mem::take(&mut initial_state.binary_signals);
             state.binary_waits = std::mem::take(&mut initial_state.binary_waits);
             return;
@@ -456,11 +516,6 @@ where
 
         if state.frame_index > num_frame_in_flight {
             let wait_value = state.frame_index - num_frame_in_flight;
-            if !state.timeline_signals.is_empty() {
-                let signaled_semaphore = &state.timeline_signals[0].semaphore;
-                // Just waiting on one of those timeline semaphore should be fine, right?
-                signaled_semaphore.wait_blocked(wait_value, !0).unwrap();
-            }
             if let Some(&fence) = state.fence_to_wait.get(&wait_value) {
                 unsafe {
                     state.device.wait_for_fences(&[fence], true, !0).unwrap();
@@ -481,8 +536,6 @@ where
             frame_index: state.frame_index,
             binary_signals: &state.binary_signals,
             binary_waits: &state.binary_waits,
-            timeline_signals: &state.timeline_signals,
-            timeline_waits: &state.timeline_waits,
             retained_objects,
             fences: &mut state.fence_to_wait,
         }
@@ -490,56 +543,59 @@ where
 }
 
 pub(crate) fn flush_system_graph<const Q: char>(
-    mut default_cmd_pool: PerFrameMut<DefaultCommandPool<Q>>,
-    mut recorded_command_buffers: ResMut<RecordedCommandBuffers<Q>>,
+    mut default_cmd_pool: ResMut<PerFrame<DefaultCommandPool<Q>>>,
+    mut frame_index: Local<u64>,
+    submission_info: SubmissionInfo,
+    device: Res<Device>,
+    queues_router: Res<QueuesRouter>,
 ) where
     (): IsQueueCap<Q>,
 {
-    let recorded_command_buffers = &mut *recorded_command_buffers;
-    assert!(recorded_command_buffers.prev_stage.is_empty());
-    recorded_command_buffers
-        .prev_stage
-        .extend(recorded_command_buffers.curr_stage.drain(..));
+    *frame_index += 1;
+    let default_cmd_pool = default_cmd_pool.on_frame_index(*frame_index, submission_info.0, &device, (&device, &queues_router));
 
+    let mut submission_info = submission_info.0.lock().unwrap();
     if default_cmd_pool.buffer != vk::CommandBuffer::null() {
-        recorded_command_buffers
-            .prev_stage
+        submission_info
+            .cmd_bufs
             .push(default_cmd_pool.buffer);
-        recorded_command_buffers.prev_stage_last_buf_open = true;
+        submission_info.last_buf_open = true;
         default_cmd_pool.buffer = vk::CommandBuffer::null();
     } else {
-        recorded_command_buffers.prev_stage_last_buf_open = false;
+        submission_info.last_buf_open = false;
     }
+    // TODO: take care of unused remaining timeline semaphores
 }
 // So, what happens if multiple systems get assigned to the same queue?
 // flush_system_graph will only run once for that particular queue.
 // If they were assigned to different queues,
 // flush_system_graph will run multiple times, once for each queue.
 pub(crate) fn submit_system_graph<const Q: char>(
-    mut default_cmd_pool: PerFrameMut<DefaultCommandPool<Q>>,
-    mut recorded_command_buffers: ResMut<RecordedCommandBuffers<Q>>,
+    mut default_cmd_pool: ResMut<PerFrame<DefaultCommandPool<Q>>>,
+    submission_info: SubmissionInfo,
     queue_ctx: QueueContext<Q>,
     binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
     device: Res<Device>,
+    mut frame_index: Local<u64>,
+    queues_router: Res<QueuesRouter>,
 ) where
     (): IsQueueCap<Q>,
 {
-    println!(
-        "Recording prev pipeline barrier: {} {} {}",
-        Q,
-        recorded_command_buffers.prev_stage_buffer_barriers.len(),
-        recorded_command_buffers.prev_stage_image_barriers.len()
-    );
+    *frame_index += 1;
+    let default_cmd_pool = default_cmd_pool.on_frame_index(*frame_index, submission_info.0, &device, (&device, &queues_router));
+
+
+    let mut submission_info = submission_info.0.lock().unwrap();
     // Record the trailing pipeline barrier
-    if !recorded_command_buffers
-        .prev_stage_buffer_barriers
+    if !submission_info
+        .cmd_bufs
         .is_empty()
-        || !recorded_command_buffers
-            .prev_stage_image_barriers
+        || !submission_info
+            .cmd_bufs
             .is_empty()
     {
-        let cmd_buf = if recorded_command_buffers.prev_stage_last_buf_open {
-            recorded_command_buffers.prev_stage.last().unwrap().clone()
+        let cmd_buf = if submission_info.last_buf_open {
+            submission_info.cmd_bufs.last().unwrap().clone()
         } else {
             let buf = default_cmd_pool.pool.allocate();
             unsafe {
@@ -553,13 +609,13 @@ pub(crate) fn submit_system_graph<const Q: char>(
                     )
                     .unwrap();
             }
-            recorded_command_buffers.prev_stage.push(buf);
+            submission_info.cmd_bufs.push(buf);
             buf
         };
         let buffer_barriers =
-            std::mem::take(&mut recorded_command_buffers.prev_stage_buffer_barriers);
+            std::mem::take(&mut submission_info.trailing_buffer_barriers);
         let image_barriers =
-            std::mem::take(&mut recorded_command_buffers.prev_stage_image_barriers);
+            std::mem::take(&mut submission_info.trailing_image_barriers);
         unsafe {
             device.cmd_pipeline_barrier2(
                 cmd_buf,
@@ -574,15 +630,15 @@ pub(crate) fn submit_system_graph<const Q: char>(
             drop((buffer_barriers, image_barriers));
             device.end_command_buffer(cmd_buf).unwrap();
         }
-    } else if recorded_command_buffers.prev_stage_last_buf_open {
-        let buf = recorded_command_buffers.prev_stage.last().unwrap();
+    } else if submission_info.last_buf_open {
+        let buf = submission_info.cmd_bufs.last().unwrap();
         unsafe {
             device.end_command_buffer(*buf).unwrap();
         }
     }
     // Take all the command buffers recorded so far, plus the default one.
-    let command_buffer: Vec<_> = recorded_command_buffers
-        .prev_stage
+    let command_buffer: Vec<_> = submission_info
+        .cmd_bufs
         .iter()
         .cloned()
         .map(|command_buffer| vk::CommandBufferSubmitInfo {
@@ -590,7 +646,7 @@ pub(crate) fn submit_system_graph<const Q: char>(
             ..Default::default()
         })
         .collect();
-    recorded_command_buffers.prev_stage.clear();
+    submission_info.cmd_bufs.clear();
     let semaphore_signals = queue_ctx
         .binary_signals
         .iter()
@@ -601,13 +657,12 @@ pub(crate) fn submit_system_graph<const Q: char>(
             ..Default::default()
         })
         .chain(
-            queue_ctx
-                .timeline_signals
+            submission_info.signal_semaphores
                 .iter()
-                .map(|op| vk::SemaphoreSubmitInfo {
-                    semaphore: op.semaphore.raw(),
-                    value: queue_ctx.frame_index,
-                    stage_mask: op.access.stage,
+                .map(|(stage, semaphore, value)| vk::SemaphoreSubmitInfo {
+                    semaphore: semaphore.raw(),
+                    value: *value,
+                    stage_mask: *stage,
                     ..Default::default()
                 }),
         )
@@ -628,17 +683,21 @@ pub(crate) fn submit_system_graph<const Q: char>(
             Some(info)
         })
         .chain(
-            queue_ctx
-                .timeline_waits
+            submission_info.wait_semaphores
                 .iter()
-                .map(|op| vk::SemaphoreSubmitInfo {
-                    semaphore: op.semaphore.raw(),
-                    value: queue_ctx.frame_index,
-                    stage_mask: op.access.stage,
+                .map(|(stage, semaphore, value)| vk::SemaphoreSubmitInfo {
+                    semaphore: semaphore.raw(),
+                    value: *value,
+                    stage_mask: *stage,
                     ..Default::default()
                 }),
         )
         .collect::<Vec<_>>();
+    
+        println!("QueueSubmit Semaphore signals: {:?}", semaphore_signals);
+        println!("QueueSubmit Semaphore waits: {:?}", semaphore_waits);
+    submission_info.signal_semaphores.clear();
+    submission_info.wait_semaphores.clear();
     unsafe {
         let queue = device.get_raw_queue(queue_ctx.queue);
         device
@@ -666,9 +725,6 @@ pub(crate) struct InsertPipelineBarrier<const Q: char> {
     render_command_state: Option<RenderCommandState<Q>>,
     /// If true, will record to `barrier_buffer` instead of `current_buffer`.
     record_to_next: bool,
-    graphics_recording_commands: ComponentId,
-    compute_recording_commands: ComponentId,
-    transfer_recording_commands: ComponentId,
 }
 impl<const Q: char> InsertPipelineBarrier<Q> {
     pub(crate) fn new() -> Self {
@@ -677,9 +733,6 @@ impl<const Q: char> InsertPipelineBarrier<Q> {
             system_meta: SystemMeta::new::<Self>(),
             render_command_state: None,
             record_to_next: false,
-            graphics_recording_commands: ComponentId::new(0),
-            compute_recording_commands: ComponentId::new(0),
-            transfer_recording_commands: ComponentId::new(0),
         }
     }
 }
@@ -738,26 +791,28 @@ where
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
     ) -> Self::Out {
         let change_tick = world.increment_change_tick();
-        let mut render_commands = RenderCommands::<Q>::get_param(
+        let render_commands = RenderCommands::<Q>::get_param(
             self.render_command_state.as_mut().unwrap(),
             &self.system_meta,
             world,
             change_tick,
         );
 
-        let mut image_barriers = Vec::new();
-        let mut buffer_barriers = Vec::new();
+        let mut image_barriers = SmallVec::new();
+        let mut buffer_barriers = SmallVec::new();
         let mut global_barriers = vk::MemoryBarrier2::default();
         let mut dependency_flags = vk::DependencyFlags::empty();
-        let mut prev_stage_barriers = Vec::new();
+        let mut prev_stage_barriers = SmallVec::new();
         for i in self.barrier_producers.iter_mut() {
             let mut dropped = false;
             let barrier = Barriers {
+                device: render_commands.device(),
                 image_barriers: &mut image_barriers,
                 buffer_barriers: &mut buffer_barriers,
                 global_barriers: &mut global_barriers,
                 dependency_flags: &mut dependency_flags,
                 prev_barriers: &mut prev_stage_barriers,
+                submission_info: render_commands.submission_info,
                 dropped: &mut dropped,
                 queue_family: (
                     match Q {
@@ -801,60 +856,18 @@ where
             drop(barriers);
         }
 
-        for i in prev_stage_barriers.into_iter() {
+/*         for i in prev_stage_barriers.into_iter() {
             let prev_queue_type = i.prev_queue_type();
-            match prev_queue_type {
-                QueueType::Graphics => {
-                    let mut render_commands = ResMut::<RecordedCommandBuffers<'g'>>::get_param(
-                        &mut self.graphics_recording_commands,
-                        &self.system_meta,
-                        world,
-                        change_tick,
-                    );
-                    match i {
-                        BarriersPrevStage::Buffer { barrier, .. } => {
-                            render_commands.prev_stage_buffer_barriers.push(barrier)
-                        }
-                        BarriersPrevStage::Image { barrier, .. } => {
-                            render_commands.prev_stage_image_barriers.push(barrier)
-                        }
-                    }
+            let mut prev_submission_info = render_commands.prev_stage_submission_info[prev_queue_type as usize].lock().unwrap();
+            match i {
+                BarriersPrevStage::Buffer { barrier, .. } => {
+                    prev_submission_info.trailing_buffer_barriers.push(barrier)
                 }
-                QueueType::Compute => {
-                    let mut render_commands = ResMut::<RecordedCommandBuffers<'c'>>::get_param(
-                        &mut self.compute_recording_commands,
-                        &self.system_meta,
-                        world,
-                        change_tick,
-                    );
-                    match i {
-                        BarriersPrevStage::Buffer { barrier, .. } => {
-                            render_commands.prev_stage_buffer_barriers.push(barrier)
-                        }
-                        BarriersPrevStage::Image { barrier, .. } => {
-                            render_commands.prev_stage_image_barriers.push(barrier)
-                        }
-                    }
+                BarriersPrevStage::Image { barrier, .. } => {
+                    prev_submission_info.trailing_image_barriers.push(barrier)
                 }
-                QueueType::Transfer => {
-                    let mut render_commands = ResMut::<RecordedCommandBuffers<'t'>>::get_param(
-                        &mut self.transfer_recording_commands,
-                        &self.system_meta,
-                        world,
-                        change_tick,
-                    );
-                    match i {
-                        BarriersPrevStage::Buffer { barrier, .. } => {
-                            render_commands.prev_stage_buffer_barriers.push(barrier)
-                        }
-                        BarriersPrevStage::Image { barrier, .. } => {
-                            render_commands.prev_stage_image_barriers.push(barrier)
-                        }
-                    }
-                }
-                _ => unimplemented!(),
-            };
-        }
+            }
+        } */
 
         self.system_meta.last_run = change_tick;
     }
@@ -873,38 +886,6 @@ where
             world,
             &mut self.system_meta,
         ));
-
-        self.graphics_recording_commands =
-            world.initialize_resource::<RecordedCommandBuffers<'g'>>();
-        self.compute_recording_commands =
-            world.initialize_resource::<RecordedCommandBuffers<'c'>>();
-        self.transfer_recording_commands =
-            world.initialize_resource::<RecordedCommandBuffers<'t'>>();
-        self.system_meta
-            .component_access_set
-            .add_unfiltered_write(self.graphics_recording_commands);
-        self.system_meta
-            .component_access_set
-            .add_unfiltered_write(self.compute_recording_commands);
-        self.system_meta
-            .component_access_set
-            .add_unfiltered_write(self.transfer_recording_commands);
-
-        self.system_meta.archetype_component_access.add_write(
-            world
-                .get_resource_archetype_component_id(self.graphics_recording_commands)
-                .unwrap(),
-        );
-        self.system_meta.archetype_component_access.add_write(
-            world
-                .get_resource_archetype_component_id(self.graphics_recording_commands)
-                .unwrap(),
-        );
-        self.system_meta.archetype_component_access.add_write(
-            world
-                .get_resource_archetype_component_id(self.graphics_recording_commands)
-                .unwrap(),
-        );
     }
 
     fn update_archetype_component_access(
