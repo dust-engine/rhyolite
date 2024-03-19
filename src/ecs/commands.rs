@@ -51,7 +51,8 @@ use crate::{
 };
 
 use super::{
-    BarrierProducerCell, BoxedBarrierProducer, PerFrame, PerFrameResource, RenderSystemConfig,
+    BarrierProducerCell, BarriersPrevStage, BoxedBarrierProducer, PerFrame, PerFrameResource,
+    RenderSystemConfig,
 };
 use crate::Access;
 
@@ -192,7 +193,7 @@ where
     retained_objects: &'s mut BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     pub(crate) frame_index: u64,
     pub(crate) submission_info: &'s Mutex<QueueSubmissionInfo>,
-    prev_stage_submission_info: &'s [Arc<Mutex<QueueSubmissionInfo>>],
+    prev_stage_submission_info: &'s [Option<Arc<Mutex<QueueSubmissionInfo>>>],
 }
 
 impl<'w, 's, const Q: char> RenderCommands<'w, 's, Q>
@@ -249,7 +250,7 @@ pub struct RenderCommandState<const Q: char> {
     queues_router_state: ComponentId,
     retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
-    prev_stage_submission_info: SmallVec<[Arc<Mutex<QueueSubmissionInfo>>; 4]>,
+    prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
     frame_index_state: ComponentId,
 }
 
@@ -291,7 +292,7 @@ where
     }
     fn configurate(state: &mut Self::State, config: &mut dyn Any, world: &mut World) {
         if let Some(a) = config.downcast_mut::<RenderSystemInitialState>() {
-            state.submission_info = a.queue_submission_info.clone();
+            state.submission_info = Some(a.queue_submission_info.clone());
             state.prev_stage_submission_info = a.prev_stage_queue_submission_info.clone();
             return;
         }
@@ -378,7 +379,7 @@ unsafe impl<'s> SystemParam for SubmissionInfo<'s> {
     }
     fn configurate(state: &mut Self::State, config: &mut dyn Any, world: &mut World) {
         if let Some(a) = config.downcast_mut::<RenderSystemInitialState>() {
-            *state = a.queue_submission_info.clone();
+            *state = Some(a.queue_submission_info.clone());
             return;
         }
     }
@@ -441,8 +442,8 @@ pub struct QueueSystemInitialState {
 
 pub struct RenderSystemInitialState {
     pub queue: QueueRef,
-    pub queue_submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
-    pub prev_stage_queue_submission_info: SmallVec<[Arc<Mutex<QueueSubmissionInfo>>; 4]>,
+    pub queue_submission_info: Arc<Mutex<QueueSubmissionInfo>>,
+    pub prev_stage_queue_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
 }
 
 pub struct QueueContext<'state, const Q: char>
@@ -773,6 +774,7 @@ pub(crate) struct InsertPipelineBarrier<const Q: char> {
     record_to_next: bool,
 
     queue_submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
+    prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
     device: Option<Device>,
     queue_family_index: u32,
 }
@@ -786,6 +788,7 @@ impl<const Q: char> InsertPipelineBarrier<Q> {
             queue_submission_info: None,
             device: None,
             queue_family_index: 0,
+            prev_stage_submission_info: SmallVec::new(),
         }
     }
 }
@@ -913,9 +916,14 @@ where
             drop(barriers);
         }
 
-        /*         for i in prev_stage_barriers.into_iter() {
+        for i in prev_stage_barriers.into_iter() {
             let prev_queue_type = i.prev_queue_type();
-            let mut prev_submission_info = render_commands.prev_stage_submission_info[prev_queue_type as usize].lock().unwrap();
+            let Some(ref mut prev_submission_info) =
+                self.prev_stage_submission_info[prev_queue_type as usize]
+            else {
+                panic!("Queue family ownership transfers not allowed across frames");
+            };
+            let mut prev_submission_info = prev_submission_info.lock().unwrap();
             match i {
                 BarriersPrevStage::Buffer { barrier, .. } => {
                     prev_submission_info.trailing_buffer_barriers.push(barrier)
@@ -924,7 +932,7 @@ where
                     prev_submission_info.trailing_image_barriers.push(barrier)
                 }
             }
-        } */
+        }
 
         self.system_meta.last_run = change_tick;
     }
@@ -1000,7 +1008,8 @@ where
             self.system_meta.archetype_component_access = archetype_component_access;
             self.system_meta.name = self.name();
         } else if let Some(state) = config.downcast_mut::<RenderSystemInitialState>() {
-            self.queue_submission_info = state.queue_submission_info.clone();
+            self.queue_submission_info = Some(state.queue_submission_info.clone());
+            self.prev_stage_submission_info = state.prev_stage_queue_submission_info.clone();
             RenderCommands::<Q>::configurate(
                 self.render_command_state.as_mut().unwrap(),
                 config,

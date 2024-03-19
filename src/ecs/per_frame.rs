@@ -32,6 +32,22 @@ enum PerFrameResourceFrame<T> {
         semaphores: SmallVec<[(Arc<TimelineSemaphore>, u64); 4]>,
     },
 }
+impl<T> Drop for PerFrameResourceFrame<T> {
+    fn drop(&mut self) {
+        match self {
+            PerFrameResourceFrame::Some { semaphores, .. } => {
+                TimelineSemaphore::wait_all_blocked(
+                    semaphores
+                        .iter()
+                        .map(|(semaphore, value)| (semaphore.as_ref(), *value)),
+                    !0,
+                )
+                .unwrap();
+            }
+            _ => (),
+        }
+    }
+}
 
 impl<T: PerFrameResource> PerFrame<T> {
     pub fn new() -> Self {

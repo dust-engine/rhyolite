@@ -74,7 +74,8 @@ struct QueueGraphNodeMeta {
     nodes: Vec<usize>,
     selected_queue: QueueRef,
     queue_type: QueueType,
-    submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
+    submission_info: Arc<Mutex<QueueSubmissionInfo>>,
+    prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
 }
 
 impl ScheduleBuildPass for RenderSystemPass {
@@ -338,7 +339,10 @@ impl ScheduleBuildPass for RenderSystemPass {
                     flush_node_index: 0,
                     selected_queue: meta.selected_queue,
                     queue_type: meta.queue_type,
-                    submission_info: None,
+                    submission_info: Arc::new(Mutex::new(QueueSubmissionInfo::default())),
+                    prev_stage_submission_info: SmallVec::from_iter(
+                        std::iter::repeat(None).take(3),
+                    ),
                 });
             }
         }
@@ -377,7 +381,10 @@ impl ScheduleBuildPass for RenderSystemPass {
                         flush_node_index: 0,
                         selected_queue: queue_graph_node_info.queue,
                         queue_type: queue_graph_node_info.queue_type,
-                        submission_info: None,
+                        submission_info: Arc::new(Mutex::new(QueueSubmissionInfo::default())),
+                        prev_stage_submission_info: SmallVec::from_iter(
+                            std::iter::repeat(None).take(3),
+                        ),
                     });
                 }
             }
@@ -405,14 +412,26 @@ impl ScheduleBuildPass for RenderSystemPass {
                 );
             }
         }
+        // populate prev_stage_submission_info
+        for (from, to, _meta) in queue_graph.all_edges() {
+            let from = &queue_graph_nodes[from as usize];
+            if from.is_queue_op {
+                continue;
+            }
+            let submission_info = from.submission_info.clone();
+            let from_queue_type = from.queue_type;
+
+            let to = &mut queue_graph_nodes[to as usize];
+            assert!(to.prev_stage_submission_info[from_queue_type as usize].is_none());
+            to.prev_stage_submission_info[from_queue_type as usize] = Some(submission_info);
+        }
+
         // Step 1.4: Insert queue submission systems
         for (_i, queue_node) in queue_graph_nodes.iter_mut().enumerate() {
-            let queue_submission_info = Arc::new(Mutex::new(QueueSubmissionInfo::default()));
             if queue_node.is_queue_op {
                 assert!(queue_node.nodes.len() == 1);
                 queue_node.queue_node_index = queue_node.nodes[0];
                 queue_node.flush_node_index = queue_node.nodes[0];
-                queue_node.submission_info = Some(queue_submission_info.clone());
                 continue;
             }
             let id_num = graph.systems.len();
@@ -432,8 +451,8 @@ impl ScheduleBuildPass for RenderSystemPass {
 
             let mut config = RenderSystemInitialState {
                 queue: queue_node.selected_queue,
-                queue_submission_info: Some(queue_submission_info.clone()),
-                prev_stage_queue_submission_info: SmallVec::new(),
+                queue_submission_info: queue_node.submission_info.clone(),
+                prev_stage_queue_submission_info: queue_node.prev_stage_submission_info.clone(),
             };
             system.initialize(world);
             system.configurate(&mut config, world);
@@ -462,8 +481,8 @@ impl ScheduleBuildPass for RenderSystemPass {
 
             let mut config = RenderSystemInitialState {
                 queue: queue_node.selected_queue,
-                queue_submission_info: Some(queue_submission_info.clone()),
-                prev_stage_queue_submission_info: SmallVec::new(),
+                queue_submission_info: queue_node.submission_info.clone(),
+                prev_stage_queue_submission_info: queue_node.prev_stage_submission_info.clone(),
             };
             system.initialize(world);
             system.configurate(&mut config, world);
@@ -474,7 +493,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             graph.ambiguous_with_all.insert(id);
 
             queue_node.queue_node_index = id_num;
-            queue_node.submission_info = Some(queue_submission_info);
         }
         // Connect queue submission systems with parents and children
         for (i, queue_node) in queue_graph_nodes.iter().enumerate() {
@@ -560,9 +578,8 @@ impl ScheduleBuildPass for RenderSystemPass {
         self.queue_graph = queue_graph_reduced;
         self.queue_graph_nodes = queue_graph_nodes;
         self.num_binary_semaphores = binary_semaphore_id;
-        let device = world.resource::<Device>();
         // distribute timeline semaphores
-        for (i, queue_node) in self.queue_graph_nodes.iter_mut().enumerate() {
+        for (i, queue_node) in self.queue_graph_nodes.iter().enumerate() {
             let mut binary_signals: Vec<BinarySemaphoreOp> = Vec::new();
             self.queue_graph
                 .edges_directed(i as u32, Outgoing)
@@ -597,7 +614,9 @@ impl ScheduleBuildPass for RenderSystemPass {
                     &mut RenderSystemInitialState {
                         queue: queue_node.selected_queue,
                         queue_submission_info: queue_node.submission_info.clone(),
-                        prev_stage_queue_submission_info: SmallVec::new(),
+                        prev_stage_queue_submission_info: queue_node
+                            .prev_stage_submission_info
+                            .clone(),
                     },
                     world,
                 );
@@ -728,7 +747,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                 let mut config = RenderSystemInitialState {
                     queue: queue_node.selected_queue,
                     queue_submission_info: queue_node.submission_info.clone(),
-                    prev_stage_queue_submission_info: SmallVec::new(),
+                    prev_stage_queue_submission_info: queue_node.prev_stage_submission_info.clone(),
                 };
                 system.configurate(&mut config, world);
 
