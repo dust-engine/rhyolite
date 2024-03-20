@@ -202,8 +202,6 @@ pub trait ResourceTransitionCommands {
                 barrier.old_layout = image.layout;
             }
             if retain_data && has_queue_family_ownership_transfer {
-                barrier.src_access_mask = vk::AccessFlags2::empty();
-                barrier.src_stage_mask = vk::PipelineStageFlags2::empty();
                 barrier.src_queue_family_index = image.res.state.queue_family.unwrap().1;
                 barrier.dst_queue_family_index = self.current_queue_family().1;
 
@@ -211,14 +209,28 @@ pub trait ResourceTransitionCommands {
                     vk::ImageMemoryBarrier2 {
                         src_stage_mask: barrier.src_stage_mask,
                         src_access_mask: barrier.src_access_mask,
+                        dst_stage_mask: if has_layout_transition {
+                            // If we're transitioning the layout, layout transition needs to block semaphore signal operation.
+                            // This is only applicable to QueueSubmit2. In the case of QueueSubmit1,
+                            // the semaphore signal operation will happen after all other pipeline stages, and we can safely set this to
+                            // BOTTOM_OF_PIPE at all times.
+                            barrier.src_stage_mask
+                        } else {
+                            vk::PipelineStageFlags2::empty()
+                        },
                         src_queue_family_index: image.state.queue_family.unwrap().1,
                         dst_queue_family_index: self.current_queue_family().1,
                         image: image.raw_image(),
                         subresource_range: image.subresource_range(),
+                        new_layout: barrier.new_layout,
+                        old_layout: barrier.old_layout,
                         ..Default::default()
                     },
                     image.state.queue_family.unwrap().0,
                 );
+                barrier.src_access_mask = vk::AccessFlags2::empty();
+                // Block the same stage as the layout transition so that the layout transition happens after the semaphore wait.
+                barrier.src_stage_mask = barrier.dst_stage_mask;
             }
             self.add_image_barrier(barrier);
             image.layout = layout;

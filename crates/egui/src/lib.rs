@@ -331,7 +331,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<(Entity, &mut EguiRenderOutput), Filter>,
-    commands: RenderCommands<'g'>,
+    commands: RenderCommands<'t'>,
     allocator: Res<Allocator>,
 ) {
     let Ok((window, output)) = egui_render_output.get_single_mut() else {
@@ -404,7 +404,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
 }
 
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'g'>,
+    mut commands: RenderCommands<'t'>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     allocator: Res<Allocator>,
@@ -513,11 +513,12 @@ fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             !image_delta.is_whole(),
         );
+        println!("Transition image into TRANFSR_DST_OPTIMAL");
     }
 }
 
 fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'g'>,
+    mut commands: RenderCommands<'t'>,
     device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     mut staging_belt: ResMut<StagingBelt>,
@@ -581,15 +582,15 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &[update_info],
         );
+        println!("Actually transfered image");
     }
     commands.retain(staging_allocator.finish());
-    output.textures_delta.set.clear();
 }
 
 /// Resize the device buffers if necessary. Only runs on Discrete GPUs.
 fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'g'>,
+    mut commands: RenderCommands<'t'>,
     allocator: Res<Allocator>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
@@ -647,7 +648,7 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
 /// Copy data from the host buffers to the device buffers. Only runs on Discrete GPUs.
 fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'g'>,
+    mut commands: RenderCommands<'t'>,
     mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
     allocator: Res<Allocator>,
 ) {
@@ -681,14 +682,38 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
 fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
     mut barriers: In<Barriers>,
     mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage), Filter>,
+    mut egui_render_output: Query<(&mut EguiRenderOutput, &mut SwapchainImage), Filter>,
     egui_pipeline: Res<EguiPipelines>,
 ) -> bool {
-    let (output, mut swapchain_image) = match egui_render_output.get_single_mut() {
+    let (mut output, mut swapchain_image) = match egui_render_output.get_single_mut() {
         Ok(r) => r,
         Err(QuerySingleError::NoEntities(_)) => return false,
         Err(QuerySingleError::MultipleEntities(_)) => panic!(),
     };
+
+    for (texture_id, _) in output
+        .textures_delta
+        .set
+        .iter()
+        .filter(|(_, image_delta)| image_delta.is_whole())
+    {
+        let texture_id = match texture_id {
+            TextureId::Managed(id) => *id,
+            TextureId::User(id) => unimplemented!(),
+        };
+        barriers.transition_image(
+            &mut device_buffer.textures.get_mut(&texture_id).unwrap().0,
+            Access {
+                access: vk::AccessFlags2::SHADER_SAMPLED_READ,
+                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            },
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            true,
+        );
+        println!("Transition image into SHADER_READ_ONLY_OPTIMAL");
+    }
+    
+    output.textures_delta.set.clear();
 
     if output.paint_jobs.is_empty() {
         return false;
@@ -696,26 +721,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
     if !egui_pipeline.pipeline.is_ready() {
         return false;
     }
-    for i in output.paint_jobs.iter() {
-        let mesh = match &i.primitive {
-            egui::epaint::Primitive::Mesh(mesh) => mesh,
-            egui::epaint::Primitive::Callback(_) => panic!(),
-        };
-        let texture_id = match mesh.texture_id {
-            TextureId::Managed(id) => id,
-            TextureId::User(id) => unimplemented!(),
-        };
-        let (texture, _) = device_buffer.textures.get_mut(&texture_id).unwrap();
-        barriers.transition_image(
-            texture,
-            Access {
-                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-                access: vk::AccessFlags2::SHADER_READ,
-            },
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            true,
-        );
-    }
+
     barriers.transition_image(
         &mut *swapchain_image,
         Access {
@@ -774,7 +780,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     if !should_draw {
         return;
     }
-    let (output, mut swapchain_image, window_size) = match egui_render_output.get_single_mut() {
+    let (output, swapchain_image, window_size) = match egui_render_output.get_single_mut() {
         Ok(r) => r,
         Err(QuerySingleError::NoEntities(_)) => return,
         Err(QuerySingleError::MultipleEntities(_)) => panic!(),

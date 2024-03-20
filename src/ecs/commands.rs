@@ -148,6 +148,7 @@ impl QueueSubmissionInfo {
             if Arc::ptr_eq(current_semaphore, semaphore.as_ref()) {
                 *current_value = (*current_value).max(value);
                 *current_stage |= stage;
+                return;
             }
         }
         self.wait_semaphores
