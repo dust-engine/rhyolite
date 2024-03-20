@@ -64,7 +64,6 @@ impl<T: PerFrameResource> PerFrame<T> {
         &mut self,
         frame_index: u64,
         submission_info: &Mutex<QueueSubmissionInfo>,
-        device: &Device,
         param: T::Param<'_>,
     ) -> &mut T
     where
@@ -94,7 +93,7 @@ impl<T: PerFrameResource> PerFrame<T> {
         if let PerFrameResourceFrame::Some { frame, semaphores } = &mut self.items[i as usize] {
             let mut submission_info = submission_info.lock().unwrap();
             let (semaphore, value) =
-                submission_info.signal_semaphore(vk::PipelineStageFlags2::ALL_COMMANDS, device);
+                submission_info.signal_semaphore(vk::PipelineStageFlags2::ALL_COMMANDS);
             for (current_semaphore, current_value) in semaphores.iter_mut() {
                 if Arc::ptr_eq(current_semaphore, &semaphore) {
                     *current_value = value;
@@ -118,7 +117,6 @@ impl<T: PerFrameResource> PerFrame<T> {
         self.on_frame_index(
             commands.frame_index,
             &commands.submission_info,
-            &commands.device(),
             param,
         )
     }

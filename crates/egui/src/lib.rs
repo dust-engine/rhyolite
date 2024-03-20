@@ -17,6 +17,7 @@ use bevy::{
     ecs::{query::QueryFilter, schedule::IntoSystemConfigs},
     window::PrimaryWindow,
 };
+use bevy_egui::egui::epaint::ImageDelta;
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::{
@@ -333,10 +334,16 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     mut egui_render_output: Query<(Entity, &mut EguiRenderOutput), Filter>,
     commands: RenderCommands<'t'>,
     allocator: Res<Allocator>,
+    mut test: Local<Vec<(TextureId, ImageDelta)>>
 ) {
-    let Ok((window, output)) = egui_render_output.get_single_mut() else {
+    let Ok((window, mut output)) = egui_render_output.get_single_mut() else {
         return;
     };
+    if output.textures_delta.set.is_empty() {
+        output.textures_delta.set = std::mem::take(&mut test);
+    } else {
+        *test = std::mem::take(&mut output.textures_delta.set);
+    }
 
     let host_buffers = host_buffers.on_frame(&commands, &allocator);
 
@@ -513,7 +520,6 @@ fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             !image_delta.is_whole(),
         );
-        println!("Transition image into TRANFSR_DST_OPTIMAL");
     }
 }
 
@@ -582,7 +588,6 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &[update_info],
         );
-        println!("Actually transfered image");
     }
     commands.retain(staging_allocator.finish());
 }
@@ -710,7 +715,6 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             true,
         );
-        println!("Transition image into SHADER_READ_ONLY_OPTIMAL");
     }
     
     output.textures_delta.set.clear();

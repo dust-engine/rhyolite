@@ -127,39 +127,44 @@ pub trait ResourceTransitionCommands {
         semaphore: Cow<Arc<TimelineSemaphore>>,
         value: u64,
         stage: vk::PipelineStageFlags2,
-    );
+    ) -> bool;
     /// Ask the current submission to signal a semaphore after executing.
     fn signal_semaphore(&mut self, stage: vk::PipelineStageFlags2)
         -> (Arc<TimelineSemaphore>, u64);
 
     fn transition<T>(&mut self, res: &mut RenderRes<T>, access: Access) -> &mut Self {
-        let barrier = res.state.transition(access, false);
-        self.add_global_barrier(vk::MemoryBarrier2 {
-            src_stage_mask: barrier.src_stage_mask,
-            dst_stage_mask: barrier.dst_stage_mask,
-            src_access_mask: barrier.src_access_mask,
-            dst_access_mask: barrier.dst_access_mask,
-            ..Default::default()
-        });
-
+        let mut semaphore_transitioned = false;
         let (semaphore, value) = self.signal_semaphore(access.stage);
         if access.is_readonly() {
             res.state.add_read_semaphore(semaphore, value);
             if let Some((write_semaphore, value)) = &res.state.write_semaphore {
-                self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+                semaphore_transitioned |= self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
             if let Some((sem, val)) = res
                 .state
                 .write_semaphore
-                .replace((semaphore.clone(), value))
+                .replace((semaphore, value))
             {
-                self.wait_semaphore(Cow::Owned(sem), val, access.stage);
+                semaphore_transitioned |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
             for (sem, val) in res.state.read_semaphores.drain(..) {
-                self.wait_semaphore(Cow::Owned(sem), val, access.stage)
+                semaphore_transitioned |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
         }
+
+
+        let barrier = res.state.transition(access, false);
+        if !semaphore_transitioned {
+            self.add_global_barrier(vk::MemoryBarrier2 {
+                src_stage_mask: barrier.src_stage_mask,
+                dst_stage_mask: barrier.dst_stage_mask,
+                src_access_mask: barrier.src_access_mask,
+                dst_access_mask: barrier.dst_access_mask,
+                ..Default::default()
+            });
+        }
+
         self
     }
 
@@ -184,6 +189,30 @@ pub trait ResourceTransitionCommands {
                 false
             };
         let barrier = image.res.state.transition(access, has_layout_transition);
+
+
+        let (semaphore, value) = self.signal_semaphore(access.stage);
+        let mut semaphore_transitioned = false;
+        if access.is_readonly() {
+            image.res.state.add_read_semaphore(semaphore, value);
+            if let Some((write_semaphore, value)) = &image.res.state.write_semaphore {
+                semaphore_transitioned |= self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+            }
+        } else {
+            if let Some((sem, val)) = image
+                .res
+                .state
+                .write_semaphore
+                .replace((semaphore.clone(), value))
+            {
+                semaphore_transitioned |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
+            }
+            for (sem, val) in image.res.state.read_semaphores.drain(..) {
+                semaphore_transitioned |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
+            }
+        }
+
+
         if has_layout_transition || (has_queue_family_ownership_transfer && retain_data) {
             let mut barrier = vk::ImageMemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
@@ -234,7 +263,7 @@ pub trait ResourceTransitionCommands {
             }
             self.add_image_barrier(barrier);
             image.layout = layout;
-        } else {
+        } else if !semaphore_transitioned {
             self.add_global_barrier(vk::MemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
                 dst_stage_mask: barrier.dst_stage_mask,
@@ -245,25 +274,6 @@ pub trait ResourceTransitionCommands {
         }
         image.res.state.queue_family = Some(self.current_queue_family());
 
-        let (semaphore, value) = self.signal_semaphore(access.stage);
-        if access.is_readonly() {
-            image.res.state.add_read_semaphore(semaphore, value);
-            if let Some((write_semaphore, value)) = &image.res.state.write_semaphore {
-                self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
-            }
-        } else {
-            if let Some((sem, val)) = image
-                .res
-                .state
-                .write_semaphore
-                .replace((semaphore.clone(), value))
-            {
-                self.wait_semaphore(Cow::Owned(sem), val, access.stage);
-            }
-            for (sem, val) in image.res.state.read_semaphores.drain(..) {
-                self.wait_semaphore(Cow::Owned(sem), val, access.stage)
-            }
-        }
         self
     }
     fn transition_buffer<T: BufferLike>(
@@ -279,6 +289,28 @@ pub trait ResourceTransitionCommands {
             } else {
                 false
             };
+
+        let mut semaphore_transition = false;
+        let (semaphore, value) = self.signal_semaphore(access.stage);
+        if access.is_readonly() {
+            buffer.state.add_read_semaphore(semaphore, value);
+            if let Some((write_semaphore, value)) = &buffer.state.write_semaphore {
+                semaphore_transition |= self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+            }
+        } else {
+            if let Some((sem, val)) = buffer
+                .state
+                .write_semaphore
+                .replace((semaphore.clone(), value))
+            {
+                semaphore_transition |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
+            }
+            for (sem, val) in buffer.state.read_semaphores.drain(..) {
+                semaphore_transition |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
+            }
+        }
+
+        
         if has_queue_family_ownership_transfer && retain_data {
             self.add_buffer_barrier(vk::BufferMemoryBarrier2 {
                 dst_stage_mask: barrier.dst_stage_mask,
@@ -303,7 +335,7 @@ pub trait ResourceTransitionCommands {
                 },
                 buffer.state.queue_family.unwrap().0,
             );
-        } else {
+        } else if !semaphore_transition {
             self.add_global_barrier(vk::MemoryBarrier2 {
                 src_stage_mask: barrier.src_stage_mask,
                 dst_stage_mask: barrier.dst_stage_mask,
@@ -314,24 +346,6 @@ pub trait ResourceTransitionCommands {
         }
         buffer.state.queue_family = Some(self.current_queue_family());
 
-        let (semaphore, value) = self.signal_semaphore(access.stage);
-        if access.is_readonly() {
-            buffer.state.add_read_semaphore(semaphore, value);
-            if let Some((write_semaphore, value)) = &buffer.state.write_semaphore {
-                self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
-            }
-        } else {
-            if let Some((sem, val)) = buffer
-                .state
-                .write_semaphore
-                .replace((semaphore.clone(), value))
-            {
-                self.wait_semaphore(Cow::Owned(sem), val, access.stage);
-            }
-            for (sem, val) in buffer.state.read_semaphores.drain(..) {
-                self.wait_semaphore(Cow::Owned(sem), val, access.stage)
-            }
-        }
         self
     }
 }
@@ -378,7 +392,7 @@ impl ResourceTransitionCommands for ImmediateTransitions<'_> {
         semaphore: Cow<Arc<TimelineSemaphore>>,
         value: u64,
         stage: vk::PipelineStageFlags2,
-    ) {
+    ) -> bool {
         todo!()
     }
 

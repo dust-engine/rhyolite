@@ -25,9 +25,7 @@ use crate::{
         BarrierProducerOutConfig, BinarySemaphoreOp, QueueSubmissionInfo,
         QueueSystemDependencyConfig, QueueSystemInitialState, RenderSystemInitialState,
         RenderSystemsBinarySemaphoreTracker,
-    },
-    queue::{QueueRef, QueuesRouter},
-    Device, QueueType,
+    }, queue::{QueueRef, QueuesRouter}, semaphore::TimelineSemaphore, Device, QueueType
 };
 
 use super::RenderSystemConfig;
@@ -320,7 +318,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         let mut queue_graph_nodes = Vec::<QueueGraphNodeMeta>::new();
 
         // Flush all colors
-
+        let device = world.resource::<Device>();
         for (queue_node_buffer, stages) in queue_op_colors.iter_mut() {
             if let Some(a) = queue_node_buffer.take() {
                 // Flush remaining nodes
@@ -339,7 +337,15 @@ impl ScheduleBuildPass for RenderSystemPass {
                     flush_node_index: 0,
                     selected_queue: meta.selected_queue,
                     queue_type: meta.queue_type,
-                    submission_info: Arc::new(Mutex::new(QueueSubmissionInfo::default())),
+                    submission_info: Arc::new(Mutex::new(if meta.force_binary_semaphore {
+                        QueueSubmissionInfo::default()
+                    } else {
+                        QueueSubmissionInfo {
+                            signal_semaphore: Some(Arc::new(TimelineSemaphore::new(device.clone()).unwrap())),
+                            signal_semaphore_value: 1,
+                            ..Default::default()
+                        }
+                    })),
                     prev_stage_submission_info: SmallVec::from_iter(
                         std::iter::repeat(None).take(3),
                     ),
@@ -381,7 +387,11 @@ impl ScheduleBuildPass for RenderSystemPass {
                         flush_node_index: 0,
                         selected_queue: queue_graph_node_info.queue,
                         queue_type: queue_graph_node_info.queue_type,
-                        submission_info: Arc::new(Mutex::new(QueueSubmissionInfo::default())),
+                        submission_info: Arc::new(Mutex::new(QueueSubmissionInfo {
+                            signal_semaphore: Some(Arc::new(TimelineSemaphore::new(device.clone()).unwrap())),
+                            signal_semaphore_value: 1,
+                            ..Default::default()
+                        })),
                         prev_stage_submission_info: SmallVec::from_iter(
                             std::iter::repeat(None).take(3),
                         ),

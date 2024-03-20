@@ -121,68 +121,48 @@ pub struct QueueSubmissionInfo {
     pub(crate) trailing_buffer_barriers: Vec<vk::BufferMemoryBarrier2>,
     pub(crate) trailing_image_barriers: Vec<vk::ImageMemoryBarrier2>,
 
-    pub(crate) signal_semaphores:
-        SmallVec<[(vk::PipelineStageFlags2, Arc<TimelineSemaphore>, u64); 4]>,
+    pub(crate) signal_semaphore: Option<Arc<TimelineSemaphore>>,
+    pub(crate) signal_semaphore_value: u64,
     pub(crate) wait_semaphores:
         SmallVec<[(vk::PipelineStageFlags2, Arc<TimelineSemaphore>, u64); 4]>,
-    pub(crate) available_semaphores: Vec<(vk::PipelineStageFlags2, Arc<TimelineSemaphore>, u64)>,
 }
 unsafe impl Send for QueueSubmissionInfo {}
 unsafe impl Sync for QueueSubmissionInfo {}
 impl QueueSubmissionInfo {
+    /// Return TRUE if the current queue is going to wait on this semaphore, or FALSE otherwise.
     pub fn wait_semaphore(
         &mut self,
         semaphore: Cow<Arc<TimelineSemaphore>>,
         value: u64,
         stage: vk::PipelineStageFlags2,
-    ) {
-        for (_, current_semaphore, current_value) in self.signal_semaphores.iter() {
-            if Arc::ptr_eq(current_semaphore, semaphore.as_ref()) {
-                if current_value >= &value {
-                    return;
+    ) -> bool {
+        if let Some(signal_semaphore) = self.signal_semaphore.as_ref() {
+            if Arc::ptr_eq(signal_semaphore, semaphore.as_ref()) {
+                if self.signal_semaphore_value >= value {
+                    return false;
                 }
-                break;
             }
         }
         for (current_stage, current_semaphore, current_value) in self.wait_semaphores.iter_mut() {
             if Arc::ptr_eq(current_semaphore, semaphore.as_ref()) {
                 *current_value = (*current_value).max(value);
                 *current_stage |= stage;
-                return;
+                return true;
             }
         }
         self.wait_semaphores
             .push((stage, semaphore.into_owned(), value));
+        true
     }
 
     pub fn signal_semaphore(
         &mut self,
         stage: vk::PipelineStageFlags2,
-        device: &Device,
     ) -> (Arc<TimelineSemaphore>, u64) {
-        for (current_stage, current_semaphore, current_value) in self.signal_semaphores.iter_mut() {
-            if *current_stage == stage {
-                return (current_semaphore.clone(), *current_value);
-            }
+        if let Some(signal_semaphore) = self.signal_semaphore.as_ref() {
+            return (signal_semaphore.clone(), self.signal_semaphore_value)
         }
-        for (current_stage, current_semaphore, current_value) in
-            self.available_semaphores.iter_mut()
-        {
-            if *current_stage == stage {
-                self.signal_semaphores.push((
-                    *current_stage,
-                    current_semaphore.clone(),
-                    *current_value + 1,
-                ));
-                *current_value += 1;
-                return (current_semaphore.clone(), *current_value);
-            }
-        }
-        let semaphore = Arc::new(TimelineSemaphore::new(device.clone()).unwrap());
-        self.available_semaphores
-            .push((stage, semaphore.clone(), 1));
-        self.signal_semaphores.push((stage, semaphore.clone(), 1));
-        (semaphore, 1)
+        panic!("This queue operation is unable to signal a timeline semaphore");
     }
 }
 
@@ -329,7 +309,6 @@ where
         let default_cmd_pool = default_cmd_pool.on_frame_index(
             current_frame_index,
             state.submission_info.as_ref().unwrap(),
-            &state.device,
             (&state.device, &queues_router),
         );
         let num_frame_in_flight: u32 = 3;
@@ -606,7 +585,6 @@ pub(crate) fn flush_system_graph<const Q: char>(
     let default_cmd_pool = default_cmd_pool.on_frame_index(
         frame_index.0,
         submission_info.0,
-        &device,
         (&device, &queues_router),
     );
 
@@ -638,7 +616,6 @@ pub(crate) fn submit_system_graph<const Q: char>(
     let default_cmd_pool = default_cmd_pool.on_frame_index(
         frame_index.0,
         submission_info.0,
-        &device,
         (&device, &queues_router),
     );
 
@@ -707,12 +684,12 @@ pub(crate) fn submit_system_graph<const Q: char>(
         })
         .chain(
             submission_info
-                .signal_semaphores
+                .signal_semaphore
                 .iter()
-                .map(|(stage, semaphore, value)| vk::SemaphoreSubmitInfo {
+                .map(|semaphore| vk::SemaphoreSubmitInfo {
                     semaphore: semaphore.raw(),
-                    value: *value,
-                    stage_mask: *stage,
+                    value: submission_info.signal_semaphore_value,
+                    stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
                     ..Default::default()
                 }),
         )
@@ -744,7 +721,7 @@ pub(crate) fn submit_system_graph<const Q: char>(
                 }),
         )
         .collect::<Vec<_>>();
-    submission_info.signal_semaphores.clear();
+    submission_info.signal_semaphore_value += 1;
     submission_info.wait_semaphores.clear();
     unsafe {
         let queue = device.get_raw_queue(queue_ctx.queue);

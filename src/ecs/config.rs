@@ -172,9 +172,9 @@ impl ResourceTransitionCommands for Barriers {
         semaphore: Cow<Arc<TimelineSemaphore>>,
         value: u64,
         stage: vk::PipelineStageFlags2,
-    ) {
+    ) -> bool {
         let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
-        submission_info.wait_semaphore(semaphore, value, stage);
+        submission_info.wait_semaphore(semaphore, value, stage)
     }
 
     fn signal_semaphore(
@@ -182,8 +182,7 @@ impl ResourceTransitionCommands for Barriers {
         stage: vk::PipelineStageFlags2,
     ) -> (Arc<TimelineSemaphore>, u64) {
         let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
-        let device = unsafe { &*self.device };
-        submission_info.signal_semaphore(stage, device)
+        submission_info.signal_semaphore(stage)
     }
 }
 
