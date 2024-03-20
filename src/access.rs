@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ash::vk;
 use bevy::utils::smallvec::SmallVec;
 
-use crate::{access::utils::compare_pipeline_stages, semaphore::TimelineSemaphore, QueueType};
+use crate::{access::utils::compare_pipeline_stages, semaphore::TimelineSemaphore, QueueRef, QueueType};
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Access {
@@ -41,7 +41,7 @@ impl Access {
 pub struct ResourceState {
     pub(crate) read: Access,
     pub(crate) write: Access,
-    pub(crate) queue_family: Option<(QueueType, u32)>,
+    pub(crate) queue_family: Option<(QueueRef, u32)>,
 
     pub(crate) write_semaphore: Option<(Arc<TimelineSemaphore>, u64)>,
     pub(crate) read_semaphores: SmallVec<[(Arc<TimelineSemaphore>, u64); 2]>,

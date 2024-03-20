@@ -1,6 +1,6 @@
 use ash::vk::{self};
 
-use crate::{ecs::queue_cap::IsGraphicsQueueCap, Device, HasDevice, QueueType};
+use crate::{ecs::queue_cap::IsGraphicsQueueCap, Device, HasDevice, QueueRef, QueueType};
 
 use super::CommandRecorder;
 
@@ -229,7 +229,7 @@ where
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         self.recorder.cmd_buf()
     }
-    fn current_queue_family(&self) -> (QueueType, u32) {
+    fn current_queue_family(&self) -> (QueueRef, u32) {
         self.recorder.current_queue_family()
     }
 }
@@ -266,7 +266,7 @@ where
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         self.recorder.cmd_buf()
     }
-    fn current_queue_family(&self) -> (QueueType, u32) {
+    fn current_queue_family(&self) -> (QueueRef, u32) {
         self.recorder.current_queue_family()
     }
 }

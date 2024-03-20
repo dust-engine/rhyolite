@@ -699,7 +699,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     swapchain_image.0 = Some(image);
 }
 
-fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut SwapchainImage>) {
+fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut SwapchainImage>, queues_router: Res<QueuesRouter>) {
     for mut i in query.iter_mut() {
         let image = i.0.as_mut().unwrap();
         let barrier = image.res.state.transition(
@@ -721,7 +721,7 @@ fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut Swapch
                 subresource_range: image.subresource_range(),
                 ..Default::default()
             },
-            QueueType::Graphics,
+            queues_router.of_type(QueueType::Graphics),
         );
         image.layout = vk::ImageLayout::PRESENT_SRC_KHR;
     }

@@ -73,6 +73,7 @@ struct QueueGraphNodeMeta {
     selected_queue: QueueRef,
     queue_type: QueueType,
     submission_info: Arc<Mutex<QueueSubmissionInfo>>,
+    /// Indexed by QueueRef
     prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
 }
 
@@ -429,11 +430,11 @@ impl ScheduleBuildPass for RenderSystemPass {
                 continue;
             }
             let submission_info = from.submission_info.clone();
-            let from_queue_type = from.queue_type;
+            let from_queue_type = from.selected_queue;
 
             let to = &mut queue_graph_nodes[to as usize];
-            assert!(to.prev_stage_submission_info[from_queue_type as usize].is_none());
-            to.prev_stage_submission_info[from_queue_type as usize] = Some(submission_info);
+            assert!(to.prev_stage_submission_info[from_queue_type.0 as usize].is_none());
+            to.prev_stage_submission_info[from_queue_type.0 as usize] = Some(submission_info);
         }
 
         // Step 1.4: Insert queue submission systems

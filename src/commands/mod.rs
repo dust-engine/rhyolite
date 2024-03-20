@@ -4,10 +4,7 @@ use ash::vk;
 use bevy::utils::smallvec::SmallVec;
 
 use crate::{
-    buffer::BufferLike,
-    ecs::{RenderImage, RenderRes},
-    semaphore::TimelineSemaphore,
-    Access, Device, HasDevice, ImageLike, QueueType,
+    buffer::BufferLike, ecs::{RenderImage, RenderRes}, semaphore::TimelineSemaphore, Access, Device, HasDevice, ImageLike, QueueRef, QueueType
 };
 
 mod render;
@@ -18,7 +15,7 @@ pub use transfer::*;
 pub trait CommandRecorder: HasDevice {
     const QUEUE_CAP: char;
     fn cmd_buf(&mut self) -> vk::CommandBuffer;
-    fn current_queue_family(&self) -> (QueueType, u32);
+    fn current_queue_family(&self) -> (QueueRef, u32);
 }
 
 pub trait CommonCommands: CommandRecorder {
@@ -62,7 +59,7 @@ pub struct ImmediateTransitions<'w> {
     pub(crate) image_barriers: SmallVec<[vk::ImageMemoryBarrier2; 4]>,
     pub(crate) buffer_barriers: SmallVec<[vk::BufferMemoryBarrier2; 4]>,
     pub(crate) dependency_flags: vk::DependencyFlags,
-    pub(crate) queue_family: (QueueType, u32),
+    pub(crate) queue_family: (QueueRef, u32),
 }
 
 impl Drop for ImmediateTransitions<'_> {
@@ -106,12 +103,12 @@ pub trait ResourceTransitionCommands {
     fn add_image_barrier_prev_stage(
         &mut self,
         barrier: vk::ImageMemoryBarrier2,
-        prev_queue_type: QueueType,
+        prev_queue: QueueRef,
     ) -> &mut Self;
     fn add_buffer_barrier_prev_stage(
         &mut self,
         barrier: vk::BufferMemoryBarrier2,
-        prev_queue_type: QueueType,
+        prev_queue: QueueRef,
     ) -> &mut Self;
 
     fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self;
@@ -119,7 +116,7 @@ pub trait ResourceTransitionCommands {
     fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self;
     fn set_dependency_flags(&mut self, flags: vk::DependencyFlags) -> &mut Self;
 
-    fn current_queue_family(&self) -> (QueueType, u32);
+    fn current_queue_family(&self) -> (QueueRef, u32);
 
     /// Specify that the current submission must wait on a semaphore before executing.
     fn wait_semaphore(
@@ -350,20 +347,20 @@ pub trait ResourceTransitionCommands {
     }
 }
 impl ResourceTransitionCommands for ImmediateTransitions<'_> {
-    fn current_queue_family(&self) -> (QueueType, u32) {
+    fn current_queue_family(&self) -> (QueueRef, u32) {
         self.queue_family
     }
     fn add_image_barrier_prev_stage(
         &mut self,
         barrier: vk::ImageMemoryBarrier2,
-        queue_type: QueueType,
+        queue_type: QueueRef,
     ) -> &mut Self {
         panic!()
     }
     fn add_buffer_barrier_prev_stage(
         &mut self,
         barrier: vk::BufferMemoryBarrier2,
-        queue_type: QueueType,
+        queue_type: QueueRef,
     ) -> &mut Self {
         panic!()
     }

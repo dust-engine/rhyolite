@@ -170,6 +170,7 @@ pub struct RenderCommands<'w, 's, const Q: char>
 where
     (): IsQueueCap<Q>,
 {
+    queue: QueueRef,
     default_cmd_pool: &'w mut DefaultCommandPool<Q>,
     retained_objects: &'s mut BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     pub(crate) frame_index: u64,
@@ -209,14 +210,9 @@ where
     (): IsQueueCap<Q>,
 {
     const QUEUE_CAP: char = Q;
-    fn current_queue_family(&self) -> (QueueType, u32) {
+    fn current_queue_family(&self) -> (QueueRef, u32) {
         (
-            match Q {
-                'g' => QueueType::Graphics,
-                'c' => QueueType::Compute,
-                't' => QueueType::Transfer,
-                _ => unreachable!(),
-            },
+            self.queue,
             self.default_cmd_pool.pool.queue_family_index(),
         )
     }
@@ -233,6 +229,7 @@ pub struct RenderCommandState<const Q: char> {
     submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
     prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
     frame_index_state: ComponentId,
+    queue: QueueRef,
 }
 
 unsafe impl<'w, 's, const Q: char> SystemParam for RenderCommands<'w, 's, Q>
@@ -259,6 +256,7 @@ where
             submission_info: None,
             prev_stage_submission_info: SmallVec::new(),
             frame_index_state,
+            queue: QueueRef::default(),
         }
     }
     fn default_configs(config: &mut bevy::utils::ConfigMap) {
@@ -275,6 +273,7 @@ where
         if let Some(a) = config.downcast_mut::<RenderSystemInitialState>() {
             state.submission_info = Some(a.queue_submission_info.clone());
             state.prev_stage_submission_info = a.prev_stage_queue_submission_info.clone();
+            state.queue = a.queue;
             return;
         }
     }
@@ -319,6 +318,7 @@ where
         }
 
         let mut this = RenderCommands {
+            queue: state.queue,
             frame_index: current_frame_index,
             default_cmd_pool,
             retained_objects: &mut state.retained_objects,
@@ -755,6 +755,7 @@ pub(crate) struct InsertPipelineBarrier<const Q: char> {
     prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
     device: Option<Device>,
     queue_family_index: u32,
+    queue: QueueRef,
 }
 impl<const Q: char> InsertPipelineBarrier<Q> {
     pub(crate) fn new() -> Self {
@@ -767,6 +768,7 @@ impl<const Q: char> InsertPipelineBarrier<Q> {
             device: None,
             queue_family_index: 0,
             prev_stage_submission_info: SmallVec::new(),
+            queue: QueueRef::default(),
         }
     }
 }
@@ -847,12 +849,7 @@ where
                     .unwrap(),
                 dropped: &mut dropped,
                 queue_family: (
-                    match Q {
-                        'g' => QueueType::Graphics,
-                        'c' => QueueType::Compute,
-                        't' => QueueType::Transfer,
-                        _ => panic!(),
-                    },
+                    self.queue,
                     self.queue_family_index,
                 ),
             };
@@ -882,13 +879,8 @@ where
                 buffer_barriers,
                 dependency_flags,
                 queue_family: (
-                    match Q {
-                        'g' => QueueType::Graphics,
-                        'c' => QueueType::Compute,
-                        't' => QueueType::Transfer,
-                        _ => panic!(),
-                    },
-                    render_commands.default_cmd_pool.pool.queue_family_index(),
+                    self.queue,
+                    self.queue_family_index,
                 ),
             };
             drop(barriers);
@@ -897,7 +889,7 @@ where
         for i in prev_stage_barriers.into_iter() {
             let prev_queue_type = i.prev_queue_type();
             let Some(ref mut prev_submission_info) =
-                self.prev_stage_submission_info[prev_queue_type as usize]
+                self.prev_stage_submission_info[prev_queue_type.0 as usize]
             else {
                 panic!("Queue family ownership transfers not allowed across frames");
             };
@@ -930,14 +922,19 @@ where
             &mut self.system_meta,
         ));
         self.device = Some(world.resource::<Device>().clone());
-        self.queue_family_index = world
-            .resource::<QueuesRouter>()
-            .queue_family_of_type(match Q {
+        let queue_router = world.resource::<QueuesRouter>();
+        self.queue_family_index = queue_router.queue_family_of_type(match Q {
                 'g' => QueueType::Graphics,
                 'c' => QueueType::Compute,
                 't' => QueueType::Transfer,
                 _ => panic!(),
             });
+        self.queue = queue_router.of_type(match Q {
+            'g' => QueueType::Graphics,
+            'c' => QueueType::Compute,
+            't' => QueueType::Transfer,
+            _ => panic!(),
+        });
     }
 
     fn update_archetype_component_access(

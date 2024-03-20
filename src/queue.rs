@@ -59,6 +59,7 @@ impl QueuesRouter {
         let graphics_queue_family = available_queue_family
             .iter()
             .enumerate()
+            .rev()
             .filter(|&(_i, family)| family.queue_flags.contains(vk::QueueFlags::GRAPHICS))
             .max_by_key(|&(_i, family)| {
                 let mut priority: i32 = 0;
@@ -76,6 +77,7 @@ impl QueuesRouter {
         let compute_queue_family = available_queue_family
             .iter()
             .enumerate()
+            .rev()
             .filter(|&(_id, family)| family.queue_flags.contains(vk::QueueFlags::COMPUTE))
             .max_by_key(|&(_, family)| {
                 // Use first compute-capable queue family
@@ -109,6 +111,7 @@ impl QueuesRouter {
         let transfer_queue_family = available_queue_family
             .iter()
             .enumerate()
+            .rev()
             .max_by_key(|&(_, family)| {
                 // Use first compute-capable queue family
                 let mut priority: i32 = 0;
@@ -146,6 +149,7 @@ impl QueuesRouter {
         let sparse_binding_queue_family = available_queue_family
             .iter()
             .enumerate()
+            .rev()
             .filter(|&(_id, family)| family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING))
             .max_by_key(|&(_, family)| {
                 // Use first compute-capable queue family
