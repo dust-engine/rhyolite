@@ -12,6 +12,7 @@ pub trait DeviceExtension: Send + Sync + Sized + 'static {
     fn new(instance: &Instance, device: &mut Device) -> Option<Self>;
     fn name() -> &'static std::ffi::CStr;
 }
+pub trait PromotedDeviceExtension: DeviceExtension {}
 
 #[derive(Debug)]
 pub struct ExtensionNotFoundError;
@@ -68,6 +69,7 @@ impl DeviceExtension for ash::extensions::khr::DynamicRendering {
         ash::extensions::khr::DynamicRendering::name()
     }
 }
+impl PromotedDeviceExtension for ash::extensions::khr::DynamicRendering{}
 impl_device_extension!(ash::extensions::khr::ExternalFenceFd);
 impl_device_extension!(ash::extensions::khr::ExternalFenceWin32);
 impl_device_extension!(ash::extensions::khr::ExternalMemoryFd);
@@ -104,6 +106,7 @@ impl DeviceExtension for ash::extensions::khr::Synchronization2 {
         ash::extensions::khr::Synchronization2::name()
     }
 }
+impl PromotedDeviceExtension for ash::extensions::khr::Synchronization2{}
 impl_device_extension!(ash::extensions::khr::TimelineSemaphore);
 impl_instance_extension!(ash::extensions::khr::WaylandSurface);
 impl_instance_extension!(ash::extensions::khr::Win32Surface);

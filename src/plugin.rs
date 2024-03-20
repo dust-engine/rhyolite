@@ -14,9 +14,7 @@ use std::{
 };
 
 use crate::{
-    ecs::{DefaultCommandPool, PerFrame, RenderSystemPass},
-    extensions::{DeviceExtension, InstanceExtension},
-    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, QueuesRouter, Version,
+    ecs::{DefaultCommandPool, PerFrame, RenderSystemPass}, extensions::{DeviceExtension, InstanceExtension, PromotedDeviceExtension}, Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, QueuesRouter, Version
 };
 use cstr::cstr;
 
@@ -521,7 +519,7 @@ impl<'a> FeatureEnableResult<'a> {
         selector: impl FnMut(&mut F) -> &mut vk::Bool32,
     ) -> Self
     where
-        F::Extension: DeviceExtension,
+        F::Extension: PromotedDeviceExtension
     {
         match self {
             FeatureEnableResult::Success => Self::Success,
