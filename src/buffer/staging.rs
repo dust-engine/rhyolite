@@ -40,6 +40,7 @@ impl StagingBelt {
             .memory_types()
             .iter()
             .enumerate()
+            .rev()
             .filter(|(_, memory_type)| {
                 memory_type
                     .property_flags
@@ -58,6 +59,12 @@ impl StagingBelt {
                     .contains(vk::MemoryPropertyFlags::HOST_CACHED)
                 {
                     priority -= 1;
+                }
+                if memory_type.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_COHERENT_AMD) {
+                    priority -= 100;
+                }
+                if memory_type.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_UNCACHED_AMD) {
+                    priority -= 1000;
                 }
                 priority
             })
