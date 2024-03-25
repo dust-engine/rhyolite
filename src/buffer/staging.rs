@@ -60,10 +60,16 @@ impl StagingBelt {
                 {
                     priority -= 1;
                 }
-                if memory_type.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_COHERENT_AMD) {
+                if memory_type
+                    .property_flags
+                    .contains(vk::MemoryPropertyFlags::DEVICE_COHERENT_AMD)
+                {
                     priority -= 100;
                 }
-                if memory_type.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_UNCACHED_AMD) {
+                if memory_type
+                    .property_flags
+                    .contains(vk::MemoryPropertyFlags::DEVICE_UNCACHED_AMD)
+                {
                     priority -= 1000;
                 }
                 priority

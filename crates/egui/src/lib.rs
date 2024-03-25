@@ -334,7 +334,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     mut egui_render_output: Query<(Entity, &mut EguiRenderOutput), Filter>,
     commands: RenderCommands<'t'>,
     allocator: Res<Allocator>,
-    mut test: Local<Vec<(TextureId, ImageDelta)>>
+    mut test: Local<Vec<(TextureId, ImageDelta)>>,
 ) {
     let Ok((window, mut output)) = egui_render_output.get_single_mut() else {
         return;
@@ -716,7 +716,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
             true,
         );
     }
-    
+
     output.textures_delta.set.clear();
 
     if output.paint_jobs.is_empty() {

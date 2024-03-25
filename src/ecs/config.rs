@@ -14,8 +14,8 @@ use bevy::utils::smallvec::SmallVec;
 
 use crate::commands::ResourceTransitionCommands;
 use crate::semaphore::TimelineSemaphore;
-use crate::{Device, QueueRef};
 use crate::{queue::QueueType, Access};
+use crate::{Device, QueueRef};
 
 use super::{QueueSubmissionInfo, RenderSystemPass};
 
@@ -78,14 +78,8 @@ pub(crate) enum BarriersPrevStage {
 impl BarriersPrevStage {
     pub fn prev_queue_type(&self) -> QueueRef {
         match self {
-            Self::Image {
-                prev_queue,
-                ..
-            } => *prev_queue,
-            Self::Buffer {
-                prev_queue,
-                ..
-            } => *prev_queue,
+            Self::Image { prev_queue, .. } => *prev_queue,
+            Self::Buffer { prev_queue, .. } => *prev_queue,
         }
     }
 }
@@ -101,7 +95,7 @@ pub struct Barriers {
     /// Barriers to be added to the end of the previous stage.
     pub(crate) prev_barriers: *mut SmallVec<[BarriersPrevStage; 4]>,
 
-    pub(crate) queue_family: (QueueRef, u32),
+    pub(crate) queue_family: QueueRef,
     pub(crate) submission_info: *const Mutex<QueueSubmissionInfo>,
 }
 impl Drop for Barriers {
@@ -112,7 +106,7 @@ impl Drop for Barriers {
     }
 }
 impl ResourceTransitionCommands for Barriers {
-    fn current_queue_family(&self) -> (QueueRef, u32) {
+    fn current_queue(&self) -> QueueRef {
         self.queue_family
     }
     fn add_image_barrier_prev_stage(

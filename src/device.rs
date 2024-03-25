@@ -37,7 +37,7 @@ pub struct DeviceInner {
 
 impl Device {
     pub(crate) fn get_raw_queue(&self, queue: QueueRef) -> vk::Queue {
-        self.0.queues[queue.0 as usize]
+        self.0.queues[queue.index as usize]
     }
     pub(crate) fn create(
         physical_device: PhysicalDevice,

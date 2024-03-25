@@ -4,7 +4,10 @@ use ash::vk;
 use bevy::utils::smallvec::SmallVec;
 
 use crate::{
-    buffer::BufferLike, ecs::{RenderImage, RenderRes}, semaphore::TimelineSemaphore, Access, Device, HasDevice, ImageLike, QueueRef, QueueType
+    buffer::BufferLike,
+    ecs::{RenderImage, RenderRes},
+    semaphore::TimelineSemaphore,
+    Access, Device, HasDevice, ImageLike, QueueRef, QueueType,
 };
 
 mod render;
@@ -15,7 +18,7 @@ pub use transfer::*;
 pub trait CommandRecorder: HasDevice {
     const QUEUE_CAP: char;
     fn cmd_buf(&mut self) -> vk::CommandBuffer;
-    fn current_queue_family(&self) -> (QueueRef, u32);
+    fn current_queue(&self) -> QueueRef;
 }
 
 pub trait CommonCommands: CommandRecorder {
@@ -40,7 +43,7 @@ pub trait CommonCommands: CommandRecorder {
     fn transition_resources(&mut self) -> ImmediateTransitions {
         let cmd_buf = self.cmd_buf();
         ImmediateTransitions {
-            queue_family: self.current_queue_family(),
+            queue: self.current_queue(),
             device: self.device(),
             cmd_buf,
             global_barriers: vk::MemoryBarrier2::default(),
@@ -59,7 +62,7 @@ pub struct ImmediateTransitions<'w> {
     pub(crate) image_barriers: SmallVec<[vk::ImageMemoryBarrier2; 4]>,
     pub(crate) buffer_barriers: SmallVec<[vk::BufferMemoryBarrier2; 4]>,
     pub(crate) dependency_flags: vk::DependencyFlags,
-    pub(crate) queue_family: (QueueRef, u32),
+    pub(crate) queue: QueueRef,
 }
 
 impl Drop for ImmediateTransitions<'_> {
@@ -116,7 +119,7 @@ pub trait ResourceTransitionCommands {
     fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self;
     fn set_dependency_flags(&mut self, flags: vk::DependencyFlags) -> &mut Self;
 
-    fn current_queue_family(&self) -> (QueueRef, u32);
+    fn current_queue(&self) -> QueueRef;
 
     /// Specify that the current submission must wait on a semaphore before executing.
     fn wait_semaphore(
@@ -135,21 +138,17 @@ pub trait ResourceTransitionCommands {
         if access.is_readonly() {
             res.state.add_read_semaphore(semaphore, value);
             if let Some((write_semaphore, value)) = &res.state.write_semaphore {
-                semaphore_transitioned |= self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+                semaphore_transitioned |=
+                    self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
-            if let Some((sem, val)) = res
-                .state
-                .write_semaphore
-                .replace((semaphore, value))
-            {
+            if let Some((sem, val)) = res.state.write_semaphore.replace((semaphore, value)) {
                 semaphore_transitioned |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
             for (sem, val) in res.state.read_semaphores.drain(..) {
                 semaphore_transitioned |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
         }
-
 
         let barrier = res.state.transition(access, false);
         if !semaphore_transitioned {
@@ -181,19 +180,19 @@ pub trait ResourceTransitionCommands {
         let has_layout_transition = image.layout != layout;
         let has_queue_family_ownership_transfer =
             if let Some(queue_family) = image.res.state.queue_family {
-                queue_family != self.current_queue_family()
+                queue_family.family != self.current_queue().family
             } else {
                 false
             };
         let barrier = image.res.state.transition(access, has_layout_transition);
-
 
         let (semaphore, value) = self.signal_semaphore(access.stage);
         let mut semaphore_transitioned = false;
         if access.is_readonly() {
             image.res.state.add_read_semaphore(semaphore, value);
             if let Some((write_semaphore, value)) = &image.res.state.write_semaphore {
-                semaphore_transitioned |= self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+                semaphore_transitioned |=
+                    self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
             if let Some((sem, val)) = image
@@ -208,7 +207,6 @@ pub trait ResourceTransitionCommands {
                 semaphore_transitioned |= self.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
         }
-
 
         if has_layout_transition || (has_queue_family_ownership_transfer && retain_data) {
             let mut barrier = vk::ImageMemoryBarrier2 {
@@ -228,8 +226,8 @@ pub trait ResourceTransitionCommands {
                 barrier.old_layout = image.layout;
             }
             if retain_data && has_queue_family_ownership_transfer {
-                barrier.src_queue_family_index = image.res.state.queue_family.unwrap().1;
-                barrier.dst_queue_family_index = self.current_queue_family().1;
+                barrier.src_queue_family_index = image.res.state.queue_family.unwrap().family;
+                barrier.dst_queue_family_index = self.current_queue().family;
 
                 self.add_image_barrier_prev_stage(
                     vk::ImageMemoryBarrier2 {
@@ -244,15 +242,15 @@ pub trait ResourceTransitionCommands {
                         } else {
                             vk::PipelineStageFlags2::empty()
                         },
-                        src_queue_family_index: image.state.queue_family.unwrap().1,
-                        dst_queue_family_index: self.current_queue_family().1,
+                        src_queue_family_index: image.state.queue_family.unwrap().family,
+                        dst_queue_family_index: self.current_queue().family,
                         image: image.raw_image(),
                         subresource_range: image.subresource_range(),
                         new_layout: barrier.new_layout,
                         old_layout: barrier.old_layout,
                         ..Default::default()
                     },
-                    image.state.queue_family.unwrap().0,
+                    image.state.queue_family.unwrap(),
                 );
                 barrier.src_access_mask = vk::AccessFlags2::empty();
                 // Block the same stage as the layout transition so that the layout transition happens after the semaphore wait.
@@ -269,7 +267,7 @@ pub trait ResourceTransitionCommands {
                 ..Default::default()
             });
         }
-        image.res.state.queue_family = Some(self.current_queue_family());
+        image.res.state.queue_family = Some(self.current_queue());
 
         self
     }
@@ -282,7 +280,7 @@ pub trait ResourceTransitionCommands {
         let barrier = buffer.state.transition(access, false);
         let has_queue_family_ownership_transfer =
             if let Some(queue_family) = buffer.state.queue_family {
-                queue_family != self.current_queue_family()
+                queue_family != self.current_queue()
             } else {
                 false
             };
@@ -292,7 +290,8 @@ pub trait ResourceTransitionCommands {
         if access.is_readonly() {
             buffer.state.add_read_semaphore(semaphore, value);
             if let Some((write_semaphore, value)) = &buffer.state.write_semaphore {
-                semaphore_transition |= self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+                semaphore_transition |=
+                    self.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
             if let Some((sem, val)) = buffer
@@ -307,13 +306,12 @@ pub trait ResourceTransitionCommands {
             }
         }
 
-        
         if has_queue_family_ownership_transfer && retain_data {
             self.add_buffer_barrier(vk::BufferMemoryBarrier2 {
                 dst_stage_mask: barrier.dst_stage_mask,
                 dst_access_mask: barrier.dst_access_mask,
-                src_queue_family_index: buffer.state.queue_family.unwrap().1,
-                dst_queue_family_index: self.current_queue_family().1,
+                src_queue_family_index: buffer.state.queue_family.unwrap().family,
+                dst_queue_family_index: self.current_queue().family,
                 buffer: buffer.raw_buffer(),
                 offset: buffer.offset(),
                 size: buffer.size(),
@@ -323,14 +321,14 @@ pub trait ResourceTransitionCommands {
                 vk::BufferMemoryBarrier2 {
                     src_stage_mask: barrier.src_stage_mask,
                     src_access_mask: barrier.src_access_mask,
-                    src_queue_family_index: buffer.state.queue_family.unwrap().1,
-                    dst_queue_family_index: self.current_queue_family().1,
+                    src_queue_family_index: buffer.state.queue_family.unwrap().family,
+                    dst_queue_family_index: self.current_queue().family,
                     buffer: buffer.raw_buffer(),
                     offset: buffer.offset(),
                     size: buffer.size(),
                     ..Default::default()
                 },
-                buffer.state.queue_family.unwrap().0,
+                buffer.state.queue_family.unwrap(),
             );
         } else if !semaphore_transition {
             self.add_global_barrier(vk::MemoryBarrier2 {
@@ -341,14 +339,14 @@ pub trait ResourceTransitionCommands {
                 ..Default::default()
             });
         }
-        buffer.state.queue_family = Some(self.current_queue_family());
+        buffer.state.queue_family = Some(self.current_queue());
 
         self
     }
 }
 impl ResourceTransitionCommands for ImmediateTransitions<'_> {
-    fn current_queue_family(&self) -> (QueueRef, u32) {
-        self.queue_family
+    fn current_queue(&self) -> QueueRef {
+        self.queue
     }
     fn add_image_barrier_prev_stage(
         &mut self,

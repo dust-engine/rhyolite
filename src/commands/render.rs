@@ -229,8 +229,8 @@ where
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         self.recorder.cmd_buf()
     }
-    fn current_queue_family(&self) -> (QueueRef, u32) {
-        self.recorder.current_queue_family()
+    fn current_queue(&self) -> QueueRef {
+        self.recorder.current_queue()
     }
 }
 impl<T> RenderPassCommands for DynamicRenderPass<'_, T> where T: GraphicsCommands {}
@@ -266,8 +266,8 @@ where
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         self.recorder.cmd_buf()
     }
-    fn current_queue_family(&self) -> (QueueRef, u32) {
-        self.recorder.current_queue_family()
+    fn current_queue(&self) -> QueueRef {
+        self.recorder.current_queue()
     }
 }
 impl<T> RenderPassCommands for RenderPass<'_, T> where T: GraphicsCommands {}

@@ -1,7 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
-use bevy::{ecs::system::Resource, utils::smallvec::SmallVec};
+use bevy::{
+    ecs::system::{InstancedResource, Resource},
+    utils::smallvec::SmallVec,
+};
 
 use crate::{semaphore::TimelineSemaphore, Device, HasDevice};
 
@@ -19,6 +22,7 @@ pub struct PerFrame<T: PerFrameResource> {
     frame_index: u64,
     items: SmallVec<[PerFrameResourceFrame<T>; 3]>,
 }
+impl<T: PerFrameResource> InstancedResource for PerFrame<T> {}
 impl<T: PerFrameResource> Default for PerFrame<T> {
     fn default() -> Self {
         Self::new()
@@ -60,15 +64,12 @@ impl<T: PerFrameResource> PerFrame<T> {
             ]),
         }
     }
-    pub(crate) fn on_frame_index<const Q: char>(
+    pub(crate) fn on_frame_index(
         &mut self,
         frame_index: u64,
         submission_info: &Mutex<QueueSubmissionInfo>,
         param: T::Param<'_>,
-    ) -> &mut T
-    where
-        (): IsQueueCap<Q>,
-    {
+    ) -> &mut T {
         let i = (frame_index % self.items.len() as u64) as usize;
         if frame_index != self.frame_index {
             match &mut self.items[i] {
@@ -114,10 +115,6 @@ impl<T: PerFrameResource> PerFrame<T> {
     where
         (): IsQueueCap<Q>,
     {
-        self.on_frame_index(
-            commands.frame_index,
-            &commands.submission_info,
-            param,
-        )
+        self.on_frame_index(commands.frame_index, &commands.submission_info, param)
     }
 }

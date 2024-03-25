@@ -644,7 +644,7 @@ impl ImageViewLike for SwapchainImageInner {
 /// For example, `With<PrimaryWindow>` will only acquire the next image from the swapchain
 /// associated with the primary window.
 pub fn acquire_swapchain_image<Filter: QueryFilter>(
-    mut queue_ctx: QueueContext<'g'>,
+    mut queue_ctx: QueueContext,
     mut query: Query<
         (
             Entity,
@@ -699,7 +699,11 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     swapchain_image.0 = Some(image);
 }
 
-fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut SwapchainImage>, queues_router: Res<QueuesRouter>) {
+fn present_barriers(
+    In(mut barriers): In<Barriers>,
+    mut query: Query<&mut SwapchainImage>,
+    queues_router: Res<QueuesRouter>,
+) {
     for mut i in query.iter_mut() {
         let image = i.0.as_mut().unwrap();
         let barrier = image.res.state.transition(
@@ -727,7 +731,7 @@ fn present_barriers(In(mut barriers): In<Barriers>, mut query: Query<&mut Swapch
     }
 }
 pub fn present(
-    mut queue_ctx: QueueContext<'g'>,
+    mut queue_ctx: QueueContext,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
     mut query: Query<(&mut Swapchain, &mut SwapchainImage)>,

@@ -3,13 +3,19 @@ use bevy::ecs::system::Resource;
 
 /// Index of a created queue
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-pub struct QueueRef(pub(crate) u8);
+pub struct QueueRef {
+    pub(crate) index: u32,
+    pub(crate) family: u32,
+}
 impl QueueRef {
     pub fn null() -> Self {
-        QueueRef(u8::MAX)
+        QueueRef {
+            index: 0,
+            family: 0,
+        }
     }
     pub fn is_null(&self) -> bool {
-        self.0 == u8::MAX
+        self.index == u32::MAX
     }
 }
 impl Default for QueueRef {
@@ -201,27 +207,39 @@ impl QueuesRouter {
             sparse_binding_queue_family,
         ];
 
-        let mut queue_type_to_index: [QueueRef; 4] = [QueueRef(u8::MAX); 4];
+        let mut queue_type_to_index: [QueueRef; 4] = [QueueRef::null(); 4];
         for (i, ty) in queue_family_to_types
             .iter()
             .filter(|x| !x.is_empty())
             .enumerate()
         {
             if ty.contains(vk::QueueFlags::GRAPHICS) {
-                queue_type_to_index[QueueType::Graphics as usize] = QueueRef(i as u8);
+                queue_type_to_index[QueueType::Graphics as usize] = QueueRef {
+                    index: i as u32,
+                    family: graphics_queue_family,
+                };
             }
             if ty.contains(vk::QueueFlags::COMPUTE) {
-                queue_type_to_index[QueueType::Compute as usize] = QueueRef(i as u8);
+                queue_type_to_index[QueueType::Compute as usize] = QueueRef {
+                    index: i as u32,
+                    family: compute_queue_family,
+                };
             }
             if ty.contains(vk::QueueFlags::TRANSFER) {
-                queue_type_to_index[QueueType::Transfer as usize] = QueueRef(i as u8);
+                queue_type_to_index[QueueType::Transfer as usize] = QueueRef {
+                    index: i as u32,
+                    family: transfer_queue_family,
+                };
             }
             if ty.contains(vk::QueueFlags::SPARSE_BINDING) {
-                queue_type_to_index[QueueType::SparseBinding as usize] = QueueRef(i as u8);
+                queue_type_to_index[QueueType::SparseBinding as usize] = QueueRef {
+                    index: i as u32,
+                    family: sparse_binding_queue_family,
+                };
             }
         }
         for i in queue_type_to_index.iter().take(3) {
-            assert_ne!(i.0, u8::MAX, "All queue types should've been assigned")
+            assert!(!i.is_null(), "All queue types should've been assigned")
         }
 
         Self {
@@ -314,10 +332,9 @@ mod tests {
                 vk::QueueFlags::empty(),
             ]
         );
-        assert_eq!(
-            router.queue_type_to_index,
-            [QueueRef(0), QueueRef(2), QueueRef(1), QueueRef(1),]
-        );
+        for (i, expected_index) in [0, 2, 1, 1].iter().enumerate() {
+            assert_eq!(router.queue_type_to_index[i].index, *expected_index);
+        }
         assert_eq!(router.queue_type_to_family, [0, 2, 1, 1,]);
     }
     #[test]
@@ -357,10 +374,9 @@ mod tests {
                 vk::QueueFlags::empty(),
             ]
         );
-        assert_eq!(
-            router.queue_type_to_index,
-            [QueueRef(0), QueueRef(0), QueueRef(0), QueueRef(0),]
-        );
+        for (i, expected_index) in [0, 0, 0, 0].iter().enumerate() {
+            assert_eq!(router.queue_type_to_index[i].index, *expected_index);
+        }
         assert_eq!(router.queue_type_to_family, [0, 0, 0, 0,]);
     }
 
@@ -393,10 +409,9 @@ mod tests {
                     | vk::QueueFlags::TRANSFER,
             ]
         );
-        assert_eq!(
-            router.queue_type_to_index,
-            [QueueRef(0), QueueRef(0), QueueRef(0), QueueRef(0),]
-        );
+        for (i, expected_index) in [0, 0, 0, 0].iter().enumerate() {
+            assert_eq!(router.queue_type_to_index[i].index, *expected_index);
+        }
         assert_eq!(router.queue_type_to_family, [0, 0, 0, 0,]);
     }
 }
