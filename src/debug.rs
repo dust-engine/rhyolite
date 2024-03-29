@@ -202,7 +202,6 @@ fn default_callback(
     };
 }
 
-const NULL_CHAR_ERR_MESSAGE: &str = "Name cannot contain null bytes";
 /// Vulkan Object that can be associated with a name and/or a tag.
 pub trait DebugObject: crate::HasDevice {
     fn object_handle(&mut self) -> u64;

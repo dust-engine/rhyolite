@@ -10,7 +10,7 @@ use crate::shader::{ShaderModule, SpecializedShader};
 use crate::{
     deferred::{DeferredOperationTaskPool, Task},
     utils::SendBox,
-    Device, HasDevice,
+    Device,
 };
 
 pub struct GraphicsPipeline {

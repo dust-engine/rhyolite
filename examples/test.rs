@@ -109,11 +109,11 @@ fn clear_main_window_color_barrier(
     In(mut barriers): In<Barriers>,
     mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
 ) {
-    let Ok(mut swapchain_image) = windows.get_single_mut() else {
+    let Ok(swapchain_image) = windows.get_single_mut() else {
         return;
     };
     barriers.transition(
-    swapchain_image.into_inner().deref_mut(),
+        swapchain_image.into_inner().deref_mut(),
         Access {
             stage: vk::PipelineStageFlags2::CLEAR,
             access: vk::AccessFlags2::TRANSFER_WRITE,

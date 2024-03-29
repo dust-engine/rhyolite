@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     sync::{Arc, Mutex},
 };
 
@@ -27,8 +27,7 @@ use bevy::{
 
 use crate::{
     ecs::{
-        BarrierProducerOutConfig, BinarySemaphoreOp, DefaultCommandPool, PerFrame,
-        QueueSubmissionInfo,
+        BarrierProducerOutConfig, DefaultCommandPool, PerFrame, QueueSubmissionInfo,
         RenderSystemInitialState, ResInstanceConfig,
     },
     queue::{QueueRef, QueuesRouter},
@@ -57,7 +56,6 @@ enum QueueGraphEdgeSemaphoreType {
     Binary(u32),
     Timeline(u32),
 }
-
 
 struct SubmitSystemMarker;
 
@@ -113,9 +111,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             bevy::utils::petgraph::prelude::Directed,
         >,
     ) -> Result<(), bevy::ecs::schedule::ScheduleBuildError> {
-        let mut render_graph =
-            bevy::utils::petgraph::graphmap::DiGraphMap::<usize, ()>::new(
-            );
+        let mut render_graph = bevy::utils::petgraph::graphmap::DiGraphMap::<usize, ()>::new();
 
         struct RenderGraphNodeMeta {
             force_binary_semaphore: bool,
@@ -309,8 +305,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             queue_type: QueueType,
         }
 
-        let mut queue_graph =
-            bevy::utils::petgraph::graphmap::DiGraphMap::<u32, ()>::new();
+        let mut queue_graph = bevy::utils::petgraph::graphmap::DiGraphMap::<u32, ()>::new();
         let mut queue_graph_nodes = Vec::<QueueGraphNodeMeta>::new();
 
         // Flush all colors
@@ -403,11 +398,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             let to_meta = render_graph_meta[to].as_ref().unwrap();
 
             if from_meta.queue_graph_node != to_meta.queue_graph_node {
-                queue_graph.add_edge(
-                    from_meta.queue_graph_node,
-                    to_meta.queue_graph_node,
-                    (),
-                );
+                queue_graph.add_edge(from_meta.queue_graph_node, to_meta.queue_graph_node, ());
             }
         }
         // populate prev_stage_submission_info
@@ -552,8 +543,7 @@ impl ScheduleBuildPass for RenderSystemPass {
 
         // Step 1.5: Disperse semaphores
         // Step 1.5.1: Assign semaphore IDs
-        let mut queue_graph_reduced =
-            bevy::utils::petgraph::graphmap::DiGraphMap::<u32, ()>::new();
+        let mut queue_graph_reduced = bevy::utils::petgraph::graphmap::DiGraphMap::<u32, ()>::new();
         for edge in reduction.edge_references() {
             let src = queue_nodes_topo_sorted[edge.source() as usize];
             let dst = queue_nodes_topo_sorted[edge.target() as usize];

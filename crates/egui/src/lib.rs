@@ -21,12 +21,11 @@ use bevy_egui::egui::epaint::ImageDelta;
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::{
-    acquire_swapchain_image, ash,
+    acquire_swapchain_image,
     ash::{extensions::khr, vk},
     buffer::staging::StagingBelt,
     commands::{
-        CommonCommands, GraphicsCommands, RenderPassCommands, ResourceTransitionCommands,
-        TransferCommands,
+        GraphicsCommands, RenderPassCommands, ResourceTransitionCommands, TransferCommands,
     },
     ecs::{BarrierProducerOut, Barriers, IntoRenderSystemConfigs},
     ecs::{PerFrame, PerFrameResource, RenderCommands, RenderImage, RenderRes},
@@ -529,7 +528,7 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     mut staging_belt: ResMut<StagingBelt>,
 ) {
-    let Ok(mut output) = egui_render_output.get_single_mut() else {
+    let Ok(output) = egui_render_output.get_single_mut() else {
         return;
     };
     if output.textures_delta.set.is_empty() {
@@ -636,7 +635,7 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
                 stage: vk::PipelineStageFlags2::COPY,
             },
             false,
-            ()
+            (),
         );
     }
 
@@ -648,7 +647,7 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
                 stage: vk::PipelineStageFlags2::COPY,
             },
             false,
-            ()
+            (),
         );
     }
 }
@@ -692,7 +691,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
     mut egui_render_output: Query<(&mut EguiRenderOutput, &mut SwapchainImage), Filter>,
     egui_pipeline: Res<EguiPipelines>,
 ) -> bool {
-    let (mut output, mut swapchain_image) = match egui_render_output.get_single_mut() {
+    let (mut output, swapchain_image) = match egui_render_output.get_single_mut() {
         Ok(r) => r,
         Err(QuerySingleError::NoEntities(_)) => return false,
         Err(QuerySingleError::MultipleEntities(_)) => panic!(),
@@ -746,7 +745,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
                 access: vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
             },
             true,
-            ()
+            (),
         );
     }
     if device_buffer.index_buffer.len() > 0 {
@@ -757,7 +756,7 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
                 access: vk::AccessFlags2::INDEX_READ,
             },
             true,
-            ()
+            (),
         );
     }
     true

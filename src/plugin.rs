@@ -14,7 +14,7 @@ use std::{
 };
 
 use crate::{
-    ecs::{DefaultCommandPool, PerFrame, RenderSystemPass},
+    ecs::RenderSystemPass,
     extensions::{DeviceExtension, InstanceExtension, PromotedDeviceExtension},
     Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, QueuesRouter, Version,
 };

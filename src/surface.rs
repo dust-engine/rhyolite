@@ -8,7 +8,7 @@ use raw_window_handle::{
     DisplayHandle, HasDisplayHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
 };
 
-use crate::{plugin::RhyoliteApp, HasDevice, Instance, PhysicalDevice};
+use crate::{plugin::RhyoliteApp, Instance, PhysicalDevice};
 
 pub struct SurfacePlugin {}
 

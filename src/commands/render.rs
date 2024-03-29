@@ -1,6 +1,6 @@
 use ash::vk::{self};
 
-use crate::{ecs::queue_cap::IsGraphicsQueueCap, Device, HasDevice, QueueRef, QueueType};
+use crate::{ecs::queue_cap::IsGraphicsQueueCap, Device, HasDevice, QueueRef};
 
 use super::CommandRecorder;
 

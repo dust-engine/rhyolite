@@ -6,7 +6,7 @@ use bevy::{
     utils::smallvec::SmallVec,
 };
 
-use crate::{semaphore::TimelineSemaphore, Device, HasDevice};
+use crate::semaphore::TimelineSemaphore;
 
 use super::{queue_cap::IsQueueCap, QueueSubmissionInfo, RenderCommands};
 

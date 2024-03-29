@@ -22,16 +22,16 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     ffi::CString,
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{Arc, Mutex},
 };
 
-use ash::vk::{self, Handle};
+use ash::vk;
 use bevy::{
     core::FrameCount,
     ecs::{
         archetype::ArchetypeComponentId,
         component::ComponentId,
-        system::{Res, ResMut, Resource, System, SystemMeta, SystemParam},
+        system::{Res, Resource, System, SystemMeta, SystemParam},
         world::World,
     },
     utils::smallvec::SmallVec,
@@ -45,9 +45,9 @@ use crate::{
     debug::DebugCommands,
     ecs::Barriers,
     queue::QueueType,
-    semaphore::{TimelineSemaphore},
+    semaphore::TimelineSemaphore,
     utils::Dispose,
-    Device, HasDevice, QueueRef, QueuesRouter,
+    Device, HasDevice, QueueRef,
 };
 
 use super::{
@@ -370,16 +370,16 @@ unsafe impl<'s> SystemParam for SubmissionInfo<'s> {
     type Item<'world, 'state> = SubmissionInfo<'state>;
 
     fn init_state(
-        world: &mut World,
-        system_meta: &mut bevy::ecs::system::SystemMeta,
+        _world: &mut World,
+        _system_meta: &mut bevy::ecs::system::SystemMeta,
     ) -> Self::State {
         None
     }
     fn configurate(
         state: &mut Self::State,
         config: &mut dyn Any,
-        meta: &mut SystemMeta,
-        world: &mut World,
+        _meta: &mut SystemMeta,
+        _world: &mut World,
     ) {
         if let Some(a) = config.downcast_mut::<RenderSystemInitialState>() {
             *state = Some((a.queue_submission_info.clone(), a.queue));
@@ -388,9 +388,9 @@ unsafe impl<'s> SystemParam for SubmissionInfo<'s> {
     }
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
-        system_meta: &bevy::ecs::system::SystemMeta,
-        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        change_tick: bevy::ecs::component::Tick,
+        _system_meta: &bevy::ecs::system::SystemMeta,
+        _world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        _change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         let (info, queue) = state.as_ref().unwrap();
         SubmissionInfo {
@@ -411,7 +411,6 @@ pub struct TimelineSemaphoreOp {
     pub semaphore: Arc<TimelineSemaphore>,
     pub access: Access,
 }
-
 
 pub struct RenderSystemInitialState {
     pub queue: QueueRef,
@@ -508,14 +507,14 @@ pub(crate) fn submit_system_graph(
         })
         .collect();
     submission_info.cmd_bufs.clear();
-    let mut semaphore_signals =
-        submission_info.signal_semaphore.iter().map(|semaphore| {
-            vk::SemaphoreSubmitInfo {
-                semaphore: semaphore.raw(),
-                value: submission_info.signal_semaphore_value,
-                stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                ..Default::default()
-            }
+    let mut semaphore_signals = submission_info
+        .signal_semaphore
+        .iter()
+        .map(|semaphore| vk::SemaphoreSubmitInfo {
+            semaphore: semaphore.raw(),
+            value: submission_info.signal_semaphore_value,
+            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            ..Default::default()
         })
         .collect::<Vec<_>>();
     let mut semaphore_waits = submission_info
@@ -564,7 +563,7 @@ pub(crate) fn submit_system_graph(
             )
             .unwrap();
     }
-    
+
     submission_info.signal_semaphore_value += 1;
     submission_info.wait_semaphores.clear();
     submission_info.signal_binary_semaphore = vk::Semaphore::null();
@@ -658,7 +657,6 @@ impl System for InsertPipelineBarrier {
         for i in self.barrier_producers.iter_mut() {
             let mut dropped = false;
             let barrier = Barriers {
-                device: self.device.as_ref().unwrap(),
                 image_barriers: &mut image_barriers,
                 buffer_barriers: &mut buffer_barriers,
                 global_barriers: &mut global_barriers,
@@ -717,12 +715,12 @@ impl System for InsertPipelineBarrier {
                 BarriersPrevStage::Image { barrier, .. } => {
                     prev_submission_info.trailing_image_barriers.push(barrier)
                 }
-                BarriersPrevStage::SignalBinarySemaphore { stage, semaphore, .. } => {
-                    prev_submission_info.signal_binary_semaphore(semaphore, stage)
-                }
-                BarriersPrevStage::WaitBinarySemaphore { stage, semaphore, .. } => {
-                    prev_submission_info.wait_binary_semaphore(semaphore, stage)
-                }
+                BarriersPrevStage::SignalBinarySemaphore {
+                    stage, semaphore, ..
+                } => prev_submission_info.signal_binary_semaphore(semaphore, stage),
+                BarriersPrevStage::WaitBinarySemaphore {
+                    stage, semaphore, ..
+                } => prev_submission_info.wait_binary_semaphore(semaphore, stage),
             }
         }
 
@@ -823,15 +821,15 @@ unsafe impl<T: 'static> SystemParam for BarrierProducerOut<T> {
 
     type Item<'world, 'state> = BarrierProducerOut<T>;
 
-    fn init_state(world: &mut World, system_meta: &mut SystemMeta) -> Self::State {
+    fn init_state(_world: &mut World, _system_meta: &mut SystemMeta) -> Self::State {
         None
     }
 
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
-        system_meta: &SystemMeta,
-        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        change_tick: bevy::ecs::component::Tick,
+        _system_meta: &SystemMeta,
+        _world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        _change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         let state = state.as_mut().unwrap();
         let cell = state.0.get().as_mut().unwrap();
@@ -841,8 +839,8 @@ unsafe impl<T: 'static> SystemParam for BarrierProducerOut<T> {
     fn configurate(
         state: &mut Self::State,
         config: &mut dyn Any,
-        meta: &mut SystemMeta,
-        world: &mut World,
+        _meta: &mut SystemMeta,
+        _world: &mut World,
     ) {
         let Some(config) = config.downcast_mut::<Option<BarrierProducerOutConfig>>() else {
             return;

@@ -26,6 +26,15 @@ pub struct PipelineCache {
     shader_generations: HashMap<AssetId<ShaderModule>, u32>,
     hot_reload_enabled: bool,
 }
+impl Drop for PipelineCache {
+    fn drop(&mut self) {
+        if self.cache != vk::PipelineCache::null() {
+            unsafe {
+                self.device.destroy_pipeline_cache(self.cache, None);
+            }
+        }
+    }
+}
 
 impl FromWorld for PipelineCache {
     fn from_world(world: &mut bevy::ecs::world::World) -> Self {

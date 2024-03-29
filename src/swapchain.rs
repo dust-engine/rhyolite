@@ -1,26 +1,22 @@
-use std::{
-    borrow::BorrowMut,
-    collections::BTreeSet,
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
+use std::{collections::BTreeSet, ops::Deref, sync::Arc};
 
 use ash::{extensions::khr, prelude::VkResult, vk};
-use bevy::{app::{App, Plugin, PostUpdate}, utils::smallvec::SmallVec};
 use bevy::ecs::{
     prelude::*,
     query::{QueryFilter, QuerySingleError},
 };
 use bevy::window::{PrimaryWindow, Window};
+use bevy::{
+    app::{App, Plugin, PostUpdate},
+    utils::smallvec::SmallVec,
+};
 
 use crate::{
     commands::{ResourceTransitionCommands, TrackedResource},
-    ecs::{
-        Barriers, IntoRenderSystemConfigs, RenderImage, RenderSystemPass,
-    },
+    ecs::{Barriers, IntoRenderSystemConfigs, RenderImage, RenderSystemPass},
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
-    Access, Device, HasDevice, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter,
+    Access, Device, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter,
     Surface,
 };
 
@@ -185,8 +181,12 @@ impl Swapchain {
                             },
                             None,
                         )?;
-                        let present_semaphore = device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap();
-                        let acquire_semaphore = device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap();
+                        let present_semaphore = device
+                            .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                            .unwrap();
+                        let acquire_semaphore = device
+                            .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                            .unwrap();
                         let mut img = RenderImage::new(SwapchainImageInner {
                             image,
                             indice: i as u32,
@@ -199,10 +199,13 @@ impl Swapchain {
                         img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                         Ok(Some(img))
                     })
-                    .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?.into(),
+                    .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?
+                    .into(),
                 inner,
                 // Create one extra semaphore for the first acquire
-                acquire_semaphore: device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
+                acquire_semaphore: device
+                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                    .unwrap(),
             })
         }
     }
@@ -299,7 +302,8 @@ impl Swapchain {
                     img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                     Ok(Some(img))
                 })
-                .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?.into();
+                .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?
+                .into();
         }
         Ok(())
     }
@@ -591,29 +595,46 @@ fn get_surface_preferred_format(
 #[derive(Component)]
 pub struct SwapchainImage {
     inner: Option<RenderImage<SwapchainImageInner>>,
-    
+
     acquire_semaphore: vk::Semaphore,
     present_semaphore: vk::Semaphore,
 }
 impl TrackedResource for SwapchainImage {
     type State = vk::ImageLayout;
 
-
-    fn transition(&mut self, access: Access, retain_data: bool, next_state: Self::State, commands: &mut impl ResourceTransitionCommands) {
-        let image = self.inner.as_mut().expect("SwapchainAcquire must have been called");
+    fn transition(
+        &mut self,
+        access: Access,
+        retain_data: bool,
+        next_state: Self::State,
+        commands: &mut impl ResourceTransitionCommands,
+    ) {
+        let image = self
+            .inner
+            .as_mut()
+            .expect("SwapchainAcquire must have been called");
 
         if image.res.state.write_semaphore.is_none() || image.res.state.read_semaphores.is_empty() {
             assert!(self.acquire_semaphore != vk::Semaphore::null());
-            commands.wait_binary_semaphore(std::mem::take(&mut self.acquire_semaphore), access.stage);
+            commands
+                .wait_binary_semaphore(std::mem::take(&mut self.acquire_semaphore), access.stage);
         }
-        <RenderImage::<SwapchainImageInner> as TrackedResource>::transition(image, access, retain_data, next_state, commands);
+        <RenderImage<SwapchainImageInner> as TrackedResource>::transition(
+            image,
+            access,
+            retain_data,
+            next_state,
+            commands,
+        );
     }
 }
 impl Deref for SwapchainImage {
     type Target = SwapchainImageInner;
 
     fn deref(&self) -> &Self::Target {
-        self.inner.as_ref().expect("SwapchainAcquire must have been called")
+        self.inner
+            .as_ref()
+            .expect("SwapchainAcquire must have been called")
     }
 }
 
@@ -700,7 +721,12 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
             .inner
             .device
             .extension::<khr::Swapchain>()
-            .acquire_next_image(swapchain.inner.inner, !0, swapchain.acquire_semaphore, vk::Fence::null())
+            .acquire_next_image(
+                swapchain.inner.inner,
+                !0,
+                swapchain.acquire_semaphore,
+                vk::Fence::null(),
+            )
     }
     .unwrap();
     if suboptimal {
@@ -714,7 +740,10 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         swapchain_image.inner.is_none(),
         "Must present the current image before acquiring a new one"
     );
-    std::mem::swap(&mut swapchain.acquire_semaphore, &mut unsafe{image.get_mut()}.acquire_semaphore);
+    std::mem::swap(
+        &mut swapchain.acquire_semaphore,
+        &mut unsafe { image.get_mut() }.acquire_semaphore,
+    );
     swapchain_image.acquire_semaphore = image.acquire_semaphore;
     swapchain_image.present_semaphore = image.present_semaphore;
     swapchain_image.inner = Some(image);
@@ -723,7 +752,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
 fn present_barriers(
     In(mut barriers): In<Barriers>,
     mut query: Query<&mut SwapchainImage>,
-    queues_router: Res<QueuesRouter>
+    queues_router: Res<QueuesRouter>,
 ) {
     for i in query.iter_mut() {
         let i = i.into_inner();
@@ -795,7 +824,6 @@ pub fn present(
     queues_router: Res<QueuesRouter>,
     mut query: Query<(&mut Swapchain, &mut SwapchainImage)>,
 ) {
-
     // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
     // select the best one.
     let present_queue = queues_router.of_type(QueueType::Graphics);

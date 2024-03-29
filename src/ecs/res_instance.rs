@@ -7,7 +7,7 @@ use bevy::{
     ecs::{
         change_detection::{Ticks, TicksMut},
         component::ComponentId,
-        system::{InstancedResource, Res, ResMut, Resource, SystemMeta, SystemParam},
+        system::{InstancedResource, SystemMeta, SystemParam},
         world::World,
     },
     ptr::UnsafeCellDeref,
@@ -132,8 +132,8 @@ unsafe impl<T: InstancedResource> SystemParam for ResInstanceMut<'_, T> {
     type Item<'world, 'state> = ResInstanceMut<'world, T>;
 
     fn init_state(
-        world: &mut bevy::prelude::World,
-        system_meta: &mut bevy::ecs::system::SystemMeta,
+        _world: &mut bevy::prelude::World,
+        _system_meta: &mut bevy::ecs::system::SystemMeta,
     ) -> Self::State {
         None
     }

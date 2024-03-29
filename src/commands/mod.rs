@@ -4,7 +4,10 @@ use ash::vk;
 use bevy::utils::smallvec::SmallVec;
 
 use crate::{
-    access, buffer::BufferLike, ecs::{RenderImage, RenderRes}, semaphore::TimelineSemaphore, Access, Device, HasDevice, ImageLike, QueueRef, QueueType
+    buffer::BufferLike,
+    ecs::{RenderImage, RenderRes},
+    semaphore::TimelineSemaphore,
+    Access, Device, HasDevice, ImageLike, QueueRef,
 };
 
 mod render;
@@ -100,30 +103,42 @@ impl Drop for ImmediateTransitions<'_> {
     }
 }
 
-
 pub trait TrackedResource {
     type State;
-    fn transition(&mut self, access: Access, retain_data: bool, next_state: Self::State, commands: &mut impl ResourceTransitionCommands);
+    fn transition(
+        &mut self,
+        access: Access,
+        retain_data: bool,
+        next_state: Self::State,
+        commands: &mut impl ResourceTransitionCommands,
+    );
 }
-
 
 default impl<T> TrackedResource for RenderRes<T> {
     type State = ();
-    fn transition(&mut self, access: Access, _retain_data: bool, _next_state: Self::State, commands: &mut impl ResourceTransitionCommands) {
+    fn transition(
+        &mut self,
+        access: Access,
+        _retain_data: bool,
+        _next_state: Self::State,
+        commands: &mut impl ResourceTransitionCommands,
+    ) {
         let mut semaphore_transitioned = false;
         let (semaphore, value) = commands.signal_semaphore(access.stage);
         if access.is_readonly() {
             self.state.add_read_semaphore(semaphore, value);
             if let Some((write_semaphore, value)) = &self.state.write_semaphore {
                 semaphore_transitioned |=
-                commands.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+                    commands.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
             if let Some((sem, val)) = self.state.write_semaphore.replace((semaphore, value)) {
-                semaphore_transitioned |= commands.wait_semaphore(Cow::Owned(sem), val, access.stage);
+                semaphore_transitioned |=
+                    commands.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
             for (sem, val) in self.state.read_semaphores.drain(..) {
-                semaphore_transitioned |= commands.wait_semaphore(Cow::Owned(sem), val, access.stage);
+                semaphore_transitioned |=
+                    commands.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
         }
 
@@ -140,10 +155,18 @@ default impl<T> TrackedResource for RenderRes<T> {
     }
 }
 
-
-impl<T> TrackedResource for RenderRes<T> where T: BufferLike {
+impl<T> TrackedResource for RenderRes<T>
+where
+    T: BufferLike,
+{
     type State = ();
-    fn transition(&mut self, access: Access, retain_data: bool, _next_state: Self::State, commands: &mut impl ResourceTransitionCommands) {
+    fn transition(
+        &mut self,
+        access: Access,
+        retain_data: bool,
+        _next_state: Self::State,
+        commands: &mut impl ResourceTransitionCommands,
+    ) {
         let barrier = self.state.transition(access, false);
         let has_queue_family_ownership_transfer =
             if let Some(queue_family) = self.state.queue_family {
@@ -158,7 +181,7 @@ impl<T> TrackedResource for RenderRes<T> where T: BufferLike {
             self.state.add_read_semaphore(semaphore, value);
             if let Some((write_semaphore, value)) = &self.state.write_semaphore {
                 semaphore_transition |=
-                commands.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+                    commands.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
             if let Some((sem, val)) = self
@@ -207,13 +230,21 @@ impl<T> TrackedResource for RenderRes<T> where T: BufferLike {
             });
         }
         self.state.queue_family = Some(commands.current_queue());
-
     }
 }
 
-impl<T> TrackedResource for RenderImage<T> where T: ImageLike {
+impl<T> TrackedResource for RenderImage<T>
+where
+    T: ImageLike,
+{
     type State = vk::ImageLayout;
-    fn transition(&mut self, access: Access, retain_data: bool, layout: Self::State, commands: &mut impl ResourceTransitionCommands) {
+    fn transition(
+        &mut self,
+        access: Access,
+        retain_data: bool,
+        layout: Self::State,
+        commands: &mut impl ResourceTransitionCommands,
+    ) {
         if access.is_readonly() && !retain_data {
             tracing::warn!("Transitioning an image to readonly access without retaining image data. This is likely an error.");
         }
@@ -235,7 +266,7 @@ impl<T> TrackedResource for RenderImage<T> where T: ImageLike {
             self.res.state.add_read_semaphore(semaphore, value);
             if let Some((write_semaphore, value)) = &self.res.state.write_semaphore {
                 semaphore_transitioned |=
-                commands.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
+                    commands.wait_semaphore(Cow::Borrowed(write_semaphore), *value, access.stage);
             }
         } else {
             if let Some((sem, val)) = self
@@ -244,10 +275,12 @@ impl<T> TrackedResource for RenderImage<T> where T: ImageLike {
                 .write_semaphore
                 .replace((semaphore.clone(), value))
             {
-                semaphore_transitioned |= commands.wait_semaphore(Cow::Owned(sem), val, access.stage);
+                semaphore_transitioned |=
+                    commands.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
             for (sem, val) in self.res.state.read_semaphores.drain(..) {
-                semaphore_transitioned |= commands.wait_semaphore(Cow::Owned(sem), val, access.stage);
+                semaphore_transitioned |=
+                    commands.wait_semaphore(Cow::Owned(sem), val, access.stage);
             }
         }
 
@@ -311,10 +344,8 @@ impl<T> TrackedResource for RenderImage<T> where T: ImageLike {
             });
         }
         self.res.state.queue_family = Some(commands.current_queue());
-
     }
 }
-
 
 pub trait ResourceTransitionCommands: Sized {
     fn add_image_barrier_prev_stage(
@@ -342,11 +373,7 @@ pub trait ResourceTransitionCommands: Sized {
         value: u64,
         stage: vk::PipelineStageFlags2,
     ) -> bool;
-    fn wait_binary_semaphore(
-        &mut self,
-        semaphore: vk::Semaphore,
-        stage: vk::PipelineStageFlags2,
-    );
+    fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2);
     /// Ask the current submission to signal a semaphore after executing.
     fn signal_semaphore(&mut self, stage: vk::PipelineStageFlags2)
         -> (Arc<TimelineSemaphore>, u64);
@@ -363,7 +390,13 @@ pub trait ResourceTransitionCommands: Sized {
         prev_queue: QueueRef,
     );
 
-    fn transition<T: TrackedResource>(&mut self, res: &mut T, access: Access, retain_data: bool, next_state: T::State) -> &mut Self {
+    fn transition<T: TrackedResource>(
+        &mut self,
+        res: &mut T,
+        access: Access,
+        retain_data: bool,
+        next_state: T::State,
+    ) -> &mut Self {
         res.transition(access, retain_data, next_state, self);
         self
     }
@@ -421,11 +454,7 @@ impl ResourceTransitionCommands for ImmediateTransitions<'_> {
     ) -> (Arc<TimelineSemaphore>, u64) {
         todo!()
     }
-    fn wait_binary_semaphore(
-            &mut self,
-            semaphore: vk::Semaphore,
-            stage: vk::PipelineStageFlags2,
-        ) {
+    fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
         todo!()
     }
     fn signal_binary_semaphore_prev_stage(
@@ -437,11 +466,11 @@ impl ResourceTransitionCommands for ImmediateTransitions<'_> {
         todo!()
     }
     fn wait_binary_semaphore_prev_stage(
-            &mut self,
-            semaphore: vk::Semaphore,
-            stage: vk::PipelineStageFlags2,
-            prev_queue: QueueRef,
-        ) {
+        &mut self,
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    ) {
         todo!()
     }
 }

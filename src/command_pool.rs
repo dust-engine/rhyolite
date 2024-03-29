@@ -5,7 +5,6 @@ use crate::{Device, HasDevice};
 pub struct CommandPool {
     device: Device,
     raw: vk::CommandPool,
-    queue_family_index: u32,
 }
 impl HasDevice for CommandPool {
     fn device(&self) -> &Device {
@@ -27,11 +26,7 @@ impl CommandPool {
         Ok(Self {
             device,
             raw,
-            queue_family_index,
         })
-    }
-    pub fn queue_family_index(&self) -> u32 {
-        self.queue_family_index
     }
     pub unsafe fn allocate(&mut self) -> VkResult<vk::CommandBuffer> {
         let mut command_buffer = vk::CommandBuffer::null();
@@ -86,9 +81,6 @@ impl ManagedCommandPool {
             allocated_command_buffers: Vec::new(),
             command_buffer_allocation_index: 0,
         })
-    }
-    pub fn queue_family_index(&self) -> u32 {
-        self.pool.queue_family_index()
     }
     /// Returns new command buffer.
     pub fn allocate(&mut self) -> vk::CommandBuffer {
