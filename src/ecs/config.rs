@@ -22,6 +22,7 @@ use super::{QueueSubmissionInfo, RenderSystemPass};
 pub struct RenderSystemConfig {
     /// The render system must be assigned onto a queue supporting these feature flags.
     pub queue: QueueType,
+    /// If enabled, the system will not signal a timeline semaphore.
     pub force_binary_semaphore: bool,
     pub is_queue_op: bool,
     pub barrier_producer_config: Option<RenderSystemBarrierProducerConfig>,
@@ -41,26 +42,6 @@ impl Default for RenderSystemConfig {
             force_binary_semaphore: false,
             is_queue_op: false,
             barrier_producer_config: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct QueueSystemDependencyConfig {
-    pub wait: Access,
-    pub signal: Access,
-}
-impl Default for QueueSystemDependencyConfig {
-    fn default() -> Self {
-        Self {
-            wait: Access {
-                stage: vk::PipelineStageFlags2::ALL_COMMANDS,
-                access: vk::AccessFlags2::MEMORY_WRITE | vk::AccessFlags2::MEMORY_READ,
-            },
-            signal: Access {
-                stage: vk::PipelineStageFlags2::ALL_COMMANDS,
-                access: vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            },
         }
     }
 }

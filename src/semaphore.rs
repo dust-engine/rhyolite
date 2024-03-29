@@ -107,28 +107,3 @@ impl Drop for TimelineSemaphore {
         }
     }
 }
-
-
-pub struct BinarySemaphore {
-    device: Device,
-    semaphore: vk::Semaphore,
-}
-impl Drop for BinarySemaphore {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_semaphore(self.semaphore, None);
-        }
-    }
-}
-impl BinarySemaphore {
-    pub fn new(device: Device) -> VkResult<Self> {
-        let semaphore = unsafe {
-            let info = vk::SemaphoreCreateInfo::builder().build();
-            device.create_semaphore(&info, None)
-        }?;
-        Ok(Self {
-            device,
-            semaphore,
-        })
-    }
-}

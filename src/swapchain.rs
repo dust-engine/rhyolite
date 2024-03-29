@@ -16,7 +16,7 @@ use bevy::window::{PrimaryWindow, Window};
 use crate::{
     commands::{ResourceTransitionCommands, TrackedResource},
     ecs::{
-        Barriers, IntoRenderSystemConfigs, QueueContext, RenderImage, RenderSystemPass,
+        Barriers, IntoRenderSystemConfigs, RenderImage, RenderSystemPass,
     },
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
@@ -48,12 +48,14 @@ impl Plugin for SwapchainPlugin {
                 present
                     .with_option::<RenderSystemPass>(|entry| {
                         let item = entry.or_default();
+                        item.is_queue_op = true;
                         item.force_binary_semaphore = true;
                     })
                     .with_barriers(present_barriers),
                 acquire_swapchain_image::<With<PrimaryWindow>>
                     .with_option::<RenderSystemPass>(|entry| {
                         let item = entry.or_default();
+                        item.is_queue_op = true;
                         item.force_binary_semaphore = true;
                     })
                     .after(extract_swapchains)
@@ -670,7 +672,6 @@ impl ImageViewLike for SwapchainImageInner {
 /// For example, `With<PrimaryWindow>` will only acquire the next image from the swapchain
 /// associated with the primary window.
 pub fn acquire_swapchain_image<Filter: QueryFilter>(
-    mut queue_ctx: QueueContext,
     mut query: Query<
         (
             Entity,
@@ -695,12 +696,11 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         // Technically, we don't have to do this here. With Swapchain_Maintenance1,
         // we could do this in the present workflow which should be more correct.
         // TODO: verify correctness.
-        let fence = queue_ctx.fence_to_wait();
         swapchain
             .inner
             .device
             .extension::<khr::Swapchain>()
-            .acquire_next_image(swapchain.inner.inner, !0, swapchain.acquire_semaphore, fence)
+            .acquire_next_image(swapchain.inner.inner, !0, swapchain.acquire_semaphore, vk::Fence::null())
     }
     .unwrap();
     if suboptimal {
@@ -791,12 +791,10 @@ fn present_barriers(
     }
 }
 pub fn present(
-    mut queue_ctx: QueueContext,
     device: Res<Device>,
     queues_router: Res<QueuesRouter>,
     mut query: Query<(&mut Swapchain, &mut SwapchainImage)>,
 ) {
-    assert!(queue_ctx.binary_signals.is_empty());
 
     // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
     // select the best one.

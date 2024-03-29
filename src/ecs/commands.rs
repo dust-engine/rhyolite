@@ -45,7 +45,7 @@ use crate::{
     debug::DebugCommands,
     ecs::Barriers,
     queue::QueueType,
-    semaphore::{BinarySemaphore, TimelineSemaphore},
+    semaphore::{TimelineSemaphore},
     utils::Dispose,
     Device, HasDevice, QueueRef, QueuesRouter,
 };
@@ -412,181 +412,11 @@ pub struct TimelineSemaphoreOp {
     pub access: Access,
 }
 
-pub struct QueueSystemState {
-    pub queue: QueueRef,
-    pub binary_signals: Vec<BinarySemaphoreOp>,
-    pub binary_waits: Vec<BinarySemaphoreOp>,
-    device: Device,
-
-    /// Map from frame index to retained objects
-    pub retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
-    pub fence_to_wait: BTreeMap<u64, vk::Fence>,
-    pub frame_count_state: ComponentId,
-}
-impl Drop for QueueSystemState {
-    fn drop(&mut self) {
-        // On destuction, wait for everything to finish execution.
-        unsafe {
-            if !self.fence_to_wait.is_empty() {
-                let fence_to_wait: Vec<vk::Fence> = self.fence_to_wait.values().cloned().collect();
-                self.device
-                    .wait_for_fences(&fence_to_wait, true, !0)
-                    .unwrap();
-            }
-            // Now, it's safe to destroy things like `QuerySystemSTate::retained_objects`
-            for fence in self.fence_to_wait.values() {
-                self.device.destroy_fence(*fence, None);
-            }
-        }
-    }
-}
-
-pub struct QueueSystemInitialState {
-    pub queue: QueueRef,
-    pub binary_signals: Vec<BinarySemaphoreOp>,
-    pub binary_waits: Vec<BinarySemaphoreOp>,
-}
 
 pub struct RenderSystemInitialState {
     pub queue: QueueRef,
     pub queue_submission_info: Arc<Mutex<QueueSubmissionInfo>>,
     pub prev_stage_queue_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
-}
-
-pub struct QueueContext<'state> {
-    device: &'state Device,
-    pub queue: QueueRef,
-    pub frame_index: u64,
-    pub binary_signals: &'state [BinarySemaphoreOp],
-    pub binary_waits: &'state [BinarySemaphoreOp],
-    pub(crate) retained_objects: &'state mut Vec<Box<dyn Send + Sync>>,
-    fences: &'state mut BTreeMap<u64, vk::Fence>,
-}
-impl QueueContext<'_> {
-    pub fn retain<T: 'static + Drop + Send + Sync>(&mut self, obj: Dispose<T>) {
-        self.retained_objects.push(unsafe { Box::new(obj.take()) });
-    }
-    /// Returns a fence that the caller MUST wait on.
-    /// Safety:
-    /// - A system may either call this method EVERY FRAME, or NEVER
-    /// - Once called, the returned fence must be used.
-    pub unsafe fn fence_to_wait(&mut self) -> vk::Fence {
-        let num_frame_in_flight = 3;
-
-        let mut fence = vk::Fence::null();
-
-        if self.frame_index > num_frame_in_flight {
-            let fence_to_recycle = self
-                .fences
-                .remove(&(self.frame_index - num_frame_in_flight));
-            if let Some(fence_to_recycle) = fence_to_recycle {
-                unsafe {
-                    self.device.reset_fences(&[fence_to_recycle]).unwrap();
-                }
-                fence = fence_to_recycle;
-            }
-        }
-
-        if fence == vk::Fence::null() {
-            // create a new fence
-            unsafe {
-                fence = self
-                    .device
-                    .create_fence(&vk::FenceCreateInfo::default(), None)
-                    .unwrap()
-            }
-        };
-        let old = self.fences.insert(self.frame_index, fence);
-        assert!(old.is_none());
-        fence
-    }
-}
-
-unsafe impl SystemParam for QueueContext<'_> {
-    type State = QueueSystemState;
-
-    type Item<'world, 'state> = QueueContext<'state>;
-
-    fn init_state(
-        world: &mut World,
-        _system_meta: &mut bevy::ecs::system::SystemMeta,
-    ) -> Self::State {
-        let frame_count_state: ComponentId = Res::<FrameCount>::init_state(world, _system_meta);
-        QueueSystemState {
-            device: world.resource::<Device>().clone(),
-            queue: QueueRef::default(),
-            binary_signals: Vec::new(),
-            binary_waits: Vec::new(),
-            retained_objects: BTreeMap::new(),
-            fence_to_wait: BTreeMap::new(),
-            frame_count_state,
-        }
-    }
-
-    fn default_configs(config: &mut bevy::utils::ConfigMap) {
-        let config = config.entry::<RenderSystemConfig>().or_default();
-        config.is_queue_op = true;
-    }
-    fn configurate(
-        state: &mut Self::State,
-        config: &mut dyn Any,
-        _world: &mut SystemMeta,
-        world: &mut World,
-    ) {
-        if config.is::<QueueSystemInitialState>() {
-            let initial_state: &mut QueueSystemInitialState = config.downcast_mut().unwrap();
-            state.queue = initial_state.queue;
-            state.binary_signals = std::mem::take(&mut initial_state.binary_signals);
-            state.binary_waits = std::mem::take(&mut initial_state.binary_waits);
-            return;
-        }
-    }
-
-    unsafe fn get_param<'world, 'state>(
-        state: &'state mut Self::State,
-        system_meta: &bevy::ecs::system::SystemMeta,
-        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        change_tick: bevy::ecs::component::Tick,
-    ) -> Self::Item<'world, 'state> {
-        let current_frame_index = Res::<FrameCount>::get_param(
-            &mut state.frame_count_state,
-            system_meta,
-            world,
-            change_tick,
-        )
-        .into_inner()
-        .0;
-
-        let num_frame_in_flight = 3;
-
-        if current_frame_index >= num_frame_in_flight {
-            let wait_value = current_frame_index - num_frame_in_flight;
-            if let Some(&fence) = state.fence_to_wait.get(&wait_value) {
-                unsafe {
-                    state.device.wait_for_fences(&[fence], true, !0).unwrap();
-                    // This fence will later be cleaned up by a call to fence_to_wait
-                }
-            }
-
-            let objs = state.retained_objects.remove(&wait_value).unwrap();
-            drop(objs);
-        }
-
-        let retained_objects: &mut Vec<Box<dyn Send + Sync>> = state
-            .retained_objects
-            .entry(current_frame_index)
-            .or_default();
-
-        QueueContext {
-            device: &state.device,
-            queue: state.queue,
-            frame_index: current_frame_index,
-            binary_signals: &state.binary_signals,
-            binary_waits: &state.binary_waits,
-            retained_objects,
-            fences: &mut state.fence_to_wait,
-        }
-    }
 }
 
 pub(crate) fn flush_system_graph(
@@ -615,7 +445,6 @@ pub(crate) fn flush_system_graph(
 pub(crate) fn submit_system_graph(
     mut default_cmd_pool: ResInstanceMut<PerFrame<DefaultCommandPool>>,
     submission_info: SubmissionInfo,
-    queue_ctx: QueueContext,
     device: Res<Device>,
     frame_index: Res<FrameCount>,
 ) {
@@ -624,7 +453,7 @@ pub(crate) fn submit_system_graph(
         submission_info.info,
         (&device, submission_info.queue.family),
     );
-
+    let queue = submission_info.queue;
     let mut submission_info = submission_info.info.lock().unwrap();
     // Record the trailing pipeline barrier
     if !submission_info.cmd_bufs.is_empty() || !submission_info.cmd_bufs.is_empty() {
@@ -717,7 +546,7 @@ pub(crate) fn submit_system_graph(
     }
 
     unsafe {
-        let queue = device.get_raw_queue(queue_ctx.queue);
+        let queue = device.get_raw_queue(queue);
         device
             .queue_submit2(
                 queue,
