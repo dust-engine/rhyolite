@@ -1,3 +1,5 @@
+use std::ops::DerefMut;
+
 use ash::vk;
 
 use bevy::app::{PluginGroup, Update};
@@ -110,13 +112,13 @@ fn clear_main_window_color_barrier(
     let Ok(mut swapchain_image) = windows.get_single_mut() else {
         return;
     };
-    barriers.transition_image(
-        &mut *swapchain_image,
+    barriers.transition(
+    swapchain_image.into_inner().deref_mut(),
         Access {
             stage: vk::PipelineStageFlags2::CLEAR,
             access: vk::AccessFlags2::TRANSFER_WRITE,
         },
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         false,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
     );
 }

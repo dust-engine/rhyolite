@@ -29,7 +29,7 @@ use crate::{
     ecs::{
         BarrierProducerOutConfig, BinarySemaphoreOp, DefaultCommandPool, PerFrame,
         QueueSubmissionInfo, QueueSystemDependencyConfig, QueueSystemInitialState,
-        RenderSystemInitialState, RenderSystemsBinarySemaphoreTracker, ResInstanceConfig,
+        RenderSystemInitialState, ResInstanceConfig,
     },
     queue::{QueueRef, QueuesRouter},
     semaphore::TimelineSemaphore,
@@ -669,9 +669,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             );
         }
         let device: &Device = world.resource();
-        let binary_semaphores =
-            RenderSystemsBinarySemaphoreTracker::new(device.clone(), binary_semaphore_id as usize);
-        world.insert_resource(binary_semaphores);
 
         // Step 2: inside each queue, insert pipeline barriers.
         for (queue_node_i, queue_node) in self.queue_graph_nodes.iter().enumerate() {

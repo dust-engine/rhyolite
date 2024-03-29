@@ -45,7 +45,7 @@ use crate::{
     debug::DebugCommands,
     ecs::Barriers,
     queue::QueueType,
-    semaphore::TimelineSemaphore,
+    semaphore::{BinarySemaphore, TimelineSemaphore},
     utils::Dispose,
     Device, HasDevice, QueueRef, QueuesRouter,
 };
@@ -117,8 +117,10 @@ pub struct QueueSubmissionInfo {
 
     pub(crate) signal_semaphore: Option<Arc<TimelineSemaphore>>,
     pub(crate) signal_semaphore_value: u64,
+    pub(crate) signal_binary_semaphore: vk::Semaphore,
     pub(crate) wait_semaphores:
         SmallVec<[(vk::PipelineStageFlags2, Arc<TimelineSemaphore>, u64); 4]>,
+    pub(crate) wait_binary_semaphore: vk::Semaphore,
 }
 unsafe impl Send for QueueSubmissionInfo {}
 unsafe impl Sync for QueueSubmissionInfo {}
@@ -151,12 +153,32 @@ impl QueueSubmissionInfo {
 
     pub fn signal_semaphore(
         &mut self,
-        stage: vk::PipelineStageFlags2,
+        _stage: vk::PipelineStageFlags2,
     ) -> (Arc<TimelineSemaphore>, u64) {
         if let Some(signal_semaphore) = self.signal_semaphore.as_ref() {
             return (signal_semaphore.clone(), self.signal_semaphore_value);
         }
         panic!("This queue operation is unable to signal a timeline semaphore");
+    }
+    pub fn signal_binary_semaphore(
+        &mut self,
+        semaphore: vk::Semaphore,
+        _stage: vk::PipelineStageFlags2,
+    ) {
+        if self.signal_binary_semaphore != vk::Semaphore::null() {
+            panic!()
+        }
+        self.signal_binary_semaphore = semaphore;
+    }
+    pub fn wait_binary_semaphore(
+        &mut self,
+        semaphore: vk::Semaphore,
+        _stage: vk::PipelineStageFlags2,
+    ) {
+        if self.wait_binary_semaphore != vk::Semaphore::null() {
+            panic!()
+        }
+        self.wait_binary_semaphore = semaphore;
     }
 }
 
@@ -215,7 +237,6 @@ where
 pub struct RenderCommandState {
     device: Device,
     default_cmd_pool_state: Option<ComponentId>,
-    queues_router_state: ComponentId,
     retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
     prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
@@ -237,12 +258,10 @@ where
     ) -> Self::State {
         let default_cmd_pool_state =
             ResInstanceMut::<PerFrame<DefaultCommandPool>>::init_state(world, system_meta);
-        let queues_router_state = Res::<QueuesRouter>::init_state(world, system_meta);
         let frame_index_state = Res::<FrameCount>::init_state(world, system_meta);
         RenderCommandState {
             device: world.resource::<Device>().clone(),
             default_cmd_pool_state,
-            queues_router_state,
             retained_objects: BTreeMap::new(),
             submission_info: None,
             prev_stage_submission_info: SmallVec::new(),
@@ -300,12 +319,6 @@ where
                 world,
                 change_tick,
             );
-        let queues_router = Res::<QueuesRouter>::get_param(
-            &mut state.queues_router_state,
-            system_meta,
-            world,
-            change_tick,
-        );
         let default_cmd_pool: &'world mut _ = default_cmd_pool.into_inner();
         let default_cmd_pool = default_cmd_pool.on_frame_index(
             current_frame_index,
@@ -581,7 +594,6 @@ pub(crate) fn flush_system_graph(
     frame_index: Res<FrameCount>,
     submission_info: SubmissionInfo,
     device: Res<Device>,
-    queues_router: Res<QueuesRouter>,
 ) {
     let default_cmd_pool = default_cmd_pool.on_frame_index(
         frame_index.0,
@@ -599,18 +611,13 @@ pub(crate) fn flush_system_graph(
     }
     // TODO: take care of unused remaining timeline semaphores
 }
-// So, what happens if multiple systems get assigned to the same queue?
-// flush_system_graph will only run once for that particular queue.
-// If they were assigned to different queues,
-// flush_system_graph will run multiple times, once for each queue.
+
 pub(crate) fn submit_system_graph(
     mut default_cmd_pool: ResInstanceMut<PerFrame<DefaultCommandPool>>,
     submission_info: SubmissionInfo,
     queue_ctx: QueueContext,
-    binary_semaphore_tracker: Res<RenderSystemsBinarySemaphoreTracker>,
     device: Res<Device>,
     frame_index: Res<FrameCount>,
-    queues_router: Res<QueuesRouter>,
 ) {
     let default_cmd_pool = default_cmd_pool.on_frame_index(
         frame_index.0,
@@ -672,54 +679,43 @@ pub(crate) fn submit_system_graph(
         })
         .collect();
     submission_info.cmd_bufs.clear();
-    let semaphore_signals =
-        queue_ctx
-            .binary_signals
-            .iter()
-            .map(|op| vk::SemaphoreSubmitInfo {
-                semaphore: binary_semaphore_tracker.signal(op.index),
-                value: 0,
-                stage_mask: op.access.stage,
+    let mut semaphore_signals =
+        submission_info.signal_semaphore.iter().map(|semaphore| {
+            vk::SemaphoreSubmitInfo {
+                semaphore: semaphore.raw(),
+                value: submission_info.signal_semaphore_value,
+                stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
                 ..Default::default()
-            })
-            .chain(submission_info.signal_semaphore.iter().map(|semaphore| {
-                vk::SemaphoreSubmitInfo {
-                    semaphore: semaphore.raw(),
-                    value: submission_info.signal_semaphore_value,
-                    stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                    ..Default::default()
-                }
-            }))
-            .collect::<Vec<_>>();
-    let semaphore_waits = queue_ctx
-        .binary_waits
-        .iter()
-        .filter_map(|op| {
-            let semaphore = binary_semaphore_tracker.wait(op.index)?;
-            let raw = semaphore.raw();
-            queue_ctx.retained_objects.push(Box::new(semaphore));
-            let info = vk::SemaphoreSubmitInfo {
-                semaphore: raw,
-                value: 0,
-                stage_mask: op.access.stage,
-                ..Default::default()
-            };
-            Some(info)
+            }
         })
-        .chain(
-            submission_info
-                .wait_semaphores
-                .iter()
-                .map(|(stage, semaphore, value)| vk::SemaphoreSubmitInfo {
-                    semaphore: semaphore.raw(),
-                    value: *value,
-                    stage_mask: *stage,
-                    ..Default::default()
-                }),
-        )
         .collect::<Vec<_>>();
-    submission_info.signal_semaphore_value += 1;
-    submission_info.wait_semaphores.clear();
+    let mut semaphore_waits = submission_info
+        .wait_semaphores
+        .iter()
+        .map(|(stage, semaphore, value)| vk::SemaphoreSubmitInfo {
+            semaphore: semaphore.raw(),
+            value: *value,
+            stage_mask: *stage,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    if submission_info.signal_binary_semaphore != vk::Semaphore::null() {
+        semaphore_signals.push(vk::SemaphoreSubmitInfo {
+            semaphore: submission_info.signal_binary_semaphore,
+            value: 0,
+            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            ..Default::default()
+        });
+    }
+    if submission_info.wait_binary_semaphore != vk::Semaphore::null() {
+        semaphore_waits.push(vk::SemaphoreSubmitInfo {
+            semaphore: submission_info.wait_binary_semaphore,
+            value: 0,
+            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            ..Default::default()
+        });
+    }
+
     unsafe {
         let queue = device.get_raw_queue(queue_ctx.queue);
         device
@@ -739,6 +735,11 @@ pub(crate) fn submit_system_graph(
             )
             .unwrap();
     }
+    
+    submission_info.signal_semaphore_value += 1;
+    submission_info.wait_semaphores.clear();
+    submission_info.signal_binary_semaphore = vk::Semaphore::null();
+    submission_info.wait_binary_semaphore = vk::Semaphore::null();
 }
 
 pub(crate) struct InsertPipelineBarrier {
@@ -887,6 +888,12 @@ impl System for InsertPipelineBarrier {
                 BarriersPrevStage::Image { barrier, .. } => {
                     prev_submission_info.trailing_image_barriers.push(barrier)
                 }
+                BarriersPrevStage::SignalBinarySemaphore { stage, semaphore, .. } => {
+                    prev_submission_info.signal_binary_semaphore(semaphore, stage)
+                }
+                BarriersPrevStage::WaitBinarySemaphore { stage, semaphore, .. } => {
+                    prev_submission_info.wait_binary_semaphore(semaphore, stage)
+                }
             }
         }
 
@@ -971,88 +978,6 @@ impl System for InsertPipelineBarrier {
                 &mut self.system_meta,
                 world,
             );
-        }
-    }
-}
-
-pub struct RecycledBinarySemaphore {
-    semaphore: vk::Semaphore,
-    sender: crossbeam_channel::Sender<vk::Semaphore>,
-}
-impl RecycledBinarySemaphore {
-    pub fn raw(&self) -> vk::Semaphore {
-        self.semaphore
-    }
-}
-impl Drop for RecycledBinarySemaphore {
-    fn drop(&mut self) {
-        self.sender.send(self.semaphore).unwrap();
-    }
-}
-#[derive(Resource)]
-pub struct RenderSystemsBinarySemaphoreTracker {
-    device: Device,
-    sender: crossbeam_channel::Sender<vk::Semaphore>,
-    receiver: crossbeam_channel::Receiver<vk::Semaphore>,
-    semaphores: Vec<AtomicU64>,
-}
-impl Drop for RenderSystemsBinarySemaphoreTracker {
-    fn drop(&mut self) {
-        while let Ok(sem) = self.receiver.try_recv() {
-            unsafe {
-                self.device.destroy_semaphore(sem, None);
-            }
-            for sem in self.semaphores.iter_mut() {
-                let val = sem.get_mut();
-                assert!(*val == 0);
-            }
-        }
-    }
-}
-impl RenderSystemsBinarySemaphoreTracker {
-    pub fn new(device: Device, max_semaphore: usize) -> Self {
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        Self {
-            device,
-            sender,
-            receiver,
-            semaphores: (0..max_semaphore).map(|_| AtomicU64::new(0)).collect(),
-        }
-    }
-    pub fn signal(&self, index: u32) -> vk::Semaphore {
-        let semaphore = match self.receiver.try_recv() {
-            Ok(semaphore) => semaphore,
-            Err(crossbeam_channel::TryRecvError::Empty) => {
-                let semaphore = unsafe {
-                    self.device
-                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                        .unwrap()
-                };
-                semaphore
-            }
-            Err(crossbeam_channel::TryRecvError::Disconnected) => panic!(),
-        };
-        self.semaphores[index as usize]
-            .compare_exchange(
-                0,
-                semaphore.as_raw(),
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-            )
-            .expect("Double signal");
-        semaphore
-    }
-    pub fn wait(&self, index: u32) -> Option<RecycledBinarySemaphore> {
-        let semaphore =
-            self.semaphores[index as usize].swap(0, std::sync::atomic::Ordering::Relaxed);
-        let semaphore = vk::Semaphore::from_raw(semaphore);
-        if semaphore == vk::Semaphore::null() {
-            None
-        } else {
-            Some(RecycledBinarySemaphore {
-                semaphore,
-                sender: self.sender.clone(),
-            })
         }
     }
 }

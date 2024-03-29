@@ -5,7 +5,7 @@
 #![feature(noop_waker)]
 #![feature(ptr_metadata)]
 #![feature(alloc_layout_extra)]
-#![feature(core_intrinsics)]
+#![feature(specialization)]
 
 mod access;
 mod alloc;

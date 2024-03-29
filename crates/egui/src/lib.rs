@@ -511,14 +511,14 @@ fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
             TextureId::Managed(id) => *id,
             TextureId::User(id) => unimplemented!(),
         };
-        barriers.transition_image(
+        barriers.transition(
             &mut device_buffers.textures.get_mut(&texture_id).unwrap().0,
             Access {
                 access: vk::AccessFlags2::TRANSFER_WRITE,
                 stage: vk::PipelineStageFlags2::COPY,
             },
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             !image_delta.is_whole(),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         );
     }
 }
@@ -629,24 +629,26 @@ fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
 ) {
     if device_buffers.total_vertices_count > 0 {
-        barriers.transition_buffer(
+        barriers.transition(
             &mut device_buffers.vertex_buffer,
             Access {
                 access: vk::AccessFlags2::TRANSFER_WRITE,
                 stage: vk::PipelineStageFlags2::COPY,
             },
             false,
+            ()
         );
     }
 
     if device_buffers.total_indices_count > 0 {
-        barriers.transition_buffer(
+        barriers.transition(
             &mut device_buffers.index_buffer,
             Access {
                 access: vk::AccessFlags2::TRANSFER_WRITE,
                 stage: vk::PipelineStageFlags2::COPY,
             },
             false,
+            ()
         );
     }
 }
@@ -706,14 +708,14 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
             TextureId::Managed(id) => *id,
             TextureId::User(id) => unimplemented!(),
         };
-        barriers.transition_image(
+        barriers.transition(
             &mut device_buffer.textures.get_mut(&texture_id).unwrap().0,
             Access {
                 access: vk::AccessFlags2::SHADER_SAMPLED_READ,
                 stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
             },
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             true,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
     }
 
@@ -726,34 +728,36 @@ fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
         return false;
     }
 
-    barriers.transition_image(
-        &mut *swapchain_image,
+    barriers.transition(
+        swapchain_image.into_inner().deref_mut(),
         Access {
             stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
             access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
         },
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         false,
+        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     );
 
     if device_buffer.vertex_buffer.len() > 0 {
-        barriers.transition_buffer(
+        barriers.transition(
             &mut device_buffer.vertex_buffer,
             Access {
                 stage: vk::PipelineStageFlags2::VERTEX_INPUT,
                 access: vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
             },
             true,
+            ()
         );
     }
     if device_buffer.index_buffer.len() > 0 {
-        barriers.transition_buffer(
+        barriers.transition(
             &mut device_buffer.index_buffer,
             Access {
                 stage: vk::PipelineStageFlags2::INDEX_INPUT,
                 access: vk::AccessFlags2::INDEX_READ,
             },
             true,
+            ()
         );
     }
     true

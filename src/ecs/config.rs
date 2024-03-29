@@ -74,12 +74,24 @@ pub(crate) enum BarriersPrevStage {
         barrier: vk::BufferMemoryBarrier2,
         prev_queue: QueueRef,
     },
+    SignalBinarySemaphore {
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    },
+    WaitBinarySemaphore {
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    }
 }
 impl BarriersPrevStage {
     pub fn prev_queue_type(&self) -> QueueRef {
         match self {
             Self::Image { prev_queue, .. } => *prev_queue,
             Self::Buffer { prev_queue, .. } => *prev_queue,
+            Self::SignalBinarySemaphore { prev_queue, .. } => *prev_queue,
+            Self::WaitBinarySemaphore { prev_queue, .. } => *prev_queue,
         }
     }
 }
@@ -179,6 +191,41 @@ impl ResourceTransitionCommands for Barriers {
     ) -> (Arc<TimelineSemaphore>, u64) {
         let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
         submission_info.signal_semaphore(stage)
+    }
+
+    fn signal_binary_semaphore_prev_stage(
+            &mut self,
+            semaphore: vk::Semaphore,
+            stage: vk::PipelineStageFlags2,
+            prev_queue: QueueRef,
+        ) {
+            let current = unsafe { &mut *self.prev_barriers };
+            current.push(BarriersPrevStage::SignalBinarySemaphore {
+                semaphore,
+                stage,
+                prev_queue,
+            });
+    }
+    fn wait_binary_semaphore_prev_stage(
+            &mut self,
+            semaphore: vk::Semaphore,
+            stage: vk::PipelineStageFlags2,
+            prev_queue: QueueRef,
+        ) {
+            let current = unsafe { &mut *self.prev_barriers };
+            current.push(BarriersPrevStage::WaitBinarySemaphore {
+                semaphore,
+                stage,
+                prev_queue,
+            });
+    }
+    fn wait_binary_semaphore(
+            &mut self,
+            semaphore: vk::Semaphore,
+            stage: vk::PipelineStageFlags2,
+        ) {
+            let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
+            submission_info.wait_binary_semaphore(semaphore, stage)
     }
 }
 
