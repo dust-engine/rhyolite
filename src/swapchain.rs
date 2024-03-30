@@ -222,7 +222,6 @@ impl Swapchain {
     }
 
     pub fn recreate(&mut self, info: &SwapchainCreateInfo) -> VkResult<()> {
-        panic!();
         tracing::info!(
             width = %info.image_extent.width,
             height = %info.image_extent.height,
@@ -301,13 +300,20 @@ impl Swapchain {
                         },
                         None,
                     )?;
+                    
+                    let present_semaphore = self.inner.device
+                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                    .unwrap();
+                    let acquire_semaphore = self.inner.device
+                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                        .unwrap();
                     let mut img = RenderImage::new(SwapchainImageInner {
                         image,
                         indice: i as u32,
                         swapchain: self.inner.clone(),
                         view,
-                        present_semaphore: vk::Semaphore::null(),
-                        acquire_semaphore: vk::Semaphore::null(),
+                        present_semaphore,
+                        acquire_semaphore,
                     });
                     img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                     img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
