@@ -479,7 +479,7 @@ pub(crate) fn submit_system_graph(
     let queue = submission_info.queue;
     let mut submission_info = submission_info.info.lock().unwrap();
     // Record the trailing pipeline barrier
-    if !submission_info.cmd_bufs.is_empty() || !submission_info.cmd_bufs.is_empty() {
+    if !submission_info.trailing_buffer_barriers.is_empty() || !submission_info.trailing_image_barriers.is_empty() {
         let cmd_buf = if submission_info.last_buf_open {
             submission_info.cmd_bufs.last().unwrap().clone()
         } else {
@@ -603,7 +603,6 @@ pub(crate) struct InsertPipelineBarrier {
 
     queue_submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
     prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
-    device: Option<Device>,
     queue: QueueRef,
 }
 impl InsertPipelineBarrier {
@@ -614,7 +613,6 @@ impl InsertPipelineBarrier {
             render_command_state: None,
             record_to_next: false,
             queue_submission_info: None,
-            device: None,
             prev_stage_submission_info: SmallVec::new(),
             queue: QueueRef::default(),
         }
@@ -765,7 +763,6 @@ impl System for InsertPipelineBarrier {
             world,
             &mut self.system_meta,
         ));
-        self.device = Some(world.resource::<Device>().clone());
     }
 
     fn update_archetype_component_access(
@@ -816,6 +813,7 @@ impl System for InsertPipelineBarrier {
         } else if let Some(state) = config.downcast_mut::<RenderSystemInitialState>() {
             self.queue_submission_info = Some(state.queue_submission_info.clone());
             self.prev_stage_submission_info = state.prev_stage_queue_submission_info.clone();
+            self.queue = state.queue;
             RenderCommands::<'t'>::configurate(
                 self.render_command_state.as_mut().unwrap(),
                 config,

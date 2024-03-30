@@ -1,5 +1,3 @@
-use std::ops::DerefMut;
-
 use rhyolite::ash::vk;
 
 use bevy::app::{PluginGroup, Update};
@@ -7,15 +5,11 @@ use bevy::ecs::system::Local;
 use bevy::ecs::{
     entity::Entity,
     query::With,
-    system::{In, Query},
 };
 use bevy::window::PrimaryWindow;
-use rhyolite::commands::ResourceTransitionCommands;
 use rhyolite::debug::DebugUtilsPlugin;
 use rhyolite::{
-    commands::CommonCommands,
-    ecs::{Barriers, RenderCommands},
-    Access, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage, SwapchainPlugin,
+    RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainPlugin,
 };
 use rhyolite_egui::{egui, EguiContexts};
 
@@ -34,17 +28,6 @@ fn main() {
     .add_plugins(rhyolite_egui::EguiPlugin::<With<PrimaryWindow>>::default());
 
     app.add_systems(Update, ui_example_system);
-
-    /*
-    app.add_systems(
-        PostUpdate,
-        clear_main_window_color
-            .with_barriers(clear_main_window_color_barrier)
-            .after(acquire_swapchain_image::<With<PrimaryWindow>>)
-            .before(rhyolite_egui::draw::<With<PrimaryWindow>>)
-            .before(present),
-    );
-    */
 
     let primary_window = app
         .world

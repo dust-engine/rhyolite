@@ -170,7 +170,7 @@ where
         let barrier = self.state.transition(access, false);
         let has_queue_family_ownership_transfer =
             if let Some(queue_family) = self.state.queue_family {
-                queue_family != commands.current_queue()
+                queue_family.family != commands.current_queue().family
             } else {
                 false
             };

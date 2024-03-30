@@ -20,6 +20,7 @@ use bevy::{
 use bevy_egui::egui::epaint::ImageDelta;
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
+use rhyolite::commands::CommandRecorder;
 use rhyolite::{
     acquire_swapchain_image,
     ash::{extensions::khr, vk},
@@ -330,19 +331,13 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer
 fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(Entity, &mut EguiRenderOutput), Filter>,
+    mut egui_render_output: Query<(&mut EguiRenderOutput), Filter>,
     commands: RenderCommands<'t'>,
     allocator: Res<Allocator>,
-    mut test: Local<Vec<(TextureId, ImageDelta)>>,
 ) {
-    let Ok((window, mut output)) = egui_render_output.get_single_mut() else {
+    let Ok(output) = egui_render_output.get_single_mut() else {
         return;
     };
-    if output.textures_delta.set.is_empty() {
-        output.textures_delta.set = std::mem::take(&mut test);
-    } else {
-        *test = std::mem::take(&mut output.textures_delta.set);
-    }
 
     let host_buffers = host_buffers.on_frame(&commands, &allocator);
 
@@ -350,7 +345,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     let mut total_indices_count: usize = 0;
     let mut total_vertices_count: usize = 0;
     for egui::epaint::ClippedPrimitive {
-        clip_rect,
+        clip_rect: _,
         primitive,
     } in output.paint_jobs.iter()
     {
