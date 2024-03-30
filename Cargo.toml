@@ -24,7 +24,6 @@ cstr = "0.2"
 thread_local = "1"
 winit = { version = "0.29", default-features = false, features = ["rwh_06"] }
 raw-window-handle = "0.6"
-glam = "0.24"
 arrayvec = "0.7"
 itertools = "0.12"
 vk-mem = "0.3"
@@ -40,6 +39,3 @@ raw-window-metal = "0.4"
 
 [patch.crates-io]
 bevy = { path = "../bevy" }
-
-[dev-dependencies]
-rhyolite_egui = { path = "crates/egui" }

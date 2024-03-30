@@ -119,7 +119,7 @@ fn initialize_pipelines(
 ) {
     let desc0 = DescriptorSetLayout::new(
         device.clone(),
-        &playout_macro::layout!("../../../assets/shaders/draw.playout", 0),
+        &playout_macro::layout!("../assets/shaders/draw.playout", 0),
         vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR,
     )
     .unwrap();

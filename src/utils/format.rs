@@ -1,5 +1,5 @@
 use ash::vk;
-use glam::Vec2;
+use bevy::math::{Mat3, Vec2};
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -570,14 +570,14 @@ impl From<vk::ColorSpaceKHR> for ColorSpace {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColorSpacePrimaries {
-    pub r: glam::Vec2,
-    pub g: glam::Vec2,
-    pub b: glam::Vec2,
-    pub white_point: glam::Vec2,
+    pub r: Vec2,
+    pub g: Vec2,
+    pub b: Vec2,
+    pub white_point: Vec2,
 }
 
 pub mod white_points {
-    use glam::Vec2;
+    use bevy::math::Vec2;
     pub const D65: Vec2 = Vec2::new(0.3127, 0.3290);
     pub const D60: Vec2 = Vec2::new(0.32168, 0.33767);
     pub const E: Vec2 = Vec2::new(0.3333, 0.3333);
@@ -648,8 +648,8 @@ impl ColorSpacePrimaries {
         area
     }
     #[allow(non_snake_case)]
-    pub fn to_xyz(&self) -> glam::Mat3 {
-        use glam::{Mat3, Vec3, Vec3A, Vec4, Vec4Swizzles};
+    pub fn to_xyz(&self) -> Mat3 {
+        use bevy::math::{Vec3, Vec3A, Vec4, Vec4Swizzles};
         let x = Vec4::new(self.r.x, self.g.x, self.b.x, self.white_point.x);
         let y = Vec4::new(self.r.y, self.g.y, self.b.y, self.white_point.y);
         let X = x / y;
@@ -662,9 +662,9 @@ impl ColorSpacePrimaries {
         mat * Mat3::from_diagonal(S.into())
     }
 
-    pub fn to_color_space(&self, other_color_space: &Self) -> glam::Mat3 {
+    pub fn to_color_space(&self, other_color_space: &Self) -> Mat3 {
         if self == other_color_space {
-            return glam::Mat3::IDENTITY;
+            return Mat3::IDENTITY;
         }
         if self == &ColorSpacePrimaries::XYZ {
             return other_color_space.to_xyz().inverse();

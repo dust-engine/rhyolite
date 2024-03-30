@@ -1,6 +1,6 @@
 use std::ops::DerefMut;
 
-use ash::vk;
+use rhyolite::ash::vk;
 
 use bevy::app::{PluginGroup, Update};
 use bevy::ecs::system::Local;
@@ -81,44 +81,4 @@ fn ui_example_system(mut contexts: EguiContexts, mut state: Local<UIState>) {
         }
         ui.label(format!("Hello '{}', age {}", state.name, state.age));
     });
-}
-fn clear_main_window_color(
-    mut commands: RenderCommands<'g'>,
-    mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
-) {
-    let Ok(swapchain_image) = windows.get_single_mut() else {
-        return;
-    };
-    commands.clear_color_image(
-        swapchain_image.image,
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        &vk::ClearColorValue {
-            float32: [0.0, 0.0, 1.0, 1.0],
-        },
-        &[vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        }],
-    );
-}
-
-fn clear_main_window_color_barrier(
-    In(mut barriers): In<Barriers>,
-    mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
-) {
-    let Ok(swapchain_image) = windows.get_single_mut() else {
-        return;
-    };
-    barriers.transition(
-        swapchain_image.into_inner().deref_mut(),
-        Access {
-            stage: vk::PipelineStageFlags2::CLEAR,
-            access: vk::AccessFlags2::TRANSFER_WRITE,
-        },
-        false,
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-    );
 }
