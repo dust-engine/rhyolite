@@ -1,4 +1,4 @@
-use crate::{extensions::DeviceExtension, utils::VkTaggedObject, Version};
+use crate::{utils::VkTaggedObject, Version};
 
 use super::Instance;
 use ash::{

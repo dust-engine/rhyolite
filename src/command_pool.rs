@@ -23,10 +23,7 @@ impl CommandPool {
                 None,
             )?
         };
-        Ok(Self {
-            device,
-            raw,
-        })
+        Ok(Self { device, raw })
     }
     pub unsafe fn allocate(&mut self) -> VkResult<vk::CommandBuffer> {
         let mut command_buffer = vk::CommandBuffer::null();

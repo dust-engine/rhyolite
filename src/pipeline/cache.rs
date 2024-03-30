@@ -10,8 +10,8 @@ use bevy::ecs::{
 };
 
 use crate::deferred::{DeferredOperationTaskPool, Task};
+use crate::dispose::RenderObject;
 use crate::shader::ShaderModule;
-use crate::utils::Dispose;
 use crate::Device;
 
 use super::{
@@ -49,7 +49,7 @@ impl FromWorld for PipelineCache {
 
 pub struct CachedPipeline<T: Pipeline> {
     build_info: Option<T::BuildInfo>,
-    pipeline: Option<T>,
+    pipeline: Option<RenderObject<T>>,
     task: Option<Task<T>>,
     shader_generations: HashMap<AssetId<ShaderModule>, u32>,
 }
@@ -101,7 +101,7 @@ impl PipelineCache {
         cached_pipeline: &'a mut CachedPipeline<GraphicsPipeline>,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-    ) -> Option<(&'a GraphicsPipeline, Option<Dispose<GraphicsPipeline>>)> {
+    ) -> Option<&'a mut RenderObject<GraphicsPipeline>> {
         self.retrieve(cached_pipeline, assets, pool)
     }
     fn retrieve<'a, T: Pipeline>(
@@ -109,13 +109,13 @@ impl PipelineCache {
         cached_pipeline: &'a mut CachedPipeline<T>,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-    ) -> Option<(&'a T, Option<Dispose<T>>)> {
-        let mut old = None;
+    ) -> Option<&'a mut RenderObject<T>> {
         if let Some(pipeline) = &mut cached_pipeline.task {
             if pipeline.is_finished() {
-                old = cached_pipeline.pipeline.take();
-                cached_pipeline.pipeline =
-                    Some(cached_pipeline.task.take().unwrap().unwrap().unwrap());
+                let new_pipeline = cached_pipeline.task.take().unwrap().unwrap().unwrap();
+                cached_pipeline
+                    .pipeline
+                    .replace(RenderObject::new(new_pipeline));
             }
         }
 
@@ -148,8 +148,8 @@ impl PipelineCache {
             }
         }
 
-        if let Some(pipeline) = cached_pipeline.pipeline.as_ref() {
-            return Some((pipeline, old.map(Dispose::new)));
+        if let Some(pipeline) = cached_pipeline.pipeline.as_mut() {
+            return Some(pipeline);
         } else {
             if cached_pipeline.task.is_none() {
                 // schedule
@@ -167,7 +167,6 @@ impl PipelineCache {
                         .build_owned(pool, assets, self.cache);
                 }
             }
-            assert!(old.is_none());
             return None;
         }
     }

@@ -2557,6 +2557,7 @@ dependencies = [
  "cstr",
  "glam 0.24.2",
  "itertools 0.12.1",
+ "once_cell",
  "playout",
  "raw-window-handle 0.6.0",
  "raw-window-metal",

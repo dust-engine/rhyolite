@@ -41,6 +41,11 @@ impl TimelineSemaphore {
     pub fn raw(&self) -> vk::Semaphore {
         self.semaphore
     }
+    pub fn is_signaled(&self, val: u64) -> bool {
+        self.current_value
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= val
+    }
     pub fn wait_blocked(&self, value: u64, timeout: u64) -> VkResult<()> {
         if self
             .current_value

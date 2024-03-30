@@ -15,6 +15,7 @@ pub mod commands;
 pub mod debug;
 mod deferred;
 mod device;
+pub mod dispose;
 pub mod ecs;
 pub mod extensions;
 mod future;

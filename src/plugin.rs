@@ -284,6 +284,9 @@ impl Plugin for RhyolitePlugin {
 
         #[cfg(feature = "glsl")]
         app.add_plugins(crate::shader::loader::GlslPlugin);
+
+        app.add_plugins(crate::staging::StagingBeltPlugin);
+        app.add_plugins(crate::dispose::DisposerPlugin);
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =
@@ -306,8 +309,6 @@ impl Plugin for RhyolitePlugin {
 
         // Add allocator
         app.world.init_resource::<crate::Allocator>();
-        app.world
-            .init_resource::<crate::buffer::staging::StagingBelt>();
         app.world.init_resource::<crate::pipeline::PipelineCache>();
         app.world
             .init_resource::<crate::DeferredOperationTaskPool>();

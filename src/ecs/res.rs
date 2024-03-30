@@ -1,9 +1,12 @@
-use std::ops::Deref;
+use std::{mem::ManuallyDrop, ops::Deref};
 
+use crate::{
+    dispose::{dispose, DisposeObject},
+    semaphore::TimelineSemaphore,
+    ResourceState,
+};
 use ash::vk;
 use bevy::ecs::{component::Component, system::Resource};
-
-use crate::{utils::Dispose, ResourceState};
 
 pub enum State {
     None,
@@ -11,47 +14,54 @@ pub enum State {
     Read,
 }
 
-struct DropMarker;
-impl Drop for DropMarker {
-    fn drop(&mut self) {
-        println!("RenderRes needs to be properly disposed by calling 'retain'.");
-    }
-}
-
 #[derive(Resource, Component)]
-pub struct RenderRes<T> {
-    inner: T,
-    pub(crate) state: ResourceState,
-    drop_marker: DropMarker,
+pub struct RenderRes<T: Send + Sync + 'static> {
+    inner: ManuallyDrop<T>,
+    pub(crate) state: ManuallyDrop<ResourceState>,
 }
 
-impl<T> RenderRes<T> {
+impl<T: Send + Sync + 'static> RenderRes<T> {
     pub fn new(inner: T) -> Self {
         Self {
-            inner,
-            state: ResourceState::default(),
-            drop_marker: DropMarker,
+            inner: ManuallyDrop::new(inner),
+            state: ManuallyDrop::new(ResourceState::default()),
         }
     }
     pub unsafe fn get_mut(&mut self) -> &mut T {
         &mut self.inner
     }
-    pub fn replace(&mut self, replacer: impl FnOnce(Dispose<T>) -> RenderRes<T>) {
+}
+impl<T: Send + Sync + 'static> Drop for RenderRes<T> {
+    fn drop(&mut self) {
+        if self.state.read_semaphores.is_empty() && self.state.write_semaphore.is_none() {
+            unsafe {
+                ManuallyDrop::drop(&mut self.inner);
+                ManuallyDrop::drop(&mut self.state);
+            }
+            return;
+        }
         unsafe {
-            let old = std::ptr::read(&mut self.inner);
-            let new = replacer(Dispose::new(old));
-            std::ptr::write(&mut self.inner, new.inner);
-            self.state = new.state;
-            std::mem::forget(new.drop_marker);
+            let inner = ManuallyDrop::take(&mut self.inner);
+            let state = ManuallyDrop::take(&mut self.state);
+            dispose(Box::new((inner, state)));
         }
     }
-    pub fn into_dispose(self) -> Dispose<T> {
-        std::mem::forget(self.drop_marker);
-        Dispose::new(self.inner)
+}
+impl<T: Send + Sync + 'static> DisposeObject for (T, ResourceState) {
+    fn wait_blocked(&mut self) {
+        TimelineSemaphore::wait_all_blocked(
+            self.1
+                .read_semaphores
+                .iter()
+                .chain(self.1.write_semaphore.iter())
+                .map(|(sem, val)| (sem.as_ref(), *val)),
+            !0,
+        )
+        .unwrap();
     }
 }
 
-impl<T> Deref for RenderRes<T> {
+impl<T: Send + Sync + 'static> Deref for RenderRes<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -60,12 +70,12 @@ impl<T> Deref for RenderRes<T> {
 }
 
 #[derive(Resource, Component)]
-pub struct RenderImage<T> {
+pub struct RenderImage<T: Send + Sync + 'static> {
     pub(crate) res: RenderRes<T>,
     pub(crate) layout: vk::ImageLayout,
 }
 
-impl<T> RenderImage<T> {
+impl<T: Send + Sync + 'static> RenderImage<T> {
     pub fn new(inner: T) -> Self {
         Self {
             res: RenderRes::new(inner),
@@ -81,23 +91,9 @@ impl<T> RenderImage<T> {
     pub unsafe fn get_mut(&mut self) -> &mut T {
         &mut self.res.inner
     }
-    pub fn replace(&mut self, replacer: impl FnOnce(Dispose<T>) -> RenderImage<T>) {
-        unsafe {
-            let old = std::ptr::read(&mut self.res.inner);
-            let new = replacer(Dispose::new(old));
-            std::ptr::write(&mut self.res.inner, new.res.inner);
-            self.res.state = new.res.state;
-            self.layout = new.layout;
-            std::mem::forget(new.res.drop_marker);
-        }
-    }
-    pub fn into_dispose(self) -> Dispose<T> {
-        std::mem::forget(self.res.drop_marker);
-        Dispose::new(self.res.inner)
-    }
 }
 
-impl<T> Deref for RenderImage<T> {
+impl<T: Send + Sync + 'static> Deref for RenderImage<T> {
     type Target = RenderRes<T>;
 
     fn deref(&self) -> &Self::Target {

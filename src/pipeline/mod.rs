@@ -14,7 +14,7 @@ pub use cache::*;
 pub use graphics::*;
 pub use layout::*;
 
-pub trait Pipeline {
+pub trait Pipeline: Send + Sync + 'static {
     type BuildInfo: PipelineBuildInfo<Pipeline = Self>;
 }
 

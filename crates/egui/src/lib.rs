@@ -454,12 +454,9 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
         };
         let image = Image::new_device_image(allocator.clone(), &create_info).unwrap();
         let image = RenderImage::new(image);
-        if let Some((old, _)) = device_buffers
+        device_buffers
             .textures
-            .insert(texture_id, (image, image_delta.options))
-        {
-            commands.retain(old.into_dispose());
-        }
+            .insert(texture_id, (image, image_delta.options));
 
         device_buffers
             .samplers
@@ -534,7 +531,7 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
     if output.textures_delta.set.is_empty() {
         return;
     }
-    let mut staging_allocator = staging_belt.start();
+    let mut staging_allocator = staging_belt.start(&mut commands);
     for (texture_id, image_delta) in output.textures_delta.set.iter() {
         let texture_id = match texture_id {
             TextureId::Managed(id) => *id,
@@ -588,7 +585,6 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
             &[update_info],
         );
     }
-    commands.retain(staging_allocator.finish());
 }
 
 /// Resize the device buffers if necessary. Only runs on Discrete GPUs.
@@ -599,27 +595,25 @@ fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
     if device_buffers.vertex_buffer.len() < device_buffers.total_vertices_count {
-        device_buffers.vertex_buffer.replace(|old| {
-            commands.retain(old);
+        device_buffers.vertex_buffer = {
             let mut buf = BufferArray::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             );
             buf.realloc(device_buffers.total_vertices_count).unwrap();
             RenderRes::new(buf)
-        });
+        };
     }
 
     if device_buffers.index_buffer.len() < device_buffers.total_indices_count {
-        device_buffers.index_buffer.replace(|old| {
-            commands.retain(old);
+        device_buffers.index_buffer = {
             let mut buf = BufferArray::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             );
             buf.realloc(device_buffers.total_indices_count).unwrap();
             RenderRes::new(buf)
-        });
+        };
     }
 }
 
@@ -776,14 +770,12 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     task_pool: Res<DeferredOperationTaskPool>,
     allocator: Res<Allocator>,
 ) {
-    let Some((pipeline, old_pipeline)) =
+    let Some(pipeline) =
         pipeline_cache.retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool)
     else {
         return;
     };
-    if let Some(old_pipeline) = old_pipeline {
-        commands.retain(old_pipeline);
-    }
+    let pipeline = pipeline.use_on(&mut commands);
     if !should_draw {
         return;
     }

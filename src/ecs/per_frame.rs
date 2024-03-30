@@ -61,7 +61,7 @@ impl<T: PerFrameResource> PerFrame<T> {
                 PerFrameResourceFrame::Empty,
                 PerFrameResourceFrame::Empty,
                 PerFrameResourceFrame::Empty,
-            ]),
+            ]), // num_frames_in_flight elements
         }
     }
     pub(crate) fn on_frame_index(

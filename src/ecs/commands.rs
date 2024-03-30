@@ -20,7 +20,6 @@ pub mod queue_cap {
 use std::{
     any::Any,
     borrow::Cow,
-    collections::BTreeMap,
     ffi::CString,
     sync::{Arc, Mutex},
 };
@@ -41,12 +40,11 @@ use queue_cap::*;
 
 use crate::{
     command_pool::ManagedCommandPool,
-    commands::{CommandRecorder, ImmediateTransitions},
+    commands::{CommandRecorder, ImmediateTransitions, SemaphoreSignalCommands},
     debug::DebugCommands,
     ecs::Barriers,
     queue::QueueType,
     semaphore::TimelineSemaphore,
-    utils::Dispose,
     Device, HasDevice, QueueRef,
 };
 
@@ -188,7 +186,6 @@ where
 {
     queue: QueueRef,
     default_cmd_pool: &'w mut DefaultCommandPool,
-    retained_objects: &'s mut BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     pub(crate) frame_index: u64,
     pub(crate) submission_info: &'s Mutex<QueueSubmissionInfo>,
     prev_stage_submission_info: &'s [Option<Arc<Mutex<QueueSubmissionInfo>>>],
@@ -198,12 +195,6 @@ impl<'w, 's, const Q: char> RenderCommands<'w, 's, Q>
 where
     (): IsQueueCap<Q>,
 {
-    pub fn retain<T: 'static + Drop + Send + Sync>(&mut self, obj: Dispose<T>) {
-        self.retained_objects
-            .entry(self.frame_index)
-            .or_default()
-            .push(Box::new(unsafe { obj.take() }));
-    }
     pub fn add_external_command_buffer(&mut self, command_buffer: vk::CommandBuffer) {
         let current = self.default_cmd_pool.take_current_buffer();
         let mut submission_info = self.submission_info.lock().unwrap();
@@ -233,11 +224,52 @@ where
         self.default_cmd_pool.current_buffer()
     }
 }
+impl<'w, 's, const Q: char> SemaphoreSignalCommands for RenderCommands<'w, 's, Q>
+where
+    (): IsQueueCap<Q>,
+{
+    fn wait_semaphore(
+        &mut self,
+        semaphore: Cow<Arc<TimelineSemaphore>>,
+        value: u64,
+        stage: vk::PipelineStageFlags2,
+    ) -> bool {
+        todo!()
+    }
+
+    fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
+        todo!()
+    }
+
+    fn signal_semaphore(
+        &mut self,
+        stage: vk::PipelineStageFlags2,
+    ) -> (Arc<TimelineSemaphore>, u64) {
+        self.submission_info.lock().unwrap().signal_semaphore(stage)
+    }
+
+    fn signal_binary_semaphore_prev_stage(
+        &mut self,
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    ) {
+        todo!()
+    }
+
+    fn wait_binary_semaphore_prev_stage(
+        &mut self,
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    ) {
+        todo!()
+    }
+}
 
 pub struct RenderCommandState {
     device: Device,
     default_cmd_pool_state: Option<ComponentId>,
-    retained_objects: BTreeMap<u64, Vec<Box<dyn Send + Sync>>>,
     submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
     prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
     frame_index_state: ComponentId,
@@ -262,7 +294,6 @@ where
         RenderCommandState {
             device: world.resource::<Device>().clone(),
             default_cmd_pool_state,
-            retained_objects: BTreeMap::new(),
             submission_info: None,
             prev_stage_submission_info: SmallVec::new(),
             frame_index_state,
@@ -325,18 +356,11 @@ where
             state.submission_info.as_ref().unwrap(),
             (&state.device, state.queue.family),
         );
-        let num_frame_in_flight: u32 = 3;
-        if current_frame_index >= num_frame_in_flight as u64 {
-            state
-                .retained_objects
-                .remove(&(current_frame_index - num_frame_in_flight as u64));
-        }
 
         let mut this = RenderCommands {
             queue: state.queue,
             frame_index: current_frame_index,
             default_cmd_pool,
-            retained_objects: &mut state.retained_objects,
             submission_info: state.submission_info.as_ref().unwrap(),
             prev_stage_submission_info: &state.prev_stage_submission_info,
         };

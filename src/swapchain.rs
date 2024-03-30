@@ -12,12 +12,11 @@ use bevy::{
 };
 
 use crate::{
-    commands::{ResourceTransitionCommands, TrackedResource},
+    commands::{ResourceTransitionCommands, SemaphoreSignalCommands, TrackedResource},
     ecs::{Barriers, IntoRenderSystemConfigs, RenderImage, RenderSystemPass},
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
-    Access, Device, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter,
-    Surface,
+    Access, Device, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -68,6 +67,18 @@ pub struct Swapchain {
     inner: Arc<SwapchainInner>,
     acquire_semaphore: vk::Semaphore,
     images: SmallVec<[Option<RenderImage<SwapchainImageInner>>; 3]>,
+}
+
+impl Drop for Swapchain {
+    fn drop(&mut self) {
+        unsafe {
+            // This semaphore can be immediately deleted because we know it's not in use.
+            // This semaphore is only used for the `next` acquire.
+            self.inner
+                .device
+                .destroy_semaphore(self.acquire_semaphore, None);
+        }
+    }
 }
 
 struct SwapchainInner {
@@ -596,7 +607,11 @@ fn get_surface_preferred_format(
 pub struct SwapchainImage {
     inner: Option<RenderImage<SwapchainImageInner>>,
 
+    /// Semaphore to wait on after acquiring the image. Set to null after vkAcquireNextImageKHR.
+    /// Owned by `SwapchainImageInner`
     acquire_semaphore: vk::Semaphore,
+    /// Semaphore to wait on before presenting the image. Set to null after call to vkQueueSubmit.
+    /// Owned by `SwapchainImageInner`
     present_semaphore: vk::Semaphore,
 }
 impl TrackedResource for SwapchainImage {
@@ -651,6 +666,12 @@ impl Drop for SwapchainImageInner {
     fn drop(&mut self) {
         unsafe {
             self.swapchain.device.destroy_image_view(self.view, None);
+            self.swapchain
+                .device
+                .destroy_semaphore(self.acquire_semaphore, None);
+            self.swapchain
+                .device
+                .destroy_semaphore(self.present_semaphore, None);
         }
     }
 }

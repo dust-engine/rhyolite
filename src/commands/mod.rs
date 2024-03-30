@@ -114,7 +114,7 @@ pub trait TrackedResource {
     );
 }
 
-default impl<T> TrackedResource for RenderRes<T> {
+default impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T> {
     type State = ();
     fn transition(
         &mut self,
@@ -155,7 +155,7 @@ default impl<T> TrackedResource for RenderRes<T> {
     }
 }
 
-impl<T> TrackedResource for RenderRes<T>
+impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T>
 where
     T: BufferLike,
 {
@@ -233,7 +233,7 @@ where
     }
 }
 
-impl<T> TrackedResource for RenderImage<T>
+impl<T: Send + Sync + 'static> TrackedResource for RenderImage<T>
 where
     T: ImageLike,
 {
@@ -347,25 +347,7 @@ where
     }
 }
 
-pub trait ResourceTransitionCommands: Sized {
-    fn add_image_barrier_prev_stage(
-        &mut self,
-        barrier: vk::ImageMemoryBarrier2,
-        prev_queue: QueueRef,
-    ) -> &mut Self;
-    fn add_buffer_barrier_prev_stage(
-        &mut self,
-        barrier: vk::BufferMemoryBarrier2,
-        prev_queue: QueueRef,
-    ) -> &mut Self;
-
-    fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self;
-    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self;
-    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self;
-    fn set_dependency_flags(&mut self, flags: vk::DependencyFlags) -> &mut Self;
-
-    fn current_queue(&self) -> QueueRef;
-
+pub trait SemaphoreSignalCommands: Sized {
     /// Specify that the current submission must wait on a semaphore before executing.
     fn wait_semaphore(
         &mut self,
@@ -389,6 +371,26 @@ pub trait ResourceTransitionCommands: Sized {
         stage: vk::PipelineStageFlags2,
         prev_queue: QueueRef,
     );
+}
+
+pub trait ResourceTransitionCommands: SemaphoreSignalCommands {
+    fn add_image_barrier_prev_stage(
+        &mut self,
+        barrier: vk::ImageMemoryBarrier2,
+        prev_queue: QueueRef,
+    ) -> &mut Self;
+    fn add_buffer_barrier_prev_stage(
+        &mut self,
+        barrier: vk::BufferMemoryBarrier2,
+        prev_queue: QueueRef,
+    ) -> &mut Self;
+
+    fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self;
+    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self;
+    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self;
+    fn set_dependency_flags(&mut self, flags: vk::DependencyFlags) -> &mut Self;
+
+    fn current_queue(&self) -> QueueRef;
 
     fn transition<T: TrackedResource>(
         &mut self,
@@ -399,6 +401,43 @@ pub trait ResourceTransitionCommands: Sized {
     ) -> &mut Self {
         res.transition(access, retain_data, next_state, self);
         self
+    }
+}
+
+impl SemaphoreSignalCommands for ImmediateTransitions<'_> {
+    fn wait_semaphore(
+        &mut self,
+        semaphore: Cow<Arc<TimelineSemaphore>>,
+        value: u64,
+        stage: vk::PipelineStageFlags2,
+    ) -> bool {
+        todo!()
+    }
+
+    fn signal_semaphore(
+        &mut self,
+        stage: vk::PipelineStageFlags2,
+    ) -> (Arc<TimelineSemaphore>, u64) {
+        todo!()
+    }
+    fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
+        todo!()
+    }
+    fn signal_binary_semaphore_prev_stage(
+        &mut self,
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    ) {
+        todo!()
+    }
+    fn wait_binary_semaphore_prev_stage(
+        &mut self,
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    ) {
+        todo!()
     }
 }
 impl ResourceTransitionCommands for ImmediateTransitions<'_> {
@@ -437,40 +476,5 @@ impl ResourceTransitionCommands for ImmediateTransitions<'_> {
     fn set_dependency_flags(&mut self, flags: vk::DependencyFlags) -> &mut Self {
         self.dependency_flags = flags;
         self
-    }
-
-    fn wait_semaphore(
-        &mut self,
-        semaphore: Cow<Arc<TimelineSemaphore>>,
-        value: u64,
-        stage: vk::PipelineStageFlags2,
-    ) -> bool {
-        todo!()
-    }
-
-    fn signal_semaphore(
-        &mut self,
-        stage: vk::PipelineStageFlags2,
-    ) -> (Arc<TimelineSemaphore>, u64) {
-        todo!()
-    }
-    fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
-        todo!()
-    }
-    fn signal_binary_semaphore_prev_stage(
-        &mut self,
-        semaphore: vk::Semaphore,
-        stage: vk::PipelineStageFlags2,
-        prev_queue: QueueRef,
-    ) {
-        todo!()
-    }
-    fn wait_binary_semaphore_prev_stage(
-        &mut self,
-        semaphore: vk::Semaphore,
-        stage: vk::PipelineStageFlags2,
-        prev_queue: QueueRef,
-    ) {
-        todo!()
     }
 }

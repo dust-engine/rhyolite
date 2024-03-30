@@ -12,7 +12,7 @@ use bevy::ecs::{
 };
 use bevy::utils::smallvec::SmallVec;
 
-use crate::commands::ResourceTransitionCommands;
+use crate::commands::{ResourceTransitionCommands, SemaphoreSignalCommands};
 use crate::queue::QueueType;
 use crate::semaphore::TimelineSemaphore;
 use crate::QueueRef;
@@ -97,6 +97,56 @@ impl Drop for Barriers {
         }
     }
 }
+impl SemaphoreSignalCommands for Barriers {
+    fn wait_semaphore(
+        &mut self,
+        semaphore: Cow<Arc<TimelineSemaphore>>,
+        value: u64,
+        stage: vk::PipelineStageFlags2,
+    ) -> bool {
+        let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
+        submission_info.wait_semaphore(semaphore, value, stage)
+    }
+
+    fn signal_semaphore(
+        &mut self,
+        stage: vk::PipelineStageFlags2,
+    ) -> (Arc<TimelineSemaphore>, u64) {
+        let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
+        submission_info.signal_semaphore(stage)
+    }
+
+    fn signal_binary_semaphore_prev_stage(
+        &mut self,
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    ) {
+        let current = unsafe { &mut *self.prev_barriers };
+        current.push(BarriersPrevStage::SignalBinarySemaphore {
+            semaphore,
+            stage,
+            prev_queue,
+        });
+    }
+    fn wait_binary_semaphore_prev_stage(
+        &mut self,
+        semaphore: vk::Semaphore,
+        stage: vk::PipelineStageFlags2,
+        prev_queue: QueueRef,
+    ) {
+        let current = unsafe { &mut *self.prev_barriers };
+        current.push(BarriersPrevStage::WaitBinarySemaphore {
+            semaphore,
+            stage,
+            prev_queue,
+        });
+    }
+    fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
+        let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
+        submission_info.wait_binary_semaphore(semaphore, stage)
+    }
+}
 impl ResourceTransitionCommands for Barriers {
     fn current_queue(&self) -> QueueRef {
         self.queue_family
@@ -153,55 +203,6 @@ impl ResourceTransitionCommands for Barriers {
             *self.dependency_flags |= flags;
         }
         self
-    }
-
-    fn wait_semaphore(
-        &mut self,
-        semaphore: Cow<Arc<TimelineSemaphore>>,
-        value: u64,
-        stage: vk::PipelineStageFlags2,
-    ) -> bool {
-        let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
-        submission_info.wait_semaphore(semaphore, value, stage)
-    }
-
-    fn signal_semaphore(
-        &mut self,
-        stage: vk::PipelineStageFlags2,
-    ) -> (Arc<TimelineSemaphore>, u64) {
-        let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
-        submission_info.signal_semaphore(stage)
-    }
-
-    fn signal_binary_semaphore_prev_stage(
-        &mut self,
-        semaphore: vk::Semaphore,
-        stage: vk::PipelineStageFlags2,
-        prev_queue: QueueRef,
-    ) {
-        let current = unsafe { &mut *self.prev_barriers };
-        current.push(BarriersPrevStage::SignalBinarySemaphore {
-            semaphore,
-            stage,
-            prev_queue,
-        });
-    }
-    fn wait_binary_semaphore_prev_stage(
-        &mut self,
-        semaphore: vk::Semaphore,
-        stage: vk::PipelineStageFlags2,
-        prev_queue: QueueRef,
-    ) {
-        let current = unsafe { &mut *self.prev_barriers };
-        current.push(BarriersPrevStage::WaitBinarySemaphore {
-            semaphore,
-            stage,
-            prev_queue,
-        });
-    }
-    fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
-        let mut submission_info = unsafe { &*self.submission_info }.lock().unwrap();
-        submission_info.wait_binary_semaphore(semaphore, stage)
     }
 }
 
