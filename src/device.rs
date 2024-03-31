@@ -1,6 +1,8 @@
 use crate::extensions::DeviceExtension;
 use crate::extensions::ExtensionNotFoundError;
 use crate::plugin::DeviceMetaBuilder;
+use crate::Feature;
+use crate::FeatureMap;
 use crate::Instance;
 use crate::PhysicalDevice;
 use crate::QueueRef;
@@ -33,6 +35,7 @@ pub struct DeviceInner {
     device: ash::Device,
     queues: Vec<vk::Queue>,
     extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    features: FeatureMap,
 }
 
 impl Device {
@@ -43,11 +46,12 @@ impl Device {
         physical_device: PhysicalDevice,
         queues: &[vk::DeviceQueueCreateInfo],
         extensions: &[*const c_char],
-        features: &vk::PhysicalDeviceFeatures2,
+        mut features: FeatureMap,
         meta: Vec<DeviceMetaBuilder>,
     ) -> VkResult<Self> {
+        let pdevice_features2 = features.as_physical_device_features();
         let create_info = vk::DeviceCreateInfo {
-            p_next: features as *const vk::PhysicalDeviceFeatures2 as *const _,
+            p_next: &pdevice_features2 as *const vk::PhysicalDeviceFeatures2 as *const _,
             queue_create_info_count: queues.len() as u32,
             p_queue_create_infos: queues.as_ptr(),
             enabled_extension_count: extensions.len() as u32,
@@ -78,6 +82,7 @@ impl Device {
             queues: queues_created,
             device,
             extensions,
+            features,
         })))
     }
     pub fn instance(&self) -> &Instance {
@@ -97,6 +102,10 @@ impl Device {
     #[track_caller]
     pub fn extension<T: DeviceExtension>(&self) -> &T {
         self.get_extension::<T>().unwrap()
+    }
+
+    pub fn features<T: Feature + Default + 'static>(&self) -> Option<&T> {
+        self.0.features.get::<T>()
     }
 }
 

@@ -479,7 +479,9 @@ pub(crate) fn submit_system_graph(
     let queue = submission_info.queue;
     let mut submission_info = submission_info.info.lock().unwrap();
     // Record the trailing pipeline barrier
-    if !submission_info.trailing_buffer_barriers.is_empty() || !submission_info.trailing_image_barriers.is_empty() {
+    if !submission_info.trailing_buffer_barriers.is_empty()
+        || !submission_info.trailing_image_barriers.is_empty()
+    {
         let cmd_buf = if submission_info.last_buf_open {
             submission_info.cmd_bufs.last().unwrap().clone()
         } else {

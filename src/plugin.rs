@@ -16,7 +16,7 @@ use std::{
 use crate::{
     ecs::RenderSystemPass,
     extensions::{DeviceExtension, InstanceExtension, PromotedDeviceExtension},
-    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeatures, QueuesRouter, Version,
+    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeaturesSetup, QueuesRouter, Version,
 };
 use cstr::cstr;
 
@@ -247,7 +247,7 @@ impl Plugin for RhyolitePlugin {
             physical_device.properties().device_name(),
             physical_device.properties().memory_model
         );
-        let features = PhysicalDeviceFeatures::new(physical_device.clone());
+        let features = PhysicalDeviceFeaturesSetup::new(physical_device.clone());
         let extensions = DeviceExtensions::new(&physical_device).unwrap();
 
         let queue_router = QueuesRouter::find_with_queue_family_properties(
@@ -291,17 +291,18 @@ impl Plugin for RhyolitePlugin {
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =
             app.world.remove_resource::<DeviceExtensions>().unwrap();
-        app.world
-            .resource_mut::<PhysicalDeviceFeatures>()
+        let features = app
+            .world
+            .remove_resource::<PhysicalDeviceFeaturesSetup>()
+            .unwrap()
             .finalize();
         let physical_device: &PhysicalDevice = app.world.resource();
-        let features = app.world.resource::<PhysicalDeviceFeatures>();
         let queues_router = app.world.resource::<QueuesRouter>();
         let device = Device::create(
             physical_device.clone(),
             &queues_router.create_infos(),
             &extension_settings.enabled_extensions,
-            features.pdevice_features2(),
+            features,
             extension_settings.extension_builders,
         )
         .unwrap();
@@ -501,7 +502,7 @@ impl RhyoliteApp for App {
         &'a mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,
     ) -> FeatureEnableResult<'a> {
-        let mut features = self.world.resource_mut::<PhysicalDeviceFeatures>();
+        let mut features = self.world.resource_mut::<PhysicalDeviceFeaturesSetup>();
         if features.enable_feature::<T>(selector).is_none() {
             return FeatureEnableResult::NotFound { app: self };
         }

@@ -2549,6 +2549,7 @@ dependencies = [
  "crossbeam-channel",
  "crossbeam-queue",
  "cstr",
+ "fastrand",
  "itertools 0.12.1",
  "once_cell",
  "playout",

@@ -265,55 +265,65 @@ pub struct MemoryHeap {
 }
 
 #[derive(Default)]
-struct FeatureMap {
+pub struct FeatureMap {
     physical_device_features: vk::PhysicalDeviceFeatures,
     features: BTreeMap<vk::StructureType, Box<VkTaggedObject>>,
 }
+
+impl FeatureMap {
+    pub fn get<T: Feature + Default + 'static>(&self) -> Option<&T> {
+        let enabled_features = self.features.get(&T::STRUCTURE_TYPE)?;
+        let enabled_features = enabled_features.deref().downcast_ref::<T>().unwrap();
+        Some(enabled_features)
+    }
+}
+
 unsafe impl Send for FeatureMap {}
 unsafe impl Sync for FeatureMap {}
 
-#[derive(Resource)]
-pub struct PhysicalDeviceFeatures(PhysicalDeviceFeaturesInner);
-
-enum PhysicalDeviceFeaturesInner {
-    Setup {
-        physical_device: PhysicalDevice,
-        available_features: FeatureMap,
-        enabled_features: FeatureMap,
-        vulkan_version: Version,
-    },
-    Finalized {
-        physical_device_features: vk::PhysicalDeviceFeatures2,
-        enabled_features: BTreeMap<vk::StructureType, Box<VkTaggedObject>>,
-    },
+impl FeatureMap {
+    pub fn as_physical_device_features(&mut self) -> vk::PhysicalDeviceFeatures2 {
+        let mut features = vk::PhysicalDeviceFeatures2 {
+            features: self.physical_device_features,
+            ..Default::default()
+        };
+        // build p_next chain
+        let mut last = &mut features.p_next;
+        for f in self.features.values_mut() {
+            *last = f.as_mut() as *mut _ as *mut c_void;
+            last = &mut f.p_next;
+        }
+        features
+    }
 }
-unsafe impl Send for PhysicalDeviceFeaturesInner {}
-unsafe impl Sync for PhysicalDeviceFeaturesInner {}
+
+#[derive(Resource)]
+pub struct PhysicalDeviceFeaturesSetup {
+    physical_device: PhysicalDevice,
+    available_features: FeatureMap,
+    enabled_features: FeatureMap,
+    vulkan_version: Version,
+}
+
+unsafe impl Send for PhysicalDeviceFeaturesSetup {}
+unsafe impl Sync for PhysicalDeviceFeaturesSetup {}
 
 pub unsafe trait Feature: TaggedStructure + 'static {
     type Extension;
     const REQUIRED_VK_VERSION: Version;
 }
 
-impl PhysicalDeviceFeatures {
+impl PhysicalDeviceFeaturesSetup {
     pub fn enable_feature<T: Feature + Default>(
         &mut self,
         mut selector: impl FnMut(&mut T) -> &mut vk::Bool32,
     ) -> Option<()> {
-        let PhysicalDeviceFeaturesInner::Setup {
-            physical_device,
-            available_features,
-            enabled_features,
-            vulkan_version,
-        } = &mut self.0
-        else {
-            panic!("Cannot enable features outside plugin build phase");
-        };
-        if &*vulkan_version < &T::REQUIRED_VK_VERSION {
+        if self.vulkan_version < T::REQUIRED_VK_VERSION {
             // feature requires a higher Vulkan version
             return None;
         }
-        let feature: &mut Box<VkTaggedObject> = available_features
+        let feature: &mut Box<VkTaggedObject> = self
+            .available_features
             .features
             .entry(T::STRUCTURE_TYPE)
             .or_insert_with(|| {
@@ -321,9 +331,9 @@ impl PhysicalDeviceFeatures {
                 let mut wrapper = vk::PhysicalDeviceFeatures2::default();
                 wrapper.p_next = &mut feature as *mut T as *mut std::ffi::c_void;
                 unsafe {
-                    physical_device
+                    self.physical_device
                         .instance()
-                        .get_physical_device_features2(physical_device.raw(), &mut wrapper);
+                        .get_physical_device_features2(self.physical_device.raw(), &mut wrapper);
                 };
                 VkTaggedObject::new(feature)
             });
@@ -334,7 +344,8 @@ impl PhysicalDeviceFeatures {
             return None;
         }
 
-        let enabled_features = enabled_features
+        let enabled_features = self
+            .enabled_features
             .features
             .entry(T::STRUCTURE_TYPE)
             .or_insert_with(|| VkTaggedObject::new(T::default()));
@@ -345,17 +356,7 @@ impl PhysicalDeviceFeatures {
     }
 
     pub fn enabled_features<T: Feature + Default + 'static>(&self) -> Option<&T> {
-        let enabled_features = match &self.0 {
-            PhysicalDeviceFeaturesInner::Setup {
-                enabled_features, ..
-            } => &enabled_features.features,
-            PhysicalDeviceFeaturesInner::Finalized {
-                enabled_features, ..
-            } => enabled_features,
-        };
-        let enabled_features = enabled_features.get(&T::STRUCTURE_TYPE)?;
-        let enabled_features = enabled_features.deref().downcast_ref::<T>().unwrap();
-        Some(enabled_features)
+        self.enabled_features.get::<T>()
     }
 
     pub(crate) fn new(pdevice: PhysicalDevice) -> Self {
@@ -367,53 +368,16 @@ impl PhysicalDeviceFeatures {
             },
             features: Default::default(),
         };
-        Self(PhysicalDeviceFeaturesInner::Setup {
+        PhysicalDeviceFeaturesSetup {
             vulkan_version: pdevice.instance().api_version(),
             physical_device: pdevice,
             available_features,
             enabled_features: Default::default(),
-        })
-    }
-
-    pub(crate) fn finalize(&mut self) {
-        if let PhysicalDeviceFeaturesInner::Setup {
-            enabled_features, ..
-        } = &mut self.0
-        {
-            let FeatureMap {
-                physical_device_features,
-                mut features,
-            } = std::mem::take(enabled_features);
-            let mut physical_device_features = vk::PhysicalDeviceFeatures2 {
-                features: physical_device_features,
-                ..Default::default()
-            };
-            {
-                // build p_next chain
-                let mut last = &mut physical_device_features.p_next;
-                for f in features.values_mut() {
-                    *last = f.as_mut() as *mut _ as *mut c_void;
-                    last = &mut f.p_next;
-                }
-            }
-            *self = Self(PhysicalDeviceFeaturesInner::Finalized {
-                enabled_features: features,
-                physical_device_features,
-            })
         }
     }
 
-    /// Returns a valid [`vk::PhysicalDeviceFeatures2`] for use in the p_next chain of [`vk::DeviceCreateInfo`].
-    pub(crate) fn pdevice_features2(&self) -> &vk::PhysicalDeviceFeatures2 {
-        if let PhysicalDeviceFeaturesInner::Finalized {
-            physical_device_features,
-            ..
-        } = &self.0
-        {
-            physical_device_features
-        } else {
-            panic!("Must be called after finalization")
-        }
+    pub(crate) fn finalize(self) -> FeatureMap {
+        self.enabled_features
     }
 }
 
@@ -444,4 +408,8 @@ impl_feature!(
 impl_feature!(
     vk::PhysicalDeviceDynamicRenderingFeatures,
     khr::DynamicRendering
+);
+impl_feature!(
+    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+    khr::RayTracingPipeline
 );

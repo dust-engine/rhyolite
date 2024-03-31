@@ -300,11 +300,15 @@ impl Swapchain {
                         },
                         None,
                     )?;
-                    
-                    let present_semaphore = self.inner.device
-                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                    .unwrap();
-                    let acquire_semaphore = self.inner.device
+
+                    let present_semaphore = self
+                        .inner
+                        .device
+                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                        .unwrap();
+                    let acquire_semaphore = self
+                        .inner
+                        .device
                         .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
                         .unwrap();
                     let mut img = RenderImage::new(SwapchainImageInner {

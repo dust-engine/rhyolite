@@ -2,6 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 /// Hack to allow for a `Send` bound on a trait object. Very unsafe. Mostly used with `vk::Create*Info` types.
 /// Pending ash v0.38 release.
+/// https://github.com/ash-rs/ash/pull/869
 #[repr(transparent)]
 pub struct SendBox<T>(pub T);
 unsafe impl<T> Send for SendBox<T> {}

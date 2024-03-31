@@ -21,6 +21,7 @@ use bevy_egui::egui::epaint::ImageDelta;
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::commands::CommandRecorder;
+use rhyolite::dispose::RenderObject;
 use rhyolite::{
     acquire_swapchain_image,
     ash::{extensions::khr, vk},
@@ -109,7 +110,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
 
 #[derive(Resource)]
 pub struct EguiPipelines {
-    pipeline: CachedPipeline<GraphicsPipeline>,
+    pipeline: CachedPipeline<RenderObject<GraphicsPipeline>>,
     layout: Arc<PipelineLayout>,
 }
 fn initialize_pipelines(
@@ -765,8 +766,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     task_pool: Res<DeferredOperationTaskPool>,
     allocator: Res<Allocator>,
 ) {
-    let Some(pipeline) =
-        pipeline_cache.retrieve_graphics(&mut egui_pipeline.pipeline, &assets, &task_pool)
+    let Some(pipeline) = pipeline_cache.retrieve(&mut egui_pipeline.pipeline, &assets, &task_pool)
     else {
         return;
     };

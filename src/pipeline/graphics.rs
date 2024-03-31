@@ -32,6 +32,12 @@ impl Drop for GraphicsPipeline {
 
 impl super::Pipeline for GraphicsPipeline {
     type BuildInfo = BoxedGraphicsPipelineBuildInfo;
+    fn from_built(
+        _info: &mut BoxedGraphicsPipelineBuildInfo,
+        item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
+    ) -> Self {
+        item
+    }
 }
 
 pub struct Builder<'a> {

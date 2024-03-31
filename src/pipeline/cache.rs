@@ -49,8 +49,8 @@ impl FromWorld for PipelineCache {
 
 pub struct CachedPipeline<T: Pipeline> {
     build_info: Option<T::BuildInfo>,
-    pipeline: Option<RenderObject<T>>,
-    task: Option<Task<T>>,
+    pipeline: Option<T>,
+    task: Option<Task<<T::BuildInfo as PipelineBuildInfo>::Pipeline>>,
     shader_generations: HashMap<AssetId<ShaderModule>, u32>,
 }
 impl<T: Pipeline> CachedPipeline<T> {
@@ -68,7 +68,7 @@ impl<T: Pipeline> CachedPipeline<T> {
 }
 
 impl PipelineCache {
-    fn create<T: Pipeline>(&self, build_info: T::BuildInfo) -> CachedPipeline<T> {
+    pub(crate) fn create<T: Pipeline>(&self, build_info: T::BuildInfo) -> CachedPipeline<T> {
         CachedPipeline {
             pipeline: None,
             task: None,
@@ -85,7 +85,7 @@ impl PipelineCache {
     pub fn create_graphics<F>(
         &self,
         build_info: GraphicsPipelineBuildInfo<F>,
-    ) -> CachedPipeline<GraphicsPipeline>
+    ) -> CachedPipeline<RenderObject<GraphicsPipeline>>
     where
         F: for<'a> Fn(Builder) -> BuilderResult + Send + Sync + 'static,
     {
@@ -94,28 +94,37 @@ impl PipelineCache {
             stages: build_info.stages,
             builder: Arc::new(build_info.builder),
         };
-        self.create(boxed)
+        self.create::<RenderObject<GraphicsPipeline>>(boxed)
     }
-    pub fn retrieve_graphics<'a>(
-        &self,
-        cached_pipeline: &'a mut CachedPipeline<GraphicsPipeline>,
-        assets: &Assets<ShaderModule>,
-        pool: &DeferredOperationTaskPool,
-    ) -> Option<&'a mut RenderObject<GraphicsPipeline>> {
-        self.retrieve(cached_pipeline, assets, pool)
-    }
-    fn retrieve<'a, T: Pipeline>(
+    pub fn retrieve<'a, T: Pipeline>(
         &self,
         cached_pipeline: &'a mut CachedPipeline<T>,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-    ) -> Option<&'a mut RenderObject<T>> {
+    ) -> Option<&'a mut T> {
+        self.retrieve_inner(cached_pipeline, assets, pool, true)
+    }
+    pub(crate) fn retrieve_inner<'a, T: Pipeline>(
+        &self,
+        cached_pipeline: &'a mut CachedPipeline<T>,
+        assets: &Assets<ShaderModule>,
+        pool: &DeferredOperationTaskPool,
+        allow_stale: bool,
+    ) -> Option<&'a mut T> {
         if let Some(pipeline) = &mut cached_pipeline.task {
             if pipeline.is_finished() {
                 let new_pipeline = cached_pipeline.task.take().unwrap().unwrap().unwrap();
-                cached_pipeline
-                    .pipeline
-                    .replace(RenderObject::new(new_pipeline));
+                let built = if self.hot_reload_enabled {
+                    let build_info = cached_pipeline.build_info.as_mut().unwrap();
+                    T::from_built(build_info, new_pipeline)
+                } else {
+                    let build_info = cached_pipeline.build_info.take().unwrap();
+                    T::from_built_with_owned_info(build_info, new_pipeline)
+                };
+                cached_pipeline.pipeline.replace(built);
+            } else if !allow_stale {
+                // A build task is pending, and we don't want to return a stale pipeline.
+                return None;
             }
         }
 
@@ -153,19 +162,11 @@ impl PipelineCache {
         } else {
             if cached_pipeline.task.is_none() {
                 // schedule
-                if self.hot_reload_enabled {
-                    cached_pipeline.task = cached_pipeline
-                        .build_info
-                        .as_mut()
-                        .unwrap()
-                        .build(pool, assets, self.cache);
-                } else {
-                    cached_pipeline.task = cached_pipeline
-                        .build_info
-                        .take()
-                        .unwrap()
-                        .build_owned(pool, assets, self.cache);
-                }
+                cached_pipeline.task = cached_pipeline
+                    .build_info
+                    .as_mut()
+                    .unwrap()
+                    .build(pool, assets, self.cache);
             }
             return None;
         }
