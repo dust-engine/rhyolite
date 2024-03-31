@@ -4,7 +4,7 @@ use super::Instance;
 use ash::{
     extensions::khr,
     prelude::VkResult,
-    vk::{self, TaggedStructure},
+    vk::{self, ExtendsPhysicalDeviceFeatures2, ExtendsPhysicalDeviceProperties2, TaggedStructure},
 };
 use bevy::ecs::system::Resource;
 use core::ffi::c_void;
@@ -107,51 +107,21 @@ impl PhysicalDevice {
     }
 }
 
-pub unsafe trait PhysicalDeviceProperty: Sized + Default + 'static {
-    fn get_new(this: &PhysicalDeviceProperties) -> Self {
-        let mut wrapper = vk::PhysicalDeviceProperties2::default();
-        let mut item = Self::default();
-        unsafe {
-            wrapper.p_next = &mut item as *mut Self as *mut c_void;
-            this.instance
-                .get_physical_device_properties2(this.pdevice, &mut wrapper);
-        }
-        item
-    }
-    fn get(this: &PhysicalDeviceProperties) -> &Self {
-        let properties = this.properties.read().unwrap();
-        if let Some(entry) = properties.get(&TypeId::of::<Self>()) {
-            let item = entry.deref().downcast_ref::<Self>().unwrap();
-            let item: NonNull<Self> = item.into();
-            unsafe {
-                // This is ok because entry is boxed and never removed as long as self is still alive.
-                return item.as_ref();
-            }
-        }
-        drop(properties);
-        let item = Self::get_new(this);
-        let item: Box<dyn Any> = Box::new(item);
-        let item_ptr = item.downcast_ref::<Self>().unwrap();
-        let item_ptr: NonNull<Self> = item_ptr.into();
-
-        let mut properties = this.properties.write().unwrap();
-        properties.insert(TypeId::of::<Self>(), item);
-        drop(properties);
-
-        unsafe {
-            // This is ok because entry is boxed and never removed as long as self is still alive.
-            return item_ptr.as_ref();
-        }
-    }
+pub unsafe trait PhysicalDeviceProperty:
+    Sized + Default + 'static + TaggedStructure + ExtendsPhysicalDeviceProperties2
+{
 }
-
+unsafe impl<T> PhysicalDeviceProperty for T where
+    T: ExtendsPhysicalDeviceProperties2 + TaggedStructure + Default + Sized + 'static
+{
+}
 pub struct PhysicalDeviceProperties {
     instance: Instance,
     pdevice: vk::PhysicalDevice,
     inner: vk::PhysicalDeviceProperties,
     memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub memory_model: PhysicalDeviceMemoryModel,
-    properties: RwLock<BTreeMap<TypeId, Box<dyn Any>>>,
+    properties: RwLock<BTreeMap<vk::StructureType, Box<VkTaggedObject>>>,
 }
 unsafe impl Send for PhysicalDeviceProperties {}
 unsafe impl Sync for PhysicalDeviceProperties {}
@@ -213,8 +183,37 @@ impl PhysicalDeviceProperties {
             inner: pdevice_properties,
         }
     }
-    pub fn properties<T: PhysicalDeviceProperty + Default + 'static>(&self) -> &T {
-        T::get(self)
+    pub fn get<T: PhysicalDeviceProperty + Default + 'static>(&self) -> &T {
+        let properties = self.properties.read().unwrap();
+        if let Some(entry) = properties.get(&T::STRUCTURE_TYPE) {
+            let item = entry.deref().downcast_ref::<T>().unwrap();
+            let item: NonNull<T> = item.into();
+            unsafe {
+                // This is ok because entry is boxed and never removed as long as self is still alive.
+                return item.as_ref();
+            }
+        }
+        drop(properties);
+
+        let mut wrapper = vk::PhysicalDeviceProperties2::default();
+        let mut item = T::default();
+        unsafe {
+            wrapper.p_next = &mut item as *mut T as *mut c_void;
+            self.instance
+                .get_physical_device_properties2(self.pdevice, &mut wrapper);
+        }
+        let item = VkTaggedObject::new(item);
+        let item_ptr = item.downcast_ref::<T>().unwrap();
+        let item_ptr: NonNull<T> = item_ptr.into();
+
+        let mut properties = self.properties.write().unwrap();
+        properties.insert(T::STRUCTURE_TYPE, item);
+        drop(properties);
+
+        unsafe {
+            // This is ok because entry is boxed and never removed as long as self is still alive.
+            return item_ptr.as_ref();
+        }
     }
     pub fn device_name(&self) -> &CStr {
         unsafe {
@@ -243,12 +242,6 @@ impl Deref for PhysicalDeviceProperties {
     type Target = vk::PhysicalDeviceProperties;
     fn deref(&self) -> &Self::Target {
         &self.inner
-    }
-}
-
-unsafe impl PhysicalDeviceProperty for vk::PhysicalDeviceProperties {
-    fn get(this: &PhysicalDeviceProperties) -> &Self {
-        &this.inner
     }
 }
 
@@ -411,5 +404,9 @@ impl_feature!(
 );
 impl_feature!(
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
+    khr::RayTracingPipeline
+);
+impl_feature!(
+    vk::PhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT,
     khr::RayTracingPipeline
 );

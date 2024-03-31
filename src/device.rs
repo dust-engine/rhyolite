@@ -104,7 +104,7 @@ impl Device {
         self.get_extension::<T>().unwrap()
     }
 
-    pub fn features<T: Feature + Default + 'static>(&self) -> Option<&T> {
+    pub fn feature<T: Feature + Default + 'static>(&self) -> Option<&T> {
         self.0.features.get::<T>()
     }
 }

@@ -1,4 +1,5 @@
 use std::{
+    alloc::Layout,
     collections::BTreeMap,
     ops::{Deref, DerefMut},
     sync::Arc,
@@ -8,7 +9,10 @@ use ash::{prelude::VkResult, vk};
 use bevy::asset::{AssetId, Assets};
 
 use crate::{
-    deferred::{DeferredOperationTaskPool, Task}, dispose::RenderObject, utils::SendBox, Device
+    deferred::{DeferredOperationTaskPool, Task},
+    dispose::RenderObject,
+    utils::SendBox,
+    Device,
 };
 use crate::{
     shader::{ShaderModule, SpecializedShader},
@@ -20,6 +24,7 @@ use super::{CachedPipeline, PipelineCache, PipelineLayout};
 pub struct RayTracingPipeline {
     device: Device,
     pipeline: vk::Pipeline,
+    sbt_handles: Option<SbtHandles>,
 }
 impl RayTracingPipeline {
     pub fn raw(&self) -> vk::Pipeline {
@@ -36,7 +41,23 @@ impl Drop for RayTracingPipeline {
 
 impl super::Pipeline for RayTracingPipeline {
     type BuildInfo = RayTracingPipelineBuildInfo;
-    fn from_built(_info: &mut RayTracingPipelineBuildInfo, item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline) -> Self {
+    fn from_built(
+        info: &mut RayTracingPipelineBuildInfo,
+        mut item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
+    ) -> Self {
+        if info.fetch_sbt_handles {
+            item.sbt_handles = Some(
+                SbtHandles::new(
+                    &item.device,
+                    item.pipeline,
+                    info.num_raygen,
+                    info.num_miss,
+                    info.num_callable,
+                    info.num_hitgroup,
+                )
+                .unwrap(),
+            );
+        }
         item
     }
 }
@@ -53,9 +74,14 @@ pub struct RayTracingPipelineBuildInfoCommon {
 }
 pub struct RayTracingPipelineBuildInfo {
     pub common: RayTracingPipelineBuildInfoCommon,
-    pub stages: Vec<SpecializedShader>,
-    pub groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR>,
-    pub libraries: Vec<RayTracingPipelineLibrary>,
+    stages: Vec<SpecializedShader>,
+    groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR>,
+    libraries: Vec<RayTracingPipelineLibrary>,
+    num_raygen: u32,
+    num_miss: u32,
+    num_callable: u32,
+    num_hitgroup: u32,
+    pub fetch_sbt_handles: bool,
 }
 
 impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
@@ -121,7 +147,10 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
             info.p_dynamic_state = &dynamic_state;
             info.layout = common.layout.raw();
 
-            let raw_libraries = libraries.iter().map(|library| library.pipeline.pipeline).collect::<Vec<_>>();
+            let raw_libraries = libraries
+                .iter()
+                .map(|library| library.pipeline.pipeline)
+                .collect::<Vec<_>>();
             let library_info = vk::PipelineLibraryCreateInfoKHR {
                 library_count: raw_libraries.len() as u32,
                 p_libraries: raw_libraries.as_ptr(),
@@ -155,7 +184,14 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
             drop(groups);
             drop(libraries);
             drop(raw_libraries);
-            (result, RayTracingPipeline { device, pipeline })
+            (
+                result,
+                RayTracingPipeline {
+                    device,
+                    pipeline,
+                    sbt_handles: None,
+                },
+            )
         }))
     }
     fn all_shaders(&self) -> impl Iterator<Item = AssetId<ShaderModule>> {
@@ -171,24 +207,33 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
 pub struct RayTracingPipelineLibrary {
     pipeline: Arc<RayTracingPipeline>,
     /// Should always be empty if shader hot reloading is disabled
-    shaders: Vec<AssetId<ShaderModule>>
+    shaders: Vec<AssetId<ShaderModule>>,
 }
 impl super::Pipeline for RayTracingPipelineLibrary {
     type BuildInfo = RayTracingPipelineBuildInfo;
-    fn from_built(info: &mut RayTracingPipelineBuildInfo, item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline) -> Self {
+    fn from_built(
+        info: &mut RayTracingPipelineBuildInfo,
+        item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
+    ) -> Self {
         RayTracingPipelineLibrary {
             pipeline: Arc::new(item),
-            shaders: info.stages.iter().map(|shader| shader.shader.id()).collect(),
+            shaders: info
+                .stages
+                .iter()
+                .map(|shader| shader.shader.id())
+                .collect(),
         }
     }
-    fn from_built_with_owned_info(info: Self::BuildInfo, item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline) -> Self {
+    fn from_built_with_owned_info(
+        info: Self::BuildInfo,
+        item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
+    ) -> Self {
         RayTracingPipelineLibrary {
             pipeline: Arc::new(item),
             shaders: Vec::new(),
         }
     }
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct HitgroupHandle(u64);
@@ -238,8 +283,16 @@ impl RayTracingPipelineManager {
         pipeline_cache: &PipelineCache,
     ) -> HitgroupHandle {
         match self {
-            Self::Native(manager) => manager.add_hitgroup(ty, closest_hit_shader, anyhit_shader, intersection_shader),
-            Self::PipelineLibrary(manager) => manager.add_hitgroup(ty, closest_hit_shader, anyhit_shader, intersection_shader, &pipeline_cache),
+            Self::Native(manager) => {
+                manager.add_hitgroup(ty, closest_hit_shader, anyhit_shader, intersection_shader)
+            }
+            Self::PipelineLibrary(manager) => manager.add_hitgroup(
+                ty,
+                closest_hit_shader,
+                anyhit_shader,
+                intersection_shader,
+                &pipeline_cache,
+            ),
         }
     }
 
@@ -261,13 +314,14 @@ impl RayTracingPipelineManager {
             Self::PipelineLibrary(manager) => manager.build(pipeline_cache, assets, pool),
         }
     }
-
 }
-
 
 struct RayTracingPipelineManagerNative {
     common: RayTracingPipelineBuildInfoCommon,
     hitgroup_table: BTreeMap<HitgroupHandle, u32>,
+    num_raygen: u32,
+    num_miss: u32,
+    num_callable: u32,
     /// closest hit, any hit, intersection
     hitgroup_shaders: Vec<(
         HitgroupHandle,
@@ -290,6 +344,9 @@ impl RayTracingPipelineManagerNative {
         }
         Self {
             common,
+            num_raygen: raygen_shaders.len() as u32,
+            num_miss: miss_shaders.len() as u32,
+            num_callable: callable_shaders.len() as u32,
             base_stages: raygen_shaders
                 .into_iter()
                 .chain(miss_shaders)
@@ -354,6 +411,11 @@ impl RayTracingPipelineManagerNative {
             stages,
             groups,
             libraries: Vec::new(),
+            num_raygen: self.num_raygen,
+            num_miss: self.num_miss,
+            num_callable: self.num_callable,
+            num_hitgroup: self.hitgroup_shaders.len() as u32,
+            fetch_sbt_handles: true,
         };
         Some(pipeline_cache.create(info))
     }
@@ -368,6 +430,9 @@ struct RayTracingPipelineManagerPipelineLibrary {
         vk::RayTracingShaderGroupTypeKHR,
         CachedPipeline<RayTracingPipelineLibrary>,
     )>,
+    num_raygen: u32,
+    num_miss: u32,
+    num_callable: u32,
 }
 
 impl RayTracingPipelineManagerPipelineLibrary {
@@ -381,6 +446,11 @@ impl RayTracingPipelineManagerPipelineLibrary {
         if raygen_shaders.len() == 0 {
             panic!("At least one raygen shader must be provided");
         }
+
+        let num_raygen = raygen_shaders.len() as u32;
+        let num_miss = miss_shaders.len() as u32;
+        let num_callable = callable_shaders.len() as u32;
+
         let stages: Vec<_> = raygen_shaders
             .into_iter()
             .chain(miss_shaders)
@@ -403,6 +473,11 @@ impl RayTracingPipelineManagerPipelineLibrary {
             stages,
             groups,
             libraries: Vec::new(),
+            num_raygen,
+            num_miss,
+            num_callable,
+            num_hitgroup: 0,
+            fetch_sbt_handles: false,
         };
         let base_library: CachedPipeline<RayTracingPipelineLibrary> = pipeline_cache.create(info);
         Self {
@@ -410,6 +485,9 @@ impl RayTracingPipelineManagerPipelineLibrary {
             base_library,
             hitgroup_libraries: Vec::new(),
             hitgroup_table: BTreeMap::new(),
+            num_raygen,
+            num_miss,
+            num_callable,
         }
     }
 
@@ -443,11 +521,24 @@ impl RayTracingPipelineManagerPipelineLibrary {
                 intersection_shader,
             )],
         );
+        let pipeline_library_group_handles = self
+            .common
+            .layout
+            .device()
+            .feature::<vk::PhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT>()
+            .map(|a| a.pipeline_library_group_handles == vk::TRUE)
+            .unwrap_or(false);
         let info = RayTracingPipelineBuildInfo {
             common: self.common.clone(),
             stages,
             groups,
             libraries: Vec::new(),
+            num_raygen: 0,
+            num_miss: 0,
+            num_callable: 0,
+            num_hitgroup: 1,
+            // If possible, fetch the handles from the libraries instead of the pipeline.
+            fetch_sbt_handles: pipeline_library_group_handles,
         };
         let library: CachedPipeline<RayTracingPipelineLibrary> = pipeline_cache.create(info);
         self.hitgroup_libraries.push((handle, ty, library));
@@ -478,14 +569,35 @@ impl RayTracingPipelineManagerPipelineLibrary {
         pool: &DeferredOperationTaskPool,
     ) -> Option<CachedPipeline<RenderObject<RayTracingPipeline>>> {
         let libraries = std::iter::once(&mut self.base_library)
-        .chain(self.hitgroup_libraries.iter_mut().map(|(_, _, library)| library))
-        .map(|library| pipeline_cache.retrieve_inner(library, assets, pool, false).cloned())
-        .collect::<Option<Vec<_>>>()?;
+            .chain(
+                self.hitgroup_libraries
+                    .iter_mut()
+                    .map(|(_, _, library)| library),
+            )
+            .map(|library| {
+                pipeline_cache
+                    .retrieve_inner(library, assets, pool, false)
+                    .cloned()
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let pipeline_library_group_handles = self
+            .common
+            .layout
+            .device()
+            .feature::<vk::PhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT>()
+            .map(|a| a.pipeline_library_group_handles == vk::TRUE)
+            .unwrap_or(false);
         let info = RayTracingPipelineBuildInfo {
+            num_raygen: self.num_raygen,
+            num_miss: self.num_miss,
+            num_callable: self.num_callable,
+            num_hitgroup: self.hitgroup_libraries.len() as u32,
             common: self.common.clone(),
             stages: Vec::new(),
             groups: Vec::new(),
             libraries,
+            // If we can fetch the handles from the libraries, we don't need to fetch them from the pipeline.
+            fetch_sbt_handles: !pipeline_library_group_handles,
         };
         Some(pipeline_cache.create(info))
     }
@@ -548,5 +660,90 @@ fn build_hitgroup_shaders(
             general_shader: vk::SHADER_UNUSED_KHR,
             ..Default::default()
         })
+    }
+}
+
+pub struct SbtHandles {
+    data: Box<[u8]>,
+    handle_layout: Layout,
+    group_base_alignment: u32,
+    num_raygen: u32,
+    num_miss: u32,
+    num_callable: u32,
+    num_hitgroup: u32,
+}
+impl SbtHandles {
+    pub fn handle_layout(&self) -> &Layout {
+        &self.handle_layout
+    }
+    fn new(
+        device: &Device,
+        pipeline: vk::Pipeline,
+        num_raygen: u32,
+        num_miss: u32,
+        num_callable: u32,
+        num_hitgroup: u32,
+    ) -> VkResult<SbtHandles> {
+        let total_num_groups = num_hitgroup + num_miss + num_callable + num_raygen;
+        let rtx_properties = device
+            .physical_device()
+            .properties()
+            .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+        let sbt_handles_host_vec = unsafe {
+            device
+                .extension::<ash::extensions::khr::RayTracingPipeline>()
+                .get_ray_tracing_shader_group_handles(
+                    pipeline,
+                    0,
+                    total_num_groups,
+                    // VUID-vkGetRayTracingShaderGroupHandlesKHR-dataSize-02420
+                    // dataSize must be at least VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupHandleSize × groupCount
+                    rtx_properties.shader_group_handle_size as usize * total_num_groups as usize,
+                )?
+                .into_boxed_slice()
+        };
+        Ok(SbtHandles {
+            data: sbt_handles_host_vec,
+            handle_layout: Layout::from_size_align(
+                rtx_properties.shader_group_handle_size as usize,
+                rtx_properties.shader_group_handle_alignment as usize,
+            )
+            .unwrap(),
+            group_base_alignment: rtx_properties.shader_group_base_alignment,
+            num_raygen: num_raygen,
+            num_miss: num_miss,
+            num_callable: num_callable,
+            num_hitgroup: num_hitgroup,
+        })
+    }
+
+    pub fn rgen(&self, index: usize) -> &[u8] {
+        // Note that
+        // VUID-vkGetRayTracingShaderGroupHandlesKHR-dataSize-02420
+        // dataSize must be at least VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupHandleSize × groupCount
+        // This implies all handles are tightly packed. No need to call `pad_to_align` here
+        let start = self.handle_layout.size() * index;
+        let end = start + self.handle_layout.size();
+        &self.data[start..end]
+    }
+    pub fn rmiss(&self, index: usize) -> &[u8] {
+        let start = self.handle_layout.size() * (index + self.num_raygen as usize);
+        let end = start + self.handle_layout.size();
+        &self.data[start..end]
+    }
+    pub fn callable(&self, index: usize) -> &[u8] {
+        let start =
+            self.handle_layout.size() * (index + self.num_raygen as usize + self.num_miss as usize);
+        let end = start + self.handle_layout.size();
+        &self.data[start..end]
+    }
+    pub fn hitgroup(&self, index: usize) -> &[u8] {
+        let start = self.handle_layout.size()
+            * (index
+                + self.num_miss as usize
+                + self.num_callable as usize
+                + self.num_raygen as usize);
+        let end = start + self.handle_layout.size();
+        &self.data[start..end]
     }
 }
