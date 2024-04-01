@@ -5,6 +5,7 @@
 #![feature(noop_waker)]
 #![feature(ptr_metadata)]
 #![feature(alloc_layout_extra)]
+#![feature(maybe_uninit_array_assume_init)]
 #![feature(specialization)]
 
 mod access;

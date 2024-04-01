@@ -20,6 +20,14 @@ pub struct MemoryBarrier {
 }
 
 impl Access {
+    pub const COPY_READ: Access = Access {
+        stage: vk::PipelineStageFlags2::COPY,
+        access: vk::AccessFlags2::TRANSFER_READ,
+    };
+    pub const COPY_WRITE: Access = Access {
+        stage: vk::PipelineStageFlags2::COPY,
+        access: vk::AccessFlags2::TRANSFER_WRITE,
+    };
     pub fn is_writeonly(&self) -> bool {
         if self.access == vk::AccessFlags2::empty() {
             return false;
@@ -34,6 +42,16 @@ impl Access {
         }
         // Clear all the read bits. If nothing is left, that means there's no write bits.
         self.access & !utils::ALL_READ_BITS == vk::AccessFlags2::NONE
+    }
+}
+
+impl std::ops::BitOr for Access {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self {
+            stage: self.stage | rhs.stage,
+            access: self.access | rhs.access,
+        }
     }
 }
 

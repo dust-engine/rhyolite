@@ -112,6 +112,9 @@ impl<T: Send + Sync + 'static> RenderObject<T> {
         self.0.semaphores.push((sem, val));
         &mut self.0.inner
     }
+    pub fn get(&self) -> &T {
+        &self.0.inner
+    }
 }
 impl<T: Send + Sync + 'static> Drop for RenderObject<T> {
     fn drop(&mut self) {

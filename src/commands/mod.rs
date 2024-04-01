@@ -10,8 +10,10 @@ use crate::{
     Access, Device, HasDevice, ImageLike, QueueRef,
 };
 
+mod compute;
 mod render;
 mod transfer;
+pub use compute::*;
 pub use render::*;
 pub use transfer::*;
 

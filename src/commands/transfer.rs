@@ -6,8 +6,7 @@ pub trait TransferCommands: CommandRecorder {
     fn copy_buffer(&mut self, src: vk::Buffer, dst: vk::Buffer, regions: &[vk::BufferCopy]) {
         unsafe {
             let cmd_buf = self.cmd_buf();
-            self.device()
-                .cmd_copy_buffer(cmd_buf, src.raw_buffer(), dst.raw_buffer(), regions);
+            self.device().cmd_copy_buffer(cmd_buf, src, dst, regions);
         }
     }
     fn copy_buffer_to_image(
@@ -20,7 +19,7 @@ pub trait TransferCommands: CommandRecorder {
         unsafe {
             let cmd_buf = self.cmd_buf();
             self.device()
-                .cmd_copy_buffer_to_image(cmd_buf, src.raw_buffer(), dst, layout, regions);
+                .cmd_copy_buffer_to_image(cmd_buf, src, dst, layout, regions);
         }
     }
 }

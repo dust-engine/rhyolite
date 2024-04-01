@@ -1,4 +1,6 @@
+mod ext;
 pub mod staging;
+pub use ext::*;
 
 use std::{
     alloc::Layout,
@@ -11,7 +13,7 @@ use ash::{prelude::VkResult, vk};
 use crate::{utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel};
 use vk_mem::Alloc;
 
-pub trait BufferLike {
+pub trait BufferLike: HasDevice {
     fn raw_buffer(&self) -> vk::Buffer;
     fn offset(&self) -> vk::DeviceSize {
         0
@@ -20,10 +22,65 @@ pub trait BufferLike {
         vk::WHOLE_SIZE
     }
 }
-
-impl BufferLike for vk::Buffer {
+/// A buffer fully bound to a memory allocation.
+pub struct Buffer {
+    allocator: Allocator,
+    allocation: vk_mem::Allocation,
+    buffer: vk::Buffer,
+    size: vk::DeviceSize,
+}
+unsafe impl Send for Buffer {}
+unsafe impl Sync for Buffer {}
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        unsafe {
+            self.allocator
+                .destroy_buffer(self.buffer, &mut self.allocation);
+        }
+    }
+}
+impl Buffer {
+    pub fn new_resource(
+        allocator: Allocator,
+        size: vk::DeviceSize,
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> VkResult<Self> {
+        unsafe {
+            let (buffer, allocation) = allocator.create_buffer_with_alignment(
+                &vk::BufferCreateInfo {
+                    size,
+                    usage,
+                    ..Default::default()
+                },
+                &vk_mem::AllocationCreateInfo {
+                    usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    ..Default::default()
+                },
+                alignment,
+            )?;
+            Ok(Self {
+                allocator,
+                buffer,
+                allocation,
+                size,
+            })
+        }
+    }
+}
+impl HasDevice for Buffer {
+    fn device(&self) -> &crate::Device {
+        self.allocator.device()
+    }
+}
+impl BufferLike for Buffer {
     fn raw_buffer(&self) -> vk::Buffer {
-        *self
+        self.buffer
+    }
+    fn size(&self) -> vk::DeviceSize {
+        self.size
     }
 }
 
@@ -47,6 +104,11 @@ impl<T> Drop for BufferArray<T> {
                 self.allocator.destroy_buffer(self.buffer, allocation);
             }
         }
+    }
+}
+impl<T> HasDevice for BufferArray<T> {
+    fn device(&self) -> &crate::Device {
+        self.allocator.device()
     }
 }
 impl<T> BufferLike for BufferArray<T> {
@@ -143,6 +205,8 @@ impl<T> BufferArray<T> {
             allocation_info: vk_mem::AllocationCreateInfo {
                 usage: vk_mem::MemoryUsage::AutoPreferDevice,
                 flags: vk_mem::AllocationCreateFlags::empty(),
+                required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 ..Default::default()
             },
             len: 0,
