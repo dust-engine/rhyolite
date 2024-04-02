@@ -1,5 +1,5 @@
 use std::{
-    alloc::Layout, collections::BTreeMap, marker::PhantomData, num::NonZeroU32, ops::DerefMut,
+    alloc::Layout, collections::{BTreeMap, BTreeSet}, marker::PhantomData, num::NonZeroU32, ops::DerefMut,
     ptr::NonNull,
 };
 
@@ -17,6 +17,7 @@ use bevy::{
     utils::smallvec::SmallVec,
 };
 use bytemuck::Pod;
+use itertools::Itertools;
 use vk_mem::Allocator;
 
 use crate::{
@@ -91,7 +92,7 @@ where
     /// Mapping from Entity to sbt_index
     entity_map: BTreeMap<Entity, u32>,
 
-    changes: iset::IntervalSet<u32>,
+    changes: BTreeSet<u32>,
 
     full_update_required: bool,
 
@@ -131,6 +132,12 @@ where
             allocation: None,
             capacity: 0,
             full_update_required: false,
+            free_entries: Vec::new(),
+            sbt_map_reverse: BTreeMap::new(),
+            sbt_map: Vec::new(),
+            entity_map: BTreeMap::new(),
+            changes: BTreeSet::new(),
+            pipelines: None,
         }
     }
     /// Ensure that the SBT is sufficient for i entries.
@@ -153,7 +160,7 @@ where
     }
     fn mark_changes(&mut self, sbt_index: u32) {
         if !self.full_update_required {
-            self.changes.insert(sbt_index..(sbt_index + 1));
+            self.changes.insert(sbt_index);
         }
     }
 
@@ -265,25 +272,8 @@ where
                 .enumerate()
                 .filter_map(|(i, item)| Some((i, item.as_ref()?)))
             {
-                let offset = i * this.hitgroup_layout.one_entry.pad_to_align().size();
-                let entry = &mut host_buffer.deref_mut()
-                    [offset..offset + this.hitgroup_layout.one_entry.size()];
                 let (handle, params) = unsafe { r.as_ref() };
-                for raytype in 0..T::NUM_RAYTYPES {
-                    let offset = raytype * this.hitgroup_layout.one_raytype.pad_to_align().size();
-                    let entry =
-                        &mut entry[offset..offset + this.hitgroup_layout.one_raytype.size()];
-
-                    let params = &params[raytype];
-                    let pipeline = &pipelines[this
-                        .pipeline_group
-                        .pipeline_index_of_raytype(raytype as u32)
-                        as usize];
-                    entry[0..this.hitgroup_layout.handle_size]
-                        .copy_from_slice(pipeline.get().handles().hitgroup(*handle));
-                    entry[this.hitgroup_layout.handle_size..]
-                        .copy_from_slice(bytemuck::bytes_of(params));
-                }
+                this.copy_sbt(&mut host_buffer, i, *params, *handle, pipelines);
             }
             let device_buffer = this.allocation.as_mut().unwrap();
             commands.copy_buffer(
@@ -295,6 +285,77 @@ where
                     size: total_size,
                 }],
             )
+        } else if !this.changes.is_empty() {
+            let total_size = this
+                .hitgroup_layout
+                .one_entry
+                .repeat(this.changes.len())
+                .unwrap()
+                .0
+                .size() as u64;
+            let mut host_buffer = staging_belt
+                .start(&mut commands)
+                .allocate_buffer(total_size, 1);
+
+            for (i, &sbt_index) in this.changes.iter().enumerate() {
+                let r = this.sbt_map[sbt_index as usize].as_ref().unwrap().1;
+                let (handle, params) = unsafe { r.as_ref() };
+                this.copy_sbt(&mut host_buffer, i, *params, *handle, pipelines);
+            }
+            let regions = this.changes.iter()
+            .map(|a| (*a, 1_u32)).coalesce(|a, b| {
+                if a.0 + 1 == b.0 {
+                    Ok((a.0, a.1 + b.1))
+                } else {
+                    Err((a, b))
+                }
+            })
+            .enumerate()
+            .map(|(i, (start, len))| {
+                vk::BufferCopy {
+                    src_offset: i as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
+                    dst_offset: start as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
+                    size: len as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
+                }
+            })
+            .collect::<Vec<_>>();
+            
+            let device_buffer = this.allocation.as_mut().unwrap();
+            commands.copy_buffer(
+                host_buffer.buffer,
+                device_buffer.raw_buffer(),
+                &regions,
+            );
+            this.changes.clear();
+        }
+    }
+
+    
+    fn copy_sbt(
+        &self,
+        dst_buffer: &mut [u8],
+        dst_index: usize,
+        raytype_params: [T::HitgroupParam; T::NUM_RAYTYPES],
+        hitgroup_handle: HitgroupHandle,
+        pipelines: &[RenderObject<RayTracingPipeline>],
+    ) {
+        let offset = dst_index * self.hitgroup_layout.one_entry.pad_to_align().size();
+        let entry = &mut dst_buffer
+            [offset..offset + self.hitgroup_layout.one_entry.size()];
+        for (raytype, params) in raytype_params.iter().enumerate() {
+            let offset = raytype * self.hitgroup_layout.one_raytype.pad_to_align().size();
+            let entry =
+                &mut entry[offset..offset + self.hitgroup_layout.one_raytype.size()];
+
+            let pipeline = &pipelines[
+                self.pipeline_group
+                .pipeline_index_of_raytype(raytype as u32)
+                as usize];
+            entry[0..self.hitgroup_layout.handle_size]
+                .copy_from_slice(pipeline.get().handles().hitgroup(hitgroup_handle));
+            entry[self.hitgroup_layout.handle_size..]
+                .copy_from_slice(bytemuck::bytes_of(params));
         }
     }
 }
+

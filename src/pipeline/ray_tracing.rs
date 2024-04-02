@@ -884,7 +884,7 @@ pub struct PipelineGroupManager<const NUM_RAYTYPES: usize> {
 }
 
 impl<const NUM_RAYTYPES: usize> PipelineGroupManager<NUM_RAYTYPES> {
-    pub fn pipeline_index_of_raytype(&mut self, raytype: u32) -> u8 {
+    pub fn pipeline_index_of_raytype(&self, raytype: u32) -> u8 {
         self.ray_types[raytype as usize]
     }
     pub fn build(
