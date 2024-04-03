@@ -28,6 +28,10 @@ impl Access {
         stage: vk::PipelineStageFlags2::COPY,
         access: vk::AccessFlags2::TRANSFER_WRITE,
     };
+    pub const CLEAR: Access = Access {
+        stage: vk::PipelineStageFlags2::CLEAR,
+        access: vk::AccessFlags2::TRANSFER_WRITE,
+    };
     pub fn is_writeonly(&self) -> bool {
         if self.access == vk::AccessFlags2::empty() {
             return false;

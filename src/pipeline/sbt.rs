@@ -1,5 +1,9 @@
 use std::{
-    alloc::Layout, collections::{BTreeMap, BTreeSet}, marker::PhantomData, num::NonZeroU32, ops::DerefMut,
+    alloc::Layout,
+    collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
+    num::NonZeroU32,
+    ops::DerefMut,
     ptr::NonNull,
 };
 
@@ -302,35 +306,33 @@ where
                 let (handle, params) = unsafe { r.as_ref() };
                 this.copy_sbt(&mut host_buffer, i, *params, *handle, pipelines);
             }
-            let regions = this.changes.iter()
-            .map(|a| (*a, 1_u32)).coalesce(|a, b| {
-                if a.0 + 1 == b.0 {
-                    Ok((a.0, a.1 + b.1))
-                } else {
-                    Err((a, b))
-                }
-            })
-            .enumerate()
-            .map(|(i, (start, len))| {
-                vk::BufferCopy {
-                    src_offset: i as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
-                    dst_offset: start as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
+            let regions = this
+                .changes
+                .iter()
+                .map(|a| (*a, 1_u32))
+                .coalesce(|a, b| {
+                    if a.0 + 1 == b.0 {
+                        Ok((a.0, a.1 + b.1))
+                    } else {
+                        Err((a, b))
+                    }
+                })
+                .enumerate()
+                .map(|(i, (start, len))| vk::BufferCopy {
+                    src_offset: i as u64
+                        * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
+                    dst_offset: start as u64
+                        * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
                     size: len as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
-                }
-            })
-            .collect::<Vec<_>>();
-            
+                })
+                .collect::<Vec<_>>();
+
             let device_buffer = this.allocation.as_mut().unwrap();
-            commands.copy_buffer(
-                host_buffer.buffer,
-                device_buffer.raw_buffer(),
-                &regions,
-            );
+            commands.copy_buffer(host_buffer.buffer, device_buffer.raw_buffer(), &regions);
             this.changes.clear();
         }
     }
 
-    
     fn copy_sbt(
         &self,
         dst_buffer: &mut [u8],
@@ -340,22 +342,18 @@ where
         pipelines: &[RenderObject<RayTracingPipeline>],
     ) {
         let offset = dst_index * self.hitgroup_layout.one_entry.pad_to_align().size();
-        let entry = &mut dst_buffer
-            [offset..offset + self.hitgroup_layout.one_entry.size()];
+        let entry = &mut dst_buffer[offset..offset + self.hitgroup_layout.one_entry.size()];
         for (raytype, params) in raytype_params.iter().enumerate() {
             let offset = raytype * self.hitgroup_layout.one_raytype.pad_to_align().size();
-            let entry =
-                &mut entry[offset..offset + self.hitgroup_layout.one_raytype.size()];
+            let entry = &mut entry[offset..offset + self.hitgroup_layout.one_raytype.size()];
 
-            let pipeline = &pipelines[
-                self.pipeline_group
+            let pipeline = &pipelines[self
+                .pipeline_group
                 .pipeline_index_of_raytype(raytype as u32)
                 as usize];
             entry[0..self.hitgroup_layout.handle_size]
                 .copy_from_slice(pipeline.get().handles().hitgroup(hitgroup_handle));
-            entry[self.hitgroup_layout.handle_size..]
-                .copy_from_slice(bytemuck::bytes_of(params));
+            entry[self.hitgroup_layout.handle_size..].copy_from_slice(bytemuck::bytes_of(params));
         }
     }
 }
-
