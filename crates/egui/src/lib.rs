@@ -770,7 +770,6 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     else {
         return;
     };
-    let pipeline = pipeline.use_on(&mut commands);
     if !should_draw {
         return;
     }
@@ -808,7 +807,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
         },
         ..Default::default()
     });
-    pass.bind_pipeline(pipeline.raw());
+    pass.bind_pipeline(pipeline);
 
     let mut vertex_buffer = device_buffer.vertex_buffer.raw_buffer();
     let mut index_buffer = device_buffer.index_buffer.raw_buffer();

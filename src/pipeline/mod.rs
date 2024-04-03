@@ -16,6 +16,8 @@ mod ray_tracing;
 
 pub use cache::*;
 pub use graphics::*;
+pub use compute::*;
+pub use ray_tracing::*;
 pub use layout::*;
 
 pub mod sbt;

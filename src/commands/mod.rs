@@ -4,10 +4,7 @@ use ash::vk;
 use bevy::utils::smallvec::SmallVec;
 
 use crate::{
-    buffer::BufferLike,
-    ecs::{RenderImage, RenderRes},
-    semaphore::TimelineSemaphore,
-    Access, Device, HasDevice, ImageLike, QueueRef,
+    buffer::BufferLike, dispose::RenderObject, ecs::{RenderImage, RenderRes}, pipeline::Pipeline, semaphore::TimelineSemaphore, Access, Device, HasDevice, ImageLike, QueueRef
 };
 
 mod compute;
@@ -24,6 +21,10 @@ pub trait CommandRecorder: HasDevice {
 }
 
 pub trait CommonCommands: CommandRecorder {
+    fn bind_pipeline(&mut self, pipeline: &mut RenderObject<impl Pipeline>) where Self: SemaphoreSignalCommands {
+        pipeline.use_on(self);
+        
+    }
     fn clear_color_image(
         &mut self,
         image: vk::Image,

@@ -14,6 +14,7 @@ use crate::dispose::RenderObject;
 use crate::shader::ShaderModule;
 use crate::Device;
 
+use super::compute::{ComputePipeline, ComputePipelineCreateInfo};
 use super::{
     BoxedGraphicsPipelineBuildInfo, Builder, BuilderResult, GraphicsPipeline,
     GraphicsPipelineBuildInfo, Pipeline, PipelineBuildInfo,
@@ -95,6 +96,13 @@ impl PipelineCache {
             builder: Arc::new(build_info.builder),
         };
         self.create::<RenderObject<GraphicsPipeline>>(boxed)
+    }
+    pub fn create_compute(
+        &self,
+        build_info: ComputePipelineCreateInfo,
+    ) -> CachedPipeline<RenderObject<ComputePipeline>>
+    {
+        self.create::<RenderObject<ComputePipeline>>(build_info)
     }
     pub fn retrieve<'a, T: Pipeline>(
         &self,

@@ -1,0 +1,10 @@
+#[set]
+struct GameOfLifeLayout {
+    #![stage(COMPUTE)]
+    u_img: StorageImage<RGBA16_Float>,
+}
+#[push_constants]
+struct PushConstants {
+    #![stage(COMPUTE)]
+    u_transform: Vec2,
+}

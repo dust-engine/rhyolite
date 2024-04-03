@@ -26,28 +26,28 @@ impl Default for QueueRef {
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum QueueType {
+    /// A queue with graphics capabilities.
     Graphics = 0,
+    /// A queue with compute capabilities. Priorities queues without graphics capabilities.
     Compute = 1,
+    /// A queue with transfer capabilities.
     Transfer = 2,
     SparseBinding = 3,
-}
 
-impl QueueType {
-    pub fn mask(&self) -> vk::QueueFlags {
-        match self {
-            QueueType::Graphics => vk::QueueFlags::GRAPHICS,
-            QueueType::Compute => vk::QueueFlags::COMPUTE,
-            QueueType::Transfer => vk::QueueFlags::TRANSFER,
-            QueueType::SparseBinding => vk::QueueFlags::SPARSE_BINDING,
-        }
-    }
+    /// A queue with compute capabilities. Priorities queues also with graphics capabilities.
+    /// This is likely referring to the same queue as the `Graphics` queue. However, if no such
+    /// "universal" queue exists, this will be routed to a separate queue with only COMPUTE
+    /// capabilities.
+    /// 
+    /// If your compute task is interleaved between graphics operations, selecting this QueueType
+    /// may be more optimal as it reduces the syncronization overhead between different queues.
+    UniversalCompute = 4,
 }
 
 #[derive(Resource, Debug)]
 pub struct QueuesRouter {
     pub(crate) queue_family_to_types: Vec<vk::QueueFlags>,
-    pub(crate) queue_type_to_index: [QueueRef; 4],
-    pub(crate) queue_type_to_family: [u32; 4],
+    pub(crate) queue_type_to_index: [QueueRef; 5],
 }
 
 impl QueuesRouter {
@@ -55,7 +55,7 @@ impl QueuesRouter {
         self.queue_type_to_index[ty as usize]
     }
     pub fn queue_family_of_type(&self, ty: QueueType) -> u32 {
-        let queue_family = self.queue_type_to_family[ty as usize];
+        let queue_family = self.queue_type_to_index[ty as usize].family;
         queue_family
     }
     pub(crate) fn find_with_queue_family_properties(
@@ -200,14 +200,7 @@ impl QueuesRouter {
         queue_family_to_types[compute_queue_family as usize] |= vk::QueueFlags::COMPUTE;
         queue_family_to_types[graphics_queue_family as usize] |= vk::QueueFlags::GRAPHICS;
 
-        let queue_type_to_family: [u32; 4] = [
-            graphics_queue_family,
-            compute_queue_family,
-            transfer_queue_family,
-            sparse_binding_queue_family,
-        ];
-
-        let mut queue_type_to_index: [QueueRef; 4] = [QueueRef::null(); 4];
+        let mut queue_type_to_index: [QueueRef; 5] = [QueueRef::null(); 5];
         for (i, ty) in queue_family_to_types
             .iter()
             .filter(|x| !x.is_empty())
@@ -237,6 +230,16 @@ impl QueuesRouter {
                     family: sparse_binding_queue_family,
                 };
             }
+            if ty.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE) {
+                queue_type_to_index[QueueType::UniversalCompute as usize] = QueueRef {
+                    index: i as u32,
+                    family: sparse_binding_queue_family,
+                };
+            }
+        }
+        if queue_type_to_index[QueueType::UniversalCompute as usize].is_null() {
+            // UniversalCompute queuetype fallbacks to compute
+            queue_type_to_index[QueueType::UniversalCompute as usize] = queue_type_to_index[QueueType::Compute as usize];
         }
         for i in queue_type_to_index.iter().take(3) {
             assert!(!i.is_null(), "All queue types should've been assigned")
@@ -245,7 +248,6 @@ impl QueuesRouter {
         Self {
             queue_family_to_types,
             queue_type_to_index,
-            queue_type_to_family,
         }
     }
 
@@ -334,8 +336,8 @@ mod tests {
         );
         for (i, expected_index) in [0, 2, 1, 1].iter().enumerate() {
             assert_eq!(router.queue_type_to_index[i].index, *expected_index);
+            assert_eq!(router.queue_type_to_index[i].family, *expected_index);
         }
-        assert_eq!(router.queue_type_to_family, [0, 2, 1, 1,]);
     }
     #[test]
     fn test_intel_windows() {
@@ -374,10 +376,10 @@ mod tests {
                 vk::QueueFlags::empty(),
             ]
         );
-        for (i, expected_index) in [0, 0, 0, 0].iter().enumerate() {
+        for (i, expected_index) in [0, 0, 0, 0, 0].iter().enumerate() {
             assert_eq!(router.queue_type_to_index[i].index, *expected_index);
+            assert_eq!(router.queue_type_to_index[i].family, *expected_index);
         }
-        assert_eq!(router.queue_type_to_family, [0, 0, 0, 0,]);
     }
 
     #[test]
@@ -411,7 +413,7 @@ mod tests {
         );
         for (i, expected_index) in [0, 0, 0, 0].iter().enumerate() {
             assert_eq!(router.queue_type_to_index[i].index, *expected_index);
+            assert_eq!(router.queue_type_to_index[i].family, *expected_index);
         }
-        assert_eq!(router.queue_type_to_family, [0, 0, 0, 0,]);
     }
 }

@@ -9,12 +9,14 @@ pub mod queue_cap {
     impl IsQueueCap<'g'> for () {}
     impl IsQueueCap<'c'> for () {}
     impl IsQueueCap<'t'> for () {}
+    impl IsQueueCap<'u'> for () {}
 
     pub trait IsGraphicsQueueCap<const Q: QueueCap>: IsQueueCap<Q> {}
     impl IsGraphicsQueueCap<'g'> for () {}
 
     pub trait IsComputeQueueCap<const Q: QueueCap>: IsQueueCap<Q> {}
     impl IsComputeQueueCap<'c'> for () {}
+    impl IsComputeQueueCap<'u'> for () {}
 }
 
 use std::{
@@ -305,6 +307,7 @@ where
             'g' => QueueType::Graphics,
             'c' => QueueType::Compute,
             't' => QueueType::Transfer,
+            'u' => QueueType::UniversalCompute,
             _ => unreachable!(),
         };
         let config = config.entry::<RenderSystemConfig>().or_default();

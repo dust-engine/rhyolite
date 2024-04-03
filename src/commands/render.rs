@@ -1,8 +1,8 @@
 use ash::vk::{self};
 
-use crate::{ecs::queue_cap::IsGraphicsQueueCap, Device, HasDevice, QueueRef};
+use crate::{dispose::RenderObject, ecs::queue_cap::IsGraphicsQueueCap, pipeline::GraphicsPipeline, Device, HasDevice, QueueRef};
 
-use super::CommandRecorder;
+use super::{CommandRecorder, SemaphoreSignalCommands};
 
 pub trait GraphicsCommands: Sized + CommandRecorder {
     fn begin_rendering(&mut self, info: &vk::RenderingInfo) -> DynamicRenderPass<Self> {
@@ -49,11 +49,14 @@ where
 }
 
 pub trait RenderPassCommands: CommandRecorder {
-    fn bind_pipeline(&mut self, pipeline: vk::Pipeline) {
+    type Recorder: GraphicsCommands + SemaphoreSignalCommands;
+    fn recorder(&mut self) -> &mut Self::Recorder;
+    fn bind_pipeline(&mut self, pipeline: &mut RenderObject<GraphicsPipeline>) {
+        let pipeline = pipeline.use_on(self.recorder());
         unsafe {
             let cmd_buf = self.cmd_buf();
             self.device()
-                .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline.raw());
         }
     }
     fn bind_vertex_buffers(
@@ -233,7 +236,12 @@ where
         self.recorder.current_queue()
     }
 }
-impl<T> RenderPassCommands for DynamicRenderPass<'_, T> where T: GraphicsCommands {}
+impl<T> RenderPassCommands for DynamicRenderPass<'_, T> where T: GraphicsCommands + SemaphoreSignalCommands {
+    type Recorder = T;
+    fn recorder(&mut self) -> &mut Self::Recorder {
+        &mut self.recorder
+    }
+}
 
 pub struct RenderPass<'w, T: GraphicsCommands> {
     recorder: &'w mut T,
@@ -270,7 +278,12 @@ where
         self.recorder.current_queue()
     }
 }
-impl<T> RenderPassCommands for RenderPass<'_, T> where T: GraphicsCommands {}
+impl<T> RenderPassCommands for RenderPass<'_, T> where T: GraphicsCommands + SemaphoreSignalCommands {
+    type Recorder = T;
+    fn recorder(&mut self) -> &mut Self::Recorder {
+        &mut self.recorder
+    }
+}
 
 pub trait SubpassCommands: CommandRecorder {
     fn next_subpass(&mut self, contents: vk::SubpassContents) {
