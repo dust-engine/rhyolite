@@ -5,9 +5,11 @@ use crate::{
     deferred::{DeferredOperationTaskPool, Task},
     dispose::RenderObject,
     shader::ShaderModule,
+    Device,
 };
 
 mod cache;
+mod compute;
 mod graphics;
 mod layout;
 mod ray_tracing;
@@ -47,7 +49,7 @@ impl<T: Pipeline> Pipeline for RenderObject<T> {
 }
 
 pub trait PipelineBuildInfo {
-    type Pipeline: Pipeline<BuildInfo = Self>;
+    type Pipeline;
     fn build(
         &mut self,
         pool: &DeferredOperationTaskPool,
@@ -58,4 +60,16 @@ pub trait PipelineBuildInfo {
     /// List of all shaders used by this pipeline.
     /// Only called when shader hot reloading is enabled.
     fn all_shaders(&self) -> impl Iterator<Item = AssetId<ShaderModule>>;
+}
+
+pub struct PipelineInner {
+    pub(crate) device: Device,
+    pub(crate) pipeline: vk::Pipeline,
+}
+impl Drop for PipelineInner {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_pipeline(self.pipeline, None);
+        }
+    }
 }

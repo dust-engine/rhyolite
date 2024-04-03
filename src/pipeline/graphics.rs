@@ -13,30 +13,22 @@ use crate::{
     Device,
 };
 
-pub struct GraphicsPipeline {
-    device: Device,
-    pipeline: vk::Pipeline,
-}
+use super::PipelineInner;
+
+#[derive(Clone)]
+pub struct GraphicsPipeline(Arc<PipelineInner>);
 impl GraphicsPipeline {
     pub fn raw(&self) -> vk::Pipeline {
-        self.pipeline
+        self.0.pipeline
     }
 }
-impl Drop for GraphicsPipeline {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_pipeline(self.pipeline, None);
-        }
-    }
-}
-
 impl super::Pipeline for GraphicsPipeline {
     type BuildInfo = BoxedGraphicsPipelineBuildInfo;
     fn from_built(
         _info: &mut BoxedGraphicsPipelineBuildInfo,
         item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
     ) -> Self {
-        item
+        GraphicsPipeline(Arc::new(item))
     }
 }
 
@@ -91,7 +83,7 @@ pub struct BoxedGraphicsPipelineBuildInfo {
 }
 
 impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
-    type Pipeline = GraphicsPipeline;
+    type Pipeline = PipelineInner;
 
     fn build(
         &mut self,
@@ -101,34 +93,9 @@ impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
     ) -> Option<Task<Self::Pipeline>> {
         let device = self.device.clone();
         let builder = self.builder.clone();
-        let specialization_info = self
-            .stages
-            .iter()
-            .map(SpecializedShader::as_raw)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let stages = self
-            .stages
-            .iter()
-            .zip(specialization_info.iter())
-            .map(|(shader, specialization_info)| {
-                let module = assets.get(&shader.shader)?;
-                Some(vk::PipelineShaderStageCreateInfo {
-                    stage: shader.stage,
-                    module: module.raw(),
-                    p_name: shader.entry_point.as_ptr(),
-                    p_specialization_info: specialization_info,
-                    flags: shader.flags,
-                    ..Default::default()
-                })
-            })
-            .collect::<Option<Vec<_>>>()?
-            .into_boxed_slice();
-
-        let specialization_info = SendBox(specialization_info);
-        let stages = SendBox(stages);
+        let stages = SendBox(SpecializedShader::as_raw_many(&self.stages, assets)?);
         Some(pool.schedule(move || {
-            let stages = stages.into_inner();
+            let (specialization_info, stages) = stages.into_inner();
             let mut info = vk::GraphicsPipelineCreateInfo::default();
             info.stage_count = stages.len() as u32;
             info.p_stages = stages.as_ptr();
@@ -140,7 +107,7 @@ impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
             .0?;
             drop(stages);
             drop(specialization_info);
-            Ok(GraphicsPipeline {
+            Ok(PipelineInner {
                 device,
                 pipeline: result,
             })

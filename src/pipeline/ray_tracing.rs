@@ -20,11 +20,11 @@ use crate::{
     HasDevice,
 };
 
-use super::{CachedPipeline, PipelineCache, PipelineLayout};
+use super::{CachedPipeline, PipelineCache, PipelineInner, PipelineLayout};
 
 #[derive(Clone)]
 pub struct RayTracingPipeline {
-    inner: Arc<RayTracingPipelineInner>,
+    inner: Arc<PipelineInner>,
     handles: SbtHandles,
 }
 impl RayTracingPipeline {
@@ -32,29 +32,10 @@ impl RayTracingPipeline {
         &self.handles
     }
 }
-pub struct RayTracingPipelineInner {
-    device: Device,
-    pipeline: vk::Pipeline,
-}
+
 impl RayTracingPipeline {
     pub fn raw(&self) -> vk::Pipeline {
         self.inner.pipeline
-    }
-}
-impl Drop for RayTracingPipelineInner {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_pipeline(self.pipeline, None);
-        }
-    }
-}
-impl super::Pipeline for RayTracingPipelineInner {
-    type BuildInfo = RayTracingPipelineBuildInfo;
-    fn from_built(
-        _info: &mut RayTracingPipelineBuildInfo,
-        item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
-    ) -> Self {
-        item
     }
 }
 impl super::Pipeline for RayTracingPipeline {
@@ -125,7 +106,7 @@ unsafe impl Send for RayTracingPipelineBuildInfo {}
 unsafe impl Sync for RayTracingPipelineBuildInfo {}
 
 impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
-    type Pipeline = RayTracingPipelineInner;
+    type Pipeline = PipelineInner;
 
     fn build(
         &mut self,
@@ -133,38 +114,13 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
         assets: &Assets<ShaderModule>,
         cache: vk::PipelineCache,
     ) -> Option<Task<Self::Pipeline>> {
-        let specialization_info = self
-            .stages
-            .iter()
-            .map(SpecializedShader::as_raw)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let stages = self
-            .stages
-            .iter()
-            .zip(specialization_info.iter())
-            .map(|(shader, specialization_info)| {
-                let module = assets.get(&shader.shader)?;
-                Some(vk::PipelineShaderStageCreateInfo {
-                    stage: shader.stage,
-                    module: module.raw(),
-                    p_name: shader.entry_point.as_ptr(),
-                    p_specialization_info: specialization_info,
-                    flags: shader.flags,
-                    ..Default::default()
-                })
-            })
-            .collect::<Option<Vec<_>>>()?
-            .into_boxed_slice();
-
-        let specialization_info = SendBox(specialization_info);
-        let stages = SendBox(stages);
+        let stages = SendBox(SpecializedShader::as_raw_many(&self.stages, assets)?);
         let groups = SendBox(self.groups.clone());
         let common = self.common.clone();
         let libraries = self.libraries.clone();
 
         Some(pool.schedule_dho(move |dho| {
-            let stages = stages.into_inner();
+            let (specialization_info, stages) = stages.into_inner();
             let mut info = vk::RayTracingPipelineCreateInfoKHR::default();
             info.stage_count = stages.len() as u32;
             info.p_stages = stages.as_ptr();
@@ -186,6 +142,7 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
             };
             info.p_dynamic_state = &dynamic_state;
             info.layout = common.layout.raw();
+            info.flags = common.flags;
 
             let raw_libraries = libraries
                 .iter()
@@ -224,7 +181,7 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
             drop(groups);
             drop(libraries);
             drop(raw_libraries);
-            (result, RayTracingPipelineInner { device, pipeline })
+            (result, PipelineInner { device, pipeline })
         }))
     }
     fn all_shaders(&self) -> impl Iterator<Item = AssetId<ShaderModule>> {
@@ -238,7 +195,7 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
 
 #[derive(Clone)]
 pub struct RayTracingPipelineLibrary {
-    pipeline: Arc<RayTracingPipelineInner>,
+    pipeline: Arc<PipelineInner>,
     /// Should always be empty if shader hot reloading is disabled
     shaders: Vec<AssetId<ShaderModule>>,
 }
