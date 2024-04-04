@@ -7,7 +7,9 @@ use bevy::app::{PluginGroup, PostUpdate, Startup};
 use bevy::ecs::system::{Commands, In, Query, Res, ResMut, Resource};
 use bevy::ecs::{entity::Entity, query::With};
 use bevy::window::PrimaryWindow;
-use rhyolite::commands::{CommonCommands, ComputeCommands, ResourceTransitionCommands};
+use rhyolite::commands::{
+    CommonCommands, ComputeCommands, GraphicsCommands, ResourceTransitionCommands, TransferCommands
+};
 use rhyolite::debug::DebugUtilsPlugin;
 use rhyolite::dispose::RenderObject;
 use rhyolite::ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands, RenderImage};
@@ -56,7 +58,11 @@ fn main() {
     app.world
         .entity_mut(primary_window)
         .insert(SwapchainConfig {
-            image_usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            image_usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+
+            // We set this to true because the image will be used as storage image.
+            // Generally, sRGB image formats cannot be used as storage image.
+            srgb_format: false,
             ..Default::default()
         });
 
@@ -105,28 +111,29 @@ fn initialize_pipeline(
         layout: layout.clone(),
         flags: vk::PipelineCreateFlags::empty(),
     });
-    let image = Image::new_device_image(
-        allocator.clone(),
-        &vk::ImageCreateInfo {
-            image_type: vk::ImageType::TYPE_2D,
-            format: vk::Format::R8_UINT,
-            extent: vk::Extent3D {
-                width: 100,
-                height: 100,
-                depth: 1,
-            },
-            mip_levels: 1,
-            array_layers: 1,
-            samples: vk::SampleCountFlags::TYPE_1,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
-            initial_layout: vk::ImageLayout::UNDEFINED,
-            ..Default::default()
+
+    let game_img_create_info = vk::ImageCreateInfo {
+        image_type: vk::ImageType::TYPE_2D,
+        format: vk::Format::R8_UNORM,
+        extent: vk::Extent3D {
+            width: 192,
+            height: 108,
+            depth: 1,
         },
-    );
+        mip_levels: 1,
+        array_layers: 1,
+        samples: vk::SampleCountFlags::TYPE_1,
+        tiling: vk::ImageTiling::OPTIMAL,
+        usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+        initial_layout: vk::ImageLayout::UNDEFINED,
+        ..Default::default()
+    };
     commands.insert_resource(GameOfLifePipeline {
         pipeline,
-        game: RenderImage::new(image.unwrap()),
+        game: RenderImage::new(Image::new_device_image(
+            allocator.clone(),
+            &game_img_create_info,
+        ).unwrap()),
         layout,
     });
 }
@@ -140,7 +147,7 @@ fn run_compute_shader_barrier(
         return;
     };
     barriers.transition(
-        &mut game_of_life_pipeline.game,
+        swapchain.into_inner(),
         Access {
             stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
             access: vk::AccessFlags2::SHADER_WRITE,
@@ -148,10 +155,19 @@ fn run_compute_shader_barrier(
         false,
         vk::ImageLayout::GENERAL,
     );
+    barriers.transition(
+        &mut game_of_life_pipeline.game,
+        Access {
+            stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
+            access: vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ,
+        },
+        true,
+        vk::ImageLayout::GENERAL,
+    );
 }
 fn run_compute_shader(
     mut commands: RenderCommands<'u'>,
-    mut game_of_life_pipeline: ResMut<GameOfLifePipeline>,
+    game_of_life_pipeline: ResMut<GameOfLifePipeline>,
     pipeline_cache: Res<PipelineCache>,
     task_pool: Res<DeferredOperationTaskPool>,
     assets: Res<Assets<ShaderModule>>,
@@ -160,6 +176,7 @@ fn run_compute_shader(
     let Ok(swapchain) = windows.get_single() else {
         return;
     };
+    let game_of_life_pipeline = game_of_life_pipeline.into_inner();
     let Some(pipeline) = pipeline_cache.retrieve(
         &mut game_of_life_pipeline.pipeline,
         assets.into_inner(),
@@ -173,16 +190,23 @@ fn run_compute_shader(
         0,
         &[vk::WriteDescriptorSet {
             dst_binding: 0,
-            descriptor_count: 1,
+            descriptor_count: 2,
             descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-            p_image_info: &vk::DescriptorImageInfo {
-                image_view: game_of_life_pipeline.game.view,
-                image_layout: vk::ImageLayout::GENERAL,
-                ..Default::default()
-            },
+            p_image_info: [
+                vk::DescriptorImageInfo {
+                    image_view: game_of_life_pipeline.game.view,
+                    image_layout: vk::ImageLayout::GENERAL,
+                    ..Default::default()
+                },
+                vk::DescriptorImageInfo {
+                    image_view: swapchain.view,
+                    image_layout: vk::ImageLayout::GENERAL,
+                    ..Default::default()
+                },
+            ].as_ptr(),
             ..Default::default()
         }],
         vk::PipelineBindPoint::COMPUTE,
     );
-    commands.dispatch(UVec3::new(10, 10, 10));
+    commands.dispatch(UVec3::new(192, 168, 1));
 }

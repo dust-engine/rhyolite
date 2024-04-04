@@ -1,36 +1,29 @@
 use ash::{prelude::VkResult, vk};
+use bevy::math::{IVec3, UVec3};
 
 use crate::{Allocator, HasDevice};
 use vk_mem::Alloc;
 
-pub trait ImageLike {
+pub trait ImageLike: Send + Sync + 'static {
     fn raw_image(&self) -> vk::Image;
     fn subresource_range(&self) -> vk::ImageSubresourceRange;
-    fn extent(&self) -> vk::Extent3D;
-    fn offset(&self) -> vk::Offset3D {
-        Default::default()
+    fn extent(&self) -> UVec3;
+    fn offset(&self) -> IVec3 {
+        IVec3::ZERO
     }
     fn format(&self) -> vk::Format;
 }
 
 pub trait ImageExt {
-    fn crop(self, extent: vk::Extent3D, offset: vk::Offset3D) -> ImageSubregion<Self>
+    fn crop(self, extent: UVec3, offset: IVec3) -> ImageSubregion<Self>
     where
         Self: ImageLike + Sized,
     {
         let sub_offset = self.offset();
         let sub_extent = self.extent();
 
-        let offset = vk::Offset3D {
-            x: sub_offset.x + offset.x,
-            y: sub_offset.y + offset.y,
-            z: sub_offset.z + offset.z,
-        };
-        assert!(
-            extent.width <= sub_extent.width
-                && extent.height <= sub_extent.height
-                && extent.depth <= sub_extent.depth
-        );
+        let offset = sub_offset + offset;
+        assert!(extent.x <= sub_extent.x && extent.y <= sub_extent.y && extent.z <= sub_extent.z);
         ImageSubregion {
             inner: self,
             extent,
@@ -42,8 +35,8 @@ impl<T> ImageExt for T where T: ImageLike {}
 
 pub struct ImageSubregion<T: ImageLike> {
     inner: T,
-    extent: vk::Extent3D,
-    offset: vk::Offset3D,
+    extent: UVec3,
+    offset: IVec3,
 }
 impl<T: ImageLike> ImageSubregion<T> {
     pub fn into_inner(self) -> T {
@@ -59,11 +52,11 @@ impl<T: ImageLike> ImageLike for ImageSubregion<T> {
         self.inner.subresource_range()
     }
 
-    fn extent(&self) -> vk::Extent3D {
+    fn extent(&self) -> UVec3 {
         self.extent
     }
 
-    fn offset(&self) -> vk::Offset3D {
+    fn offset(&self) -> IVec3 {
         self.offset
     }
 
@@ -81,7 +74,7 @@ pub struct Image {
     image: vk::Image,
     pub view: vk::ImageView, // TODO: Get rid of this, it doesn't belong here.
     allocation: vk_mem::Allocation,
-    extent: vk::Extent3D,
+    extent: UVec3,
 }
 impl Drop for Image {
     fn drop(&mut self) {
@@ -118,7 +111,7 @@ impl Image {
                 None,
             )?;
             Ok(Self {
-                extent: info.extent,
+                extent: UVec3::new(info.extent.width, info.extent.height, info.extent.depth),
                 allocator,
                 image,
                 view,
@@ -126,7 +119,7 @@ impl Image {
             })
         }
     }
-    pub fn extent(&self) -> vk::Extent3D {
+    pub fn extent(&self) -> UVec3 {
         self.extent
     }
     pub fn raw(&self) -> vk::Image {
@@ -146,7 +139,7 @@ impl ImageLike for Image {
             layer_count: 1,
         }
     }
-    fn extent(&self) -> vk::Extent3D {
+    fn extent(&self) -> UVec3 {
         self.extent
     }
     fn format(&self) -> vk::Format {

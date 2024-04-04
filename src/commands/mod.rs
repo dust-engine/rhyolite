@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use ash::vk;
 use bevy::utils::smallvec::SmallVec;
@@ -136,7 +136,7 @@ impl Drop for ImmediateTransitions<'_> {
     }
 }
 
-pub trait TrackedResource {
+pub trait TrackedResource: Deref {
     type State;
     fn transition(
         &mut self,
@@ -145,10 +145,14 @@ pub trait TrackedResource {
         next_state: Self::State,
         commands: &mut impl ResourceTransitionCommands,
     );
+    fn current_state(&self) -> Self::State;
 }
 
 default impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T> {
     type State = ();
+    fn current_state(&self) -> Self::State {
+        panic!()
+    }
     fn transition(
         &mut self,
         access: Access,
@@ -193,6 +197,8 @@ where
     T: BufferLike,
 {
     type State = ();
+    fn current_state(&self) -> Self::State {
+    }
     fn transition(
         &mut self,
         access: Access,
@@ -271,6 +277,9 @@ where
     T: ImageLike,
 {
     type State = vk::ImageLayout;
+    fn current_state(&self) -> Self::State {
+        self.layout
+    }
     fn transition(
         &mut self,
         access: Access,
@@ -351,7 +360,7 @@ where
                         } else {
                             vk::PipelineStageFlags2::empty()
                         },
-                        src_queue_family_index: self.state.queue_family.unwrap().family,
+                        src_queue_family_index: self.res.state.queue_family.unwrap().family,
                         dst_queue_family_index: commands.current_queue().family,
                         image: self.raw_image(),
                         subresource_range: self.subresource_range(),
@@ -359,7 +368,7 @@ where
                         old_layout: barrier.old_layout,
                         ..Default::default()
                     },
-                    self.state.queue_family.unwrap(),
+                    self.res.state.queue_family.unwrap(),
                 );
                 barrier.src_access_mask = vk::AccessFlags2::empty();
                 // Block the same stage as the layout transition so that the layout transition happens after the semaphore wait.

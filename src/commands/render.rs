@@ -1,13 +1,72 @@
 use ash::vk::{self};
+use bevy::math::IVec3;
 
 use crate::{
-    dispose::RenderObject, ecs::queue_cap::IsGraphicsQueueCap, pipeline::GraphicsPipeline, Device,
-    HasDevice, QueueRef,
+    dispose::RenderObject, ecs::{queue_cap::IsGraphicsQueueCap, RenderImage}, pipeline::GraphicsPipeline, Device, HasDevice, ImageLike, QueueRef
 };
 
-use super::{CommandRecorder, SemaphoreSignalCommands};
+use super::{CommandRecorder, SemaphoreSignalCommands, TrackedResource};
 
 pub trait GraphicsCommands: Sized + CommandRecorder {
+    
+    fn blit_image<S: ImageLike, D: ImageLike>(
+        &mut self,
+        src: &impl TrackedResource<State = vk::ImageLayout, Target = S>,
+        dst: &impl TrackedResource<State = vk::ImageLayout, Target = D>,
+        filter: vk::Filter,
+    ) {
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            let src_subresource = src.subresource_range();
+            assert_eq!(src_subresource.level_count, 1);
+            let src_offsets = [
+                src.offset(),
+                src.offset() + IVec3::try_from(src.extent()).unwrap(),
+            ]
+            .map(|v| vk::Offset3D {
+                x: v.x,
+                y: v.y,
+                z: v.z,
+            });
+            let dst_subresource = dst.subresource_range();
+            assert_eq!(dst_subresource.level_count, 1);
+
+            let dst_offsets = [
+                dst.offset(),
+                dst.offset() + IVec3::try_from(dst.extent()).unwrap(),
+            ]
+            .map(|v| vk::Offset3D {
+                x: v.x,
+                y: v.y,
+                z: v.z,
+            });
+            self.device().cmd_blit_image(
+                cmd_buf,
+                src.raw_image(),
+                src.current_state(),
+                dst.raw_image(),
+                dst.current_state(),
+                &[vk::ImageBlit {
+                    src_subresource: vk::ImageSubresourceLayers {
+                        aspect_mask: src_subresource.aspect_mask,
+                        mip_level: src_subresource.base_mip_level,
+                        base_array_layer: src_subresource.base_array_layer,
+                        layer_count: src_subresource.layer_count,
+                    },
+                    src_offsets,
+                    dst_subresource: vk::ImageSubresourceLayers {
+                        aspect_mask: dst_subresource.aspect_mask,
+                        mip_level: dst_subresource.base_mip_level,
+                        base_array_layer: dst_subresource.base_array_layer,
+                        layer_count: dst_subresource.layer_count,
+                    },
+                    dst_offsets,
+                }],
+                filter,
+            )
+        }
+    }
+    
     fn begin_rendering(&mut self, info: &vk::RenderingInfo) -> DynamicRenderPass<Self> {
         unsafe {
             let cmd_buf = self.cmd_buf();

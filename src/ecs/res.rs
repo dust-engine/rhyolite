@@ -16,7 +16,7 @@ pub enum State {
 
 #[derive(Resource, Component)]
 pub struct RenderRes<T: Send + Sync + 'static> {
-    inner: ManuallyDrop<T>,
+    pub(crate) inner: ManuallyDrop<T>,
     pub(crate) state: ManuallyDrop<ResourceState>,
 }
 
@@ -91,10 +91,13 @@ impl<T: Send + Sync + 'static> RenderImage<T> {
     pub unsafe fn get_mut(&mut self) -> &mut T {
         &mut self.res.inner
     }
+    pub fn current_layout(&self) -> vk::ImageLayout {
+        self.layout
+    }
 }
 
 impl<T: Send + Sync + 'static> Deref for RenderImage<T> {
-    type Target = RenderRes<T>;
+    type Target = T;
 
     fn deref(&self) -> &Self::Target {
         &self.res

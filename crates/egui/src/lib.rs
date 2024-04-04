@@ -10,7 +10,7 @@ use bevy::asset::{AssetServer, Assets};
 use bevy::ecs::prelude::*;
 use bevy::ecs::query::QuerySingleError;
 
-use bevy::math::Vec2;
+use bevy::math::{Vec2, Vec3, Vec3Swizzles};
 use bevy::utils::HashMap;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
@@ -424,8 +424,8 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
             TextureId::User(id) => unimplemented!(),
         };
         if let Some((existing_img, texture_options)) = device_buffers.textures.get(&texture_id) {
-            if existing_img.extent().width == image_delta.image.size()[0] as u32
-                && existing_img.extent().height == image_delta.image.size()[1] as u32
+            if existing_img.extent().x == image_delta.image.size()[0] as u32
+                && existing_img.extent().y == image_delta.image.size()[1] as u32
             {
                 continue;
             }
@@ -783,8 +783,8 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
         render_area: vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
             extent: vk::Extent2D {
-                width: swapchain_image.extent().width,
-                height: swapchain_image.extent().height,
+                width: swapchain_image.extent().x,
+                height: swapchain_image.extent().y,
             },
         },
         layer_count: 1,
@@ -820,8 +820,8 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     pass.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
     pass.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
     let viewport_physical_size = Vec2::new(
-        swapchain_image.extent().width as f32,
-        swapchain_image.extent().height as f32,
+        swapchain_image.extent().x as f32,
+        swapchain_image.extent().y as f32,
     );
     pass.set_viewport(
         0,

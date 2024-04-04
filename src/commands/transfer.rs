@@ -1,6 +1,7 @@
 use super::CommandRecorder;
-use crate::buffer::BufferLike;
+use crate::{ecs::RenderImage, ImageLike};
 use ash::vk;
+use bevy::math::IVec3;
 
 pub trait TransferCommands: CommandRecorder {
     fn copy_buffer(&mut self, src: vk::Buffer, dst: vk::Buffer, regions: &[vk::BufferCopy]) {

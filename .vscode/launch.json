@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug example 'test'",
+            "name": "Debug example 'game_of_life'",
             "cargo": {
                 "args": [
                     "build",
-                    "--example=test",
+                    "--example=game_of_life",
                     "--package=rhyolite"
                 ],
                 "filter": {
-                    "name": "test",
+                    "name": "game_of_life",
                     "kind": "example"
                 }
             },

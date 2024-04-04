@@ -1,14 +1,17 @@
 use std::{collections::BTreeSet, ops::Deref, sync::Arc};
 
 use ash::{extensions::khr, prelude::VkResult, vk};
-use bevy::ecs::{
-    prelude::*,
-    query::{QueryFilter, QuerySingleError},
-};
 use bevy::window::{PrimaryWindow, Window};
 use bevy::{
     app::{App, Plugin, PostUpdate},
     utils::smallvec::SmallVec,
+};
+use bevy::{
+    ecs::{
+        prelude::*,
+        query::{QueryFilter, QuerySingleError},
+    },
+    math::{UVec2, UVec3},
 };
 
 use crate::{
@@ -89,7 +92,7 @@ struct SwapchainInner {
     generation: u64,
 
     color_space: ColorSpace,
-    extent: vk::Extent2D,
+    extent: UVec2,
     layer_count: u32,
 }
 
@@ -108,7 +111,7 @@ pub struct SwapchainCreateInfo<'a> {
     pub min_image_count: u32,
     pub image_format: vk::Format,
     pub image_color_space: vk::ColorSpaceKHR,
-    pub image_extent: vk::Extent2D,
+    pub image_extent: UVec2,
     pub image_array_layers: u32,
     pub image_usage: vk::ImageUsageFlags,
     pub image_sharing_mode: SharingMode<&'a [u32]>,
@@ -124,8 +127,8 @@ impl Swapchain {
     /// <https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/vkCreateSwapchainKHR.html>
     pub fn create(device: Device, surface: Surface, info: &SwapchainCreateInfo) -> VkResult<Self> {
         tracing::info!(
-            width = %info.image_extent.width,
-            height = %info.image_extent.height,
+            width = %info.image_extent.x,
+            height = %info.image_extent.y,
             format = ?info.image_format,
             color_space = ?info.image_color_space,
             "Creating swapchain"
@@ -138,7 +141,10 @@ impl Swapchain {
                 min_image_count: info.min_image_count,
                 image_format: info.image_format,
                 image_color_space: info.image_color_space,
-                image_extent: info.image_extent,
+                image_extent: vk::Extent2D {
+                    width: info.image_extent.x,
+                    height: info.image_extent.y,
+                },
                 image_array_layers: info.image_array_layers,
                 image_usage: info.image_usage,
                 image_sharing_mode: vk::SharingMode::EXCLUSIVE,
@@ -223,8 +229,8 @@ impl Swapchain {
 
     pub fn recreate(&mut self, info: &SwapchainCreateInfo) -> VkResult<()> {
         tracing::info!(
-            width = %info.image_extent.width,
-            height = %info.image_extent.height,
+            width = %info.image_extent.x,
+            height = %info.image_extent.y,
             format = ?info.image_format,
             color_space = ?info.image_color_space,
             "Recreating swapchain"
@@ -236,7 +242,10 @@ impl Swapchain {
                 min_image_count: info.min_image_count,
                 image_format: info.image_format,
                 image_color_space: info.image_color_space,
-                image_extent: info.image_extent,
+                image_extent: vk::Extent2D {
+                    width: info.image_extent.x,
+                    height: info.image_extent.y,
+                },
                 image_array_layers: info.image_array_layers,
                 image_usage: info.image_usage,
                 image_sharing_mode: vk::SharingMode::EXCLUSIVE,
@@ -347,6 +356,8 @@ pub struct SwapchainConfig {
     /// the implementation will select the best available HDR color space.
     /// On Windows 11, it is recommended to turn this off when the application was started in Windowed mode
     /// and the system HDR toggle was turned off. Otherwise, the screen may flash when the application is started.
+    /// 
+    /// Ignored when `image_format` is set.
     pub hdr: bool,
 
     /// If set to true, SDR swapchains will be created with a sRGB format.
@@ -357,6 +368,8 @@ pub struct SwapchainConfig {
     ///
     /// Set this to true if the swapchain will be directly used as a render target. In this case,
     /// the sRGB gamma correction will be applied automatically. This is the default.
+    /// 
+    /// Ignored when `image_format` is set.
     pub srgb_format: bool,
 }
 impl Default for SwapchainConfig {
@@ -474,7 +487,10 @@ fn get_create_info<'a>(
             }),
         image_format: image_format.format,
         image_color_space: image_format.color_space,
-        image_extent: surface_capabilities.current_extent,
+        image_extent: UVec2::new(
+            surface_capabilities.current_extent.width,
+            surface_capabilities.current_extent.height,
+        ),
         image_array_layers: config.image_array_layers,
         image_usage: config.image_usage,
         image_sharing_mode: match &config.sharing_mode {
@@ -626,7 +642,13 @@ pub struct SwapchainImage {
 }
 impl TrackedResource for SwapchainImage {
     type State = vk::ImageLayout;
-
+    fn current_state(&self) -> Self::State {
+        let image = self
+            .inner
+            .as_ref()
+            .expect("SwapchainAcquire must have been called");
+        image.layout
+    }
     fn transition(
         &mut self,
         access: Access,
@@ -665,7 +687,7 @@ impl Deref for SwapchainImage {
 
 pub struct SwapchainImageInner {
     pub image: vk::Image,
-    view: vk::ImageView,
+    pub view: vk::ImageView,
     indice: u32,
     swapchain: Arc<SwapchainInner>,
 
@@ -701,12 +723,8 @@ impl ImageLike for SwapchainImageInner {
         }
     }
 
-    fn extent(&self) -> vk::Extent3D {
-        vk::Extent3D {
-            width: self.swapchain.extent.width,
-            height: self.swapchain.extent.height,
-            depth: 1,
-        }
+    fn extent(&self) -> UVec3 {
+        UVec3::new(self.swapchain.extent.x, self.swapchain.extent.y, 1)
     }
 
     fn format(&self) -> vk::Format {
