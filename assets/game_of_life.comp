@@ -5,7 +5,6 @@
 #define N(i,j)  + float( T(i,j) > 0.0)
 void main() {
     float v = T(0, 0);
-    imageStore(u_img, ivec2(gl_GlobalInvocationID.xy), vec4(v, 1.0, 0, 0));
 
     float n =   N(-1,-1) + N(-1, 0) + N(-1, 1)
             + N( 0,-1)            + N( 0, 1)

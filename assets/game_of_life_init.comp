@@ -1,0 +1,12 @@
+#version 460
+#include "game_of_life.playout"
+
+float snoise(){
+    vec2 co = vec2(gl_GlobalInvocationID.xy) / vec2(gl_NumWorkGroups.xy * gl_WorkGroupSize.xy);
+    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+}
+
+void main() {
+    float value = step(0.9, snoise());
+    imageStore(u_game, ivec2(gl_GlobalInvocationID.xy), vec4(value, 0.0, 0, 0));
+}
