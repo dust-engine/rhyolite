@@ -1,7 +1,7 @@
 #[set]
 struct GameOfLifeLayout {
     #![stage(COMPUTE)]
-    u_img: StorageImage<RGBA16_Float>,
+    u_img: StorageImage<R8_UInt>,
 }
 #[push_constants]
 struct PushConstants {

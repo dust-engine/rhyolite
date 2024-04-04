@@ -1,6 +1,9 @@
 use ash::vk::{self};
 
-use crate::{dispose::RenderObject, ecs::queue_cap::IsGraphicsQueueCap, pipeline::GraphicsPipeline, Device, HasDevice, QueueRef};
+use crate::{
+    dispose::RenderObject, ecs::queue_cap::IsGraphicsQueueCap, pipeline::GraphicsPipeline, Device,
+    HasDevice, QueueRef,
+};
 
 use super::{CommandRecorder, SemaphoreSignalCommands};
 
@@ -49,16 +52,6 @@ where
 }
 
 pub trait RenderPassCommands: CommandRecorder {
-    type Recorder: GraphicsCommands + SemaphoreSignalCommands;
-    fn recorder(&mut self) -> &mut Self::Recorder;
-    fn bind_pipeline(&mut self, pipeline: &mut RenderObject<GraphicsPipeline>) {
-        let pipeline = pipeline.use_on(self.recorder());
-        unsafe {
-            let cmd_buf = self.cmd_buf();
-            self.device()
-                .cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::GRAPHICS, pipeline.raw());
-        }
-    }
     fn bind_vertex_buffers(
         &mut self,
         first_binding: u32,
@@ -193,26 +186,6 @@ pub trait RenderPassCommands: CommandRecorder {
                 .cmd_set_scissor(cmd_buf, first_scissor, scissors);
         }
     }
-
-    fn push_descriptor_set(
-        &mut self,
-        pipeline_layout: vk::PipelineLayout,
-        set: u32,
-        descriptor_writes: &[vk::WriteDescriptorSet],
-    ) {
-        unsafe {
-            let cmd_buf = self.cmd_buf();
-            self.device()
-                .extension::<ash::extensions::khr::PushDescriptor>()
-                .cmd_push_descriptor_set(
-                    cmd_buf,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    pipeline_layout,
-                    set,
-                    descriptor_writes,
-                );
-        }
-    }
 }
 
 impl<T> HasDevice for DynamicRenderPass<'_, T>
@@ -226,7 +199,7 @@ where
 
 impl<T> CommandRecorder for DynamicRenderPass<'_, T>
 where
-    T: GraphicsCommands,
+    T: GraphicsCommands + SemaphoreSignalCommands,
 {
     const QUEUE_CAP: char = T::QUEUE_CAP;
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
@@ -235,12 +208,13 @@ where
     fn current_queue(&self) -> QueueRef {
         self.recorder.current_queue()
     }
-}
-impl<T> RenderPassCommands for DynamicRenderPass<'_, T> where T: GraphicsCommands + SemaphoreSignalCommands {
-    type Recorder = T;
-    fn recorder(&mut self) -> &mut Self::Recorder {
-        &mut self.recorder
+    fn semaphore_signal(&mut self) -> &mut impl SemaphoreSignalCommands {
+        self.recorder
     }
+}
+impl<T> RenderPassCommands for DynamicRenderPass<'_, T> where
+    T: GraphicsCommands + SemaphoreSignalCommands
+{
 }
 
 pub struct RenderPass<'w, T: GraphicsCommands> {
@@ -268,7 +242,7 @@ where
 
 impl<T> CommandRecorder for RenderPass<'_, T>
 where
-    T: GraphicsCommands,
+    T: GraphicsCommands + SemaphoreSignalCommands,
 {
     const QUEUE_CAP: char = T::QUEUE_CAP;
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
@@ -277,13 +251,11 @@ where
     fn current_queue(&self) -> QueueRef {
         self.recorder.current_queue()
     }
-}
-impl<T> RenderPassCommands for RenderPass<'_, T> where T: GraphicsCommands + SemaphoreSignalCommands {
-    type Recorder = T;
-    fn recorder(&mut self) -> &mut Self::Recorder {
-        &mut self.recorder
+    fn semaphore_signal(&mut self) -> &mut impl SemaphoreSignalCommands {
+        self.recorder
     }
 }
+impl<T> RenderPassCommands for RenderPass<'_, T> where T: GraphicsCommands + SemaphoreSignalCommands {}
 
 pub trait SubpassCommands: CommandRecorder {
     fn next_subpass(&mut self, contents: vk::SubpassContents) {
@@ -294,4 +266,4 @@ pub trait SubpassCommands: CommandRecorder {
     }
 }
 
-impl<T> SubpassCommands for RenderPass<'_, T> where T: GraphicsCommands {}
+impl<T> SubpassCommands for RenderPass<'_, T> where T: GraphicsCommands + SemaphoreSignalCommands {}

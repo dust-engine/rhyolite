@@ -100,8 +100,7 @@ impl PipelineCache {
     pub fn create_compute(
         &self,
         build_info: ComputePipelineCreateInfo,
-    ) -> CachedPipeline<RenderObject<ComputePipeline>>
-    {
+    ) -> CachedPipeline<RenderObject<ComputePipeline>> {
         self.create::<RenderObject<ComputePipeline>>(build_info)
     }
     pub fn retrieve<'a, T: Pipeline>(

@@ -24,11 +24,16 @@ impl GraphicsPipeline {
 }
 impl super::Pipeline for GraphicsPipeline {
     type BuildInfo = BoxedGraphicsPipelineBuildInfo;
+    const TYPE: vk::PipelineBindPoint = vk::PipelineBindPoint::GRAPHICS;
     fn from_built(
         _info: &mut BoxedGraphicsPipelineBuildInfo,
         item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
     ) -> Self {
         GraphicsPipeline(Arc::new(item))
+    }
+
+    fn as_raw(&self) -> vk::Pipeline {
+        self.0.pipeline
     }
 }
 

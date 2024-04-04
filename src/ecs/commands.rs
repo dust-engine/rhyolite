@@ -225,6 +225,9 @@ where
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         self.default_cmd_pool.current_buffer()
     }
+    fn semaphore_signal(&mut self) -> &mut impl SemaphoreSignalCommands {
+        self
+    }
 }
 impl<'w, 's, const Q: char> SemaphoreSignalCommands for RenderCommands<'w, 's, Q>
 where

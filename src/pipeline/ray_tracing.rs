@@ -40,6 +40,11 @@ impl RayTracingPipeline {
 }
 impl super::Pipeline for RayTracingPipeline {
     type BuildInfo = RayTracingPipelineBuildInfo;
+    const TYPE: vk::PipelineBindPoint = vk::PipelineBindPoint::RAY_TRACING_KHR;
+
+    fn as_raw(&self) -> vk::Pipeline {
+        self.inner.pipeline
+    }
     fn from_built(
         info: &mut RayTracingPipelineBuildInfo,
         item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
@@ -201,6 +206,11 @@ pub struct RayTracingPipelineLibrary {
 }
 impl super::Pipeline for RayTracingPipelineLibrary {
     type BuildInfo = RayTracingPipelineBuildInfo;
+    const TYPE: vk::PipelineBindPoint = vk::PipelineBindPoint::RAY_TRACING_KHR;
+
+    fn as_raw(&self) -> vk::Pipeline {
+        self.pipeline.pipeline
+    }
     fn from_built(
         info: &mut RayTracingPipelineBuildInfo,
         item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,

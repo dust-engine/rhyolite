@@ -14,13 +14,12 @@ use bevy::math::Vec2;
 use bevy::utils::HashMap;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
-    ecs::{query::QueryFilter, schedule::IntoSystemConfigs},
+    ecs::query::QueryFilter,
     window::PrimaryWindow,
 };
-use bevy_egui::egui::epaint::ImageDelta;
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
-use rhyolite::commands::CommandRecorder;
+use rhyolite::commands::CommonCommands;
 use rhyolite::dispose::RenderObject;
 use rhyolite::{
     acquire_swapchain_image,
@@ -876,7 +875,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
         let (texture, options) = device_buffer.textures.get(&texture_id).unwrap();
         let sampler = device_buffer.samplers.get(options).unwrap();
         pass.push_descriptor_set(
-            egui_pipeline.layout.raw(),
+            egui_pipeline.layout.as_ref(),
             0,
             &[vk::WriteDescriptorSet {
                 dst_binding: 0,
@@ -889,6 +888,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
                 },
                 ..Default::default()
             }],
+            vk::PipelineBindPoint::GRAPHICS,
         );
         pass.draw_indexed(
             mesh.indices.len() as u32,

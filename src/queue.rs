@@ -38,7 +38,7 @@ pub enum QueueType {
     /// This is likely referring to the same queue as the `Graphics` queue. However, if no such
     /// "universal" queue exists, this will be routed to a separate queue with only COMPUTE
     /// capabilities.
-    /// 
+    ///
     /// If your compute task is interleaved between graphics operations, selecting this QueueType
     /// may be more optimal as it reduces the syncronization overhead between different queues.
     UniversalCompute = 4,
@@ -239,7 +239,8 @@ impl QueuesRouter {
         }
         if queue_type_to_index[QueueType::UniversalCompute as usize].is_null() {
             // UniversalCompute queuetype fallbacks to compute
-            queue_type_to_index[QueueType::UniversalCompute as usize] = queue_type_to_index[QueueType::Compute as usize];
+            queue_type_to_index[QueueType::UniversalCompute as usize] =
+                queue_type_to_index[QueueType::Compute as usize];
         }
         for i in queue_type_to_index.iter().take(3) {
             assert!(!i.is_null(), "All queue types should've been assigned")

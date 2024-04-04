@@ -23,11 +23,16 @@ pub struct ComputePipeline(Arc<PipelineInner>);
 
 impl super::Pipeline for ComputePipeline {
     type BuildInfo = ComputePipelineCreateInfo;
+    const TYPE: vk::PipelineBindPoint = vk::PipelineBindPoint::COMPUTE;
     fn from_built(
         _info: &mut ComputePipelineCreateInfo,
         item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
     ) -> Self {
         ComputePipeline(Arc::new(item))
+    }
+
+    fn as_raw(&self) -> vk::Pipeline {
+        self.0.pipeline
     }
 }
 

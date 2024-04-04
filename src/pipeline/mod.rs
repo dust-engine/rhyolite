@@ -15,15 +15,16 @@ mod layout;
 mod ray_tracing;
 
 pub use cache::*;
-pub use graphics::*;
 pub use compute::*;
-pub use ray_tracing::*;
+pub use graphics::*;
 pub use layout::*;
+pub use ray_tracing::*;
 
 pub mod sbt;
 
 pub trait Pipeline: Sized + Send + Sync + 'static {
     type BuildInfo: PipelineBuildInfo;
+    const TYPE: vk::PipelineBindPoint;
     fn from_built(
         info: &mut Self::BuildInfo,
         item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
@@ -38,10 +39,16 @@ pub trait Pipeline: Sized + Send + Sync + 'static {
     ) -> Self {
         Self::from_built(&mut info, item)
     }
+
+    fn as_raw(&self) -> vk::Pipeline;
 }
 
 impl<T: Pipeline> Pipeline for RenderObject<T> {
     type BuildInfo = T::BuildInfo;
+    const TYPE: vk::PipelineBindPoint = T::TYPE;
+    fn as_raw(&self) -> vk::Pipeline {
+        T::as_raw(self.get())
+    }
     fn from_built(
         info: &mut Self::BuildInfo,
         item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,

@@ -10,11 +10,15 @@ use bevy::window::PrimaryWindow;
 use rhyolite::commands::{CommonCommands, ComputeCommands, ResourceTransitionCommands};
 use rhyolite::debug::DebugUtilsPlugin;
 use rhyolite::dispose::RenderObject;
-use rhyolite::ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands};
-use rhyolite::pipeline::{CachedPipeline, ComputePipeline, ComputePipelineCreateInfo, DescriptorSetLayout, PipelineCache, PipelineLayout};
+use rhyolite::ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands, RenderImage};
+use rhyolite::pipeline::{
+    CachedPipeline, ComputePipeline, ComputePipelineCreateInfo, DescriptorSetLayout, PipelineCache,
+    PipelineLayout,
+};
 use rhyolite::shader::{ShaderModule, SpecializedShader};
 use rhyolite::{
-    acquire_swapchain_image, present, Access, DeferredOperationTaskPool, Device, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage, SwapchainPlugin
+    acquire_swapchain_image, present, Access, Allocator, DeferredOperationTaskPool, Device, Image,
+    RhyoliteApp, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage, SwapchainPlugin,
 };
 
 use std::sync::Arc;
@@ -31,6 +35,8 @@ fn main() {
     .add_plugins(DebugUtilsPlugin::default())
     .add_plugins(RhyolitePlugin::default())
     .add_plugins(SwapchainPlugin::default());
+
+    app.add_device_extension::<ash::extensions::khr::PushDescriptor>();
 
     app.add_systems(
         PostUpdate,
@@ -50,7 +56,7 @@ fn main() {
     app.world
         .entity_mut(primary_window)
         .insert(SwapchainConfig {
-            image_usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            image_usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT,
             ..Default::default()
         });
 
@@ -58,12 +64,17 @@ fn main() {
 }
 
 #[derive(Resource)]
-struct GameOfLifePipeline(CachedPipeline<RenderObject<ComputePipeline>>);
+struct GameOfLifePipeline {
+    pipeline: CachedPipeline<RenderObject<ComputePipeline>>,
+    game: RenderImage<Image>,
+    layout: Arc<PipelineLayout>,
+}
 fn initialize_pipeline(
     mut commands: Commands,
     device: Res<Device>,
     pipeline_cache: Res<PipelineCache>,
     assets: Res<AssetServer>,
+    allocator: Res<Allocator>,
 ) {
     let desc0 = DescriptorSetLayout::new(
         device.clone(),
@@ -87,26 +98,49 @@ fn initialize_pipeline(
     let pipeline = pipeline_cache.create_compute(ComputePipelineCreateInfo {
         device: device.clone(),
         shader: SpecializedShader {
-            stage: vk::ShaderStageFlags::FRAGMENT,
+            stage: vk::ShaderStageFlags::COMPUTE,
             shader: assets.load("game_of_life.comp"),
             ..Default::default()
         },
-        layout: layout,
+        layout: layout.clone(),
         flags: vk::PipelineCreateFlags::empty(),
     });
-    commands.insert_resource(GameOfLifePipeline(pipeline));
-
+    let image = Image::new_device_image(
+        allocator.clone(),
+        &vk::ImageCreateInfo {
+            image_type: vk::ImageType::TYPE_2D,
+            format: vk::Format::R8_UINT,
+            extent: vk::Extent3D {
+                width: 100,
+                height: 100,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+            initial_layout: vk::ImageLayout::UNDEFINED,
+            ..Default::default()
+        },
+    );
+    commands.insert_resource(GameOfLifePipeline {
+        pipeline,
+        game: RenderImage::new(image.unwrap()),
+        layout,
+    });
 }
 
 fn run_compute_shader_barrier(
     In(mut barriers): In<Barriers>,
+    mut game_of_life_pipeline: ResMut<GameOfLifePipeline>,
     mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
 ) {
     let Ok(swapchain) = windows.get_single_mut() else {
         return;
     };
     barriers.transition(
-        swapchain.into_inner(),
+        &mut game_of_life_pipeline.game,
         Access {
             stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
             access: vk::AccessFlags2::SHADER_WRITE,
@@ -117,7 +151,7 @@ fn run_compute_shader_barrier(
 }
 fn run_compute_shader(
     mut commands: RenderCommands<'u'>,
-    mut pipeline: ResMut<GameOfLifePipeline>,
+    mut game_of_life_pipeline: ResMut<GameOfLifePipeline>,
     pipeline_cache: Res<PipelineCache>,
     task_pool: Res<DeferredOperationTaskPool>,
     assets: Res<Assets<ShaderModule>>,
@@ -126,9 +160,29 @@ fn run_compute_shader(
     let Ok(swapchain) = windows.get_single() else {
         return;
     };
-    let Some(pipeline) = pipeline_cache.retrieve(&mut pipeline.0, assets.into_inner(), task_pool.into_inner()) else {
+    let Some(pipeline) = pipeline_cache.retrieve(
+        &mut game_of_life_pipeline.pipeline,
+        assets.into_inner(),
+        task_pool.into_inner(),
+    ) else {
         return;
     };
     commands.bind_pipeline(pipeline);
+    commands.push_descriptor_set(
+        &game_of_life_pipeline.layout,
+        0,
+        &[vk::WriteDescriptorSet {
+            dst_binding: 0,
+            descriptor_count: 1,
+            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+            p_image_info: &vk::DescriptorImageInfo {
+                image_view: game_of_life_pipeline.game.view,
+                image_layout: vk::ImageLayout::GENERAL,
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        vk::PipelineBindPoint::COMPUTE,
+    );
     commands.dispatch(UVec3::new(10, 10, 10));
 }

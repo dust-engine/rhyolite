@@ -4,7 +4,12 @@ use ash::vk;
 use bevy::utils::smallvec::SmallVec;
 
 use crate::{
-    buffer::BufferLike, dispose::RenderObject, ecs::{RenderImage, RenderRes}, pipeline::Pipeline, semaphore::TimelineSemaphore, Access, Device, HasDevice, ImageLike, QueueRef
+    buffer::BufferLike,
+    dispose::RenderObject,
+    ecs::{RenderImage, RenderRes},
+    pipeline::Pipeline,
+    semaphore::TimelineSemaphore,
+    Access, Device, HasDevice, ImageLike, QueueRef,
 };
 
 mod compute;
@@ -18,12 +23,37 @@ pub trait CommandRecorder: HasDevice {
     const QUEUE_CAP: char;
     fn cmd_buf(&mut self) -> vk::CommandBuffer;
     fn current_queue(&self) -> QueueRef;
+    fn semaphore_signal(&mut self) -> &mut impl SemaphoreSignalCommands;
 }
 
 pub trait CommonCommands: CommandRecorder {
-    fn bind_pipeline(&mut self, pipeline: &mut RenderObject<impl Pipeline>) where Self: SemaphoreSignalCommands {
-        pipeline.use_on(self);
-        
+    fn bind_pipeline<P: Pipeline>(&mut self, pipeline: &mut RenderObject<P>) {
+        let pipeline = pipeline.use_on(self.semaphore_signal());
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .cmd_bind_pipeline(cmd_buf, P::TYPE, pipeline.as_raw());
+        }
+    }
+    fn push_descriptor_set(
+        &mut self,
+        pipeline_layout: &crate::pipeline::PipelineLayout,
+        set: u32,
+        descriptor_writes: &[vk::WriteDescriptorSet],
+        pipeline_bind_point: vk::PipelineBindPoint,
+    ) {
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .extension::<ash::extensions::khr::PushDescriptor>()
+                .cmd_push_descriptor_set(
+                    cmd_buf,
+                    pipeline_bind_point,
+                    pipeline_layout.raw(),
+                    set,
+                    descriptor_writes,
+                );
+        }
     }
     fn clear_color_image(
         &mut self,

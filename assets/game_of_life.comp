@@ -2,5 +2,5 @@
 #include "game_of_life.playout"
 
 void main() {
-    imageStore(u_img, gl_LaunchID.xy, vec4(1.0, 0.0, 0.0, 0.0));
+    imageStore(u_img, ivec2(gl_GlobalInvocationID.xy), uvec4(1, 0, 0, 0));
 }
