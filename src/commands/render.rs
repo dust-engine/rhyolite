@@ -74,17 +74,6 @@ pub trait GraphicsCommands: Sized + CommandRecorder {
             DynamicRenderPass { recorder: self }
         }
     }
-    fn begin_render_pass(
-        &mut self,
-        info: &vk::RenderPassBeginInfo,
-        contents: vk::SubpassContents,
-    ) -> DynamicRenderPass<Self> {
-        unsafe {
-            let cmd_buf = self.cmd_buf();
-            self.device().cmd_begin_render_pass(cmd_buf, info, contents);
-            DynamicRenderPass { recorder: self }
-        }
-    }
 }
 
 impl<const Q: char> GraphicsCommands for RenderCommands<'_, '_, Q>
@@ -274,54 +263,3 @@ impl<T> RenderPassCommands for DynamicRenderPass<'_, T> where
     T: GraphicsCommands + SemaphoreSignalCommands
 {
 }
-
-pub struct RenderPass<'w, T: GraphicsCommands> {
-    recorder: &'w mut T,
-}
-impl<T> Drop for RenderPass<'_, T>
-where
-    T: GraphicsCommands,
-{
-    fn drop(&mut self) {
-        let cmd_buf = self.recorder.cmd_buf();
-        unsafe {
-            self.recorder.device().cmd_end_render_pass(cmd_buf);
-        }
-    }
-}
-impl<T> HasDevice for RenderPass<'_, T>
-where
-    T: GraphicsCommands,
-{
-    fn device(&self) -> &Device {
-        self.recorder.device()
-    }
-}
-
-impl<T> CommandRecorder for RenderPass<'_, T>
-where
-    T: GraphicsCommands + SemaphoreSignalCommands,
-{
-    const QUEUE_CAP: char = T::QUEUE_CAP;
-    fn cmd_buf(&mut self) -> vk::CommandBuffer {
-        self.recorder.cmd_buf()
-    }
-    fn current_queue(&self) -> QueueRef {
-        self.recorder.current_queue()
-    }
-    fn semaphore_signal(&mut self) -> &mut impl SemaphoreSignalCommands {
-        self.recorder
-    }
-}
-impl<T> RenderPassCommands for RenderPass<'_, T> where T: GraphicsCommands + SemaphoreSignalCommands {}
-
-pub trait SubpassCommands: CommandRecorder {
-    fn next_subpass(&mut self, contents: vk::SubpassContents) {
-        unsafe {
-            let cmd_buf = self.cmd_buf();
-            self.device().cmd_next_subpass(cmd_buf, contents);
-        }
-    }
-}
-
-impl<T> SubpassCommands for RenderPass<'_, T> where T: GraphicsCommands + SemaphoreSignalCommands {}
