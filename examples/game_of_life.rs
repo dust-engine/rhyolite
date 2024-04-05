@@ -92,7 +92,7 @@ fn initialize_pipeline(
 ) {
     let desc0 = DescriptorSetLayout::new(
         device.clone(),
-        &playout_macro::layout!("../assets/game_of_life.playout", 0),
+        &playout_macro::layout!("../assets/game_of_life/game_of_life.playout", 0),
         vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR,
     )
     .unwrap();
@@ -113,7 +113,7 @@ fn initialize_pipeline(
         device: device.clone(),
         shader: SpecializedShader {
             stage: vk::ShaderStageFlags::COMPUTE,
-            shader: assets.load("game_of_life.comp"),
+            shader: assets.load("game_of_life/game_of_life.comp"),
             ..Default::default()
         },
         layout: layout.clone(),
@@ -124,7 +124,7 @@ fn initialize_pipeline(
         device: device.clone(),
         shader: SpecializedShader {
             stage: vk::ShaderStageFlags::COMPUTE,
-            shader: assets.load("game_of_life_init.comp"),
+            shader: assets.load("game_of_life/game_of_life_init.comp"),
             ..Default::default()
         },
         layout: layout.clone(),
@@ -244,7 +244,7 @@ fn blit_image_to_swapchain_barrier(
 }
 fn blit_image_to_swapchain(
     mut commands: RenderCommands<'g'>,
-    windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
+    windows: Query<&SwapchainImage, With<bevy::window::PrimaryWindow>>,
     game_of_life_pipeline: Res<GameOfLifePipeline>,
 ) {
     let Ok(swapchain) = windows.get_single() else {

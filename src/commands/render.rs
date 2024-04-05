@@ -2,7 +2,7 @@ use ash::vk::{self};
 use bevy::math::IVec3;
 
 use crate::{
-    dispose::RenderObject, ecs::{queue_cap::IsGraphicsQueueCap, RenderImage}, pipeline::GraphicsPipeline, Device, HasDevice, ImageLike, QueueRef
+    dispose::RenderObject, ecs::{queue_cap::IsGraphicsQueueCap, RenderCommands, RenderImage}, pipeline::GraphicsPipeline, Device, HasDevice, ImageLike, QueueRef
 };
 
 use super::{CommandRecorder, SemaphoreSignalCommands, TrackedResource};
@@ -87,10 +87,9 @@ pub trait GraphicsCommands: Sized + CommandRecorder {
     }
 }
 
-impl<T> GraphicsCommands for T
+impl<const Q: char> GraphicsCommands for RenderCommands<'_, '_, Q>
 where
-    T: CommandRecorder,
-    (): IsGraphicsQueueCap<{ T::QUEUE_CAP }>,
+    (): IsGraphicsQueueCap<Q>,
 {
 }
 
