@@ -6,6 +6,7 @@ use crate::FeatureMap;
 use crate::Instance;
 use crate::PhysicalDevice;
 use crate::QueueRef;
+use crate::QueuesRouter;
 use ash::prelude::VkResult;
 use ash::vk;
 use bevy::ecs::system::Resource;
@@ -44,16 +45,22 @@ impl Device {
     }
     pub(crate) fn create(
         physical_device: PhysicalDevice,
-        queues: &[vk::DeviceQueueCreateInfo],
         extensions: &[*const c_char],
         mut features: FeatureMap,
         meta: Vec<DeviceMetaBuilder>,
-    ) -> VkResult<Self> {
+    ) -> VkResult<(Self, QueuesRouter)> {
+        let mut available_queue_family = physical_device.get_queue_family_properties();
+        available_queue_family.iter_mut().for_each(|props| {
+            if props.queue_flags.contains(vk::QueueFlags::COMPUTE) || props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                props.queue_flags |= vk::QueueFlags::TRANSFER;
+            }
+        });
+        let queue_create_infos = QueuesRouter::find_with_queue_family_properties(&available_queue_family);
         let pdevice_features2 = features.as_physical_device_features();
         let create_info = vk::DeviceCreateInfo {
             p_next: &pdevice_features2 as *const vk::PhysicalDeviceFeatures2 as *const _,
-            queue_create_info_count: queues.len() as u32,
-            p_queue_create_infos: queues.as_ptr(),
+            queue_create_info_count: queue_create_infos.len() as u32,
+            p_queue_create_infos: queue_create_infos.as_ptr(),
             enabled_extension_count: extensions.len() as u32,
             pp_enabled_extension_names: extensions.as_ptr(),
             ..Default::default()
@@ -63,7 +70,7 @@ impl Device {
                 .instance()
                 .create_device(physical_device.raw(), &create_info, None)
         }?;
-        let queues_created = queues
+        let queues_created = queue_create_infos
             .iter()
             .flat_map(|queue_info| unsafe {
                 (0..queue_info.queue_count)
@@ -77,13 +84,14 @@ impl Device {
                 Some((item.as_ref().type_id(), item))
             })
             .collect();
-        Ok(Self(Arc::new(DeviceInner {
+        let queues = QueuesRouter::create(&device, &queue_create_infos, &available_queue_family);
+        Ok((Self(Arc::new(DeviceInner {
             physical_device,
             queues: queues_created,
             device,
             extensions,
             features,
-        })))
+        })), queues))
     }
     pub fn instance(&self) -> &Instance {
         self.0.physical_device.instance()

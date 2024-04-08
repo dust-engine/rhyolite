@@ -1,17 +1,23 @@
+use std::sync::{atomic::AtomicBool, Mutex};
+
 use ash::vk;
 use bevy::ecs::system::Resource;
+
+use crate::Device;
 
 /// Index of a created queue
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct QueueRef {
     pub(crate) index: u32,
     pub(crate) family: u32,
+    pub(crate) caps: vk:: QueueFlags,
 }
 impl QueueRef {
     pub fn null() -> Self {
         QueueRef {
             index: 0,
             family: 0,
+            caps: vk::QueueFlags::empty()
         }
     }
     pub fn is_null(&self) -> bool {
@@ -24,397 +30,83 @@ impl Default for QueueRef {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum QueueType {
-    /// A queue with graphics capabilities.
-    Graphics = 0,
-    /// A queue with compute capabilities. Priorities queues without graphics capabilities.
-    Compute = 1,
-    /// A queue with transfer capabilities.
-    Transfer = 2,
-    SparseBinding = 3,
-
-    /// A queue with compute capabilities. Priorities queues also with graphics capabilities.
-    /// This is likely referring to the same queue as the `Graphics` queue. However, if no such
-    /// "universal" queue exists, this will be routed to a separate queue with only COMPUTE
-    /// capabilities.
-    ///
-    /// If your compute task is interleaved between graphics operations, selecting this QueueType
-    /// may be more optimal as it reduces the syncronization overhead between different queues.
-    UniversalCompute = 4,
+enum QueueSharing {
+    Shared(Mutex<vk::Queue>),
+    Exclusive {
+        queue: vk::Queue,
+        marker: AtomicBool,
+    }
 }
 
-#[derive(Resource, Debug)]
+#[derive(Resource)]
 pub struct QueuesRouter {
-    pub(crate) queue_family_to_types: Vec<vk::QueueFlags>,
-    pub(crate) queue_type_to_index: [QueueRef; 5],
+    queues: Vec<QueueSharing>,
+    queue_refs: Vec<QueueRef>,
 }
+
+const QUEUE_FLAGS_ASYNC: vk::QueueFlags = vk::QueueFlags::from_raw(1 << 31);
 
 impl QueuesRouter {
-    pub fn of_type(&self, ty: QueueType) -> QueueRef {
-        self.queue_type_to_index[ty as usize]
-    }
-    pub fn queue_family_of_type(&self, ty: QueueType) -> u32 {
-        let queue_family = self.queue_type_to_index[ty as usize].family;
-        queue_family
+    pub fn with_caps(&self, required_caps: vk::QueueFlags, preferred_caps: vk::QueueFlags) -> Option<QueueRef> {
+        if !preferred_caps.is_empty() {
+            return self.queue_refs.iter().find(|r| r.caps.contains(required_caps | preferred_caps)).map(|r| *r)
+        }
+
+        return self.queue_refs.iter().find(|r| r.caps.contains(required_caps)).map(|r| *r)
     }
     pub(crate) fn find_with_queue_family_properties(
         available_queue_family: &[vk::QueueFamilyProperties],
-    ) -> Self {
-        // Must include GRAPHICS. Prefer not COMPUTE or SPARSE_BINDING.
-        let graphics_queue_family = available_queue_family
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|&(_i, family)| family.queue_flags.contains(vk::QueueFlags::GRAPHICS))
-            .max_by_key(|&(_i, family)| {
-                let mut priority: i32 = 0;
-                if family.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                    priority -= 1;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
-                    priority -= 1;
-                }
-                priority
-            })
-            .unwrap()
-            .0 as u32;
-        // Must include COMPUTE. Prefer not GRAPHICS or SPARSE_BINDING
-        let compute_queue_family = available_queue_family
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|&(_id, family)| family.queue_flags.contains(vk::QueueFlags::COMPUTE))
-            .max_by_key(|&(_, family)| {
-                // Use first compute-capable queue family
-                let mut priority: i32 = 0;
-                if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                    priority -= 100;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
-                    priority -= 1;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
-                    priority -= 10;
-                }
-                if family
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
-                {
-                    priority -= 10;
-                }
-                if family
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
-                {
-                    priority -= 10;
-                }
-                priority
-            })
-            .unwrap()
-            .0 as u32;
-        // Prefer TRANSFER, COMPUTE, then GRAPHICS.
-        let transfer_queue_family = available_queue_family
-            .iter()
-            .enumerate()
-            .rev()
-            .max_by_key(|&(_, family)| {
-                // Use first compute-capable queue family
-                let mut priority: i32 = 0;
-                if family.queue_flags.contains(vk::QueueFlags::TRANSFER) {
-                    priority += 100;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                    priority -= 10;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                    priority -= 20;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
-                    priority -= 1;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
-                    priority -= 10;
-                }
-                if family
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
-                {
-                    priority -= 10;
-                }
-                if family
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
-                {
-                    priority -= 10;
-                }
-                priority
-            })
-            .unwrap()
-            .0 as u32;
-        let sparse_binding_queue_family = available_queue_family
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|&(_id, family)| family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING))
-            .max_by_key(|&(_, family)| {
-                // Use first compute-capable queue family
-                let mut priority: i32 = 0;
-                if family.queue_flags.contains(vk::QueueFlags::TRANSFER) {
-                    priority -= 1;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                    priority -= 10;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                    priority -= 20;
-                }
-                if family.queue_flags.contains(vk::QueueFlags::OPTICAL_FLOW_NV) {
-                    priority -= 10;
-                }
-                if family
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
-                {
-                    priority -= 10;
-                }
-                if family
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
-                {
-                    priority -= 10;
-                }
-                priority
-            })
-            .map(|(i, _)| i as u32)
-            .unwrap_or(u32::MAX);
-        tracing::info!(graphics = %graphics_queue_family, compute = %compute_queue_family, transfer = %transfer_queue_family, sparse_binding = %sparse_binding_queue_family, "Queue families");
-
-        let mut queue_family_to_types: Vec<vk::QueueFlags> =
-            vec![vk::QueueFlags::empty(); available_queue_family.len()];
-        if sparse_binding_queue_family != u32::MAX {
-            queue_family_to_types[sparse_binding_queue_family as usize] |=
-                vk::QueueFlags::SPARSE_BINDING;
-        }
-        queue_family_to_types[transfer_queue_family as usize] |= vk::QueueFlags::TRANSFER;
-        queue_family_to_types[compute_queue_family as usize] |= vk::QueueFlags::COMPUTE;
-        queue_family_to_types[graphics_queue_family as usize] |= vk::QueueFlags::GRAPHICS;
-
-        let mut queue_type_to_index: [QueueRef; 5] = [QueueRef::null(); 5];
-        for (i, ty) in queue_family_to_types
-            .iter()
-            .filter(|x| !x.is_empty())
-            .enumerate()
-        {
-            if ty.contains(vk::QueueFlags::GRAPHICS) {
-                queue_type_to_index[QueueType::Graphics as usize] = QueueRef {
-                    index: i as u32,
-                    family: graphics_queue_family,
-                };
-            }
-            if ty.contains(vk::QueueFlags::COMPUTE) {
-                queue_type_to_index[QueueType::Compute as usize] = QueueRef {
-                    index: i as u32,
-                    family: compute_queue_family,
-                };
-            }
-            if ty.contains(vk::QueueFlags::TRANSFER) {
-                queue_type_to_index[QueueType::Transfer as usize] = QueueRef {
-                    index: i as u32,
-                    family: transfer_queue_family,
-                };
-            }
-            if ty.contains(vk::QueueFlags::SPARSE_BINDING) {
-                queue_type_to_index[QueueType::SparseBinding as usize] = QueueRef {
-                    index: i as u32,
-                    family: sparse_binding_queue_family,
-                };
-            }
-            if ty.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE) {
-                queue_type_to_index[QueueType::UniversalCompute as usize] = QueueRef {
-                    index: i as u32,
-                    family: sparse_binding_queue_family,
-                };
-            }
-        }
-        if queue_type_to_index[QueueType::UniversalCompute as usize].is_null() {
-            // UniversalCompute queuetype fallbacks to compute
-            queue_type_to_index[QueueType::UniversalCompute as usize] =
-                queue_type_to_index[QueueType::Compute as usize];
-        }
-        for i in queue_type_to_index.iter().take(3) {
-            assert!(!i.is_null(), "All queue types should've been assigned")
-        }
-
-        Self {
-            queue_family_to_types,
-            queue_type_to_index,
-        }
-    }
-
-    pub(crate) fn create_infos(&self) -> Vec<vk::DeviceQueueCreateInfo> {
-        let mut infos: Vec<vk::DeviceQueueCreateInfo> =
-            Vec::with_capacity(self.queue_family_to_types.len());
-        for (family, flags) in self.queue_family_to_types.iter().enumerate() {
-            if flags.is_empty() {
-                continue;
-            }
-            let priority: &'static f32 = if flags.contains(vk::QueueFlags::GRAPHICS) {
+    ) -> Vec<vk::DeviceQueueCreateInfo> {
+        // Create 2 of each queue family
+        available_queue_family.iter().enumerate().take(3).map(|(queue_family_index, props)| {
+            let priority: &'static [f32] = if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
                 &PRIORITY_HIGH
-            } else if flags.contains(vk::QueueFlags::COMPUTE) {
+            } else if props.queue_flags.contains(vk::QueueFlags::COMPUTE) {
                 &PRIORITY_MEDIUM
             } else {
                 &PRIORITY_LOW
             };
-            infos.push(vk::DeviceQueueCreateInfo {
-                queue_family_index: family as u32,
-                queue_count: 1,
-                p_queue_priorities: priority,
+            let queue_count = if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                1
+            } else {
+                props.queue_count.min(2)
+            };
+            vk::DeviceQueueCreateInfo {
+                queue_family_index: queue_family_index as u32,
+                queue_count,
+                p_queue_priorities: priority.as_ptr(),
                 ..Default::default()
-            });
-        }
-        infos
+            }
+        }).collect::<Vec<_>>()
     }
-}
-
-const PRIORITY_HIGH: f32 = 1.0;
-const PRIORITY_MEDIUM: f32 = 0.5;
-const PRIORITY_LOW: f32 = 0.0;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_nvidia_windows() {
-        let default = vk::QueueFamilyProperties {
-            queue_flags: vk::QueueFlags::empty(),
-            queue_count: 16,
-            timestamp_valid_bits: 64,
-            min_image_transfer_granularity: vk::Extent3D {
-                width: 1,
-                height: 1,
-                depth: 1,
-            },
-        };
-        let router = QueuesRouter::find_with_queue_family_properties(&[
-            vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::GRAPHICS
-                    | vk::QueueFlags::COMPUTE
-                    | vk::QueueFlags::TRANSFER
-                    | vk::QueueFlags::SPARSE_BINDING,
-                queue_count: 16,
-                ..default
-            },
-            vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
-                queue_count: 2,
-                ..default
-            },
-            vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::TRANSFER
-                    | vk::QueueFlags::COMPUTE
-                    | vk::QueueFlags::SPARSE_BINDING,
-                queue_count: 8,
-                ..default
-            },
-            vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::TRANSFER
-                    | vk::QueueFlags::VIDEO_DECODE_KHR
-                    | vk::QueueFlags::SPARSE_BINDING,
-                queue_count: 8,
-                timestamp_valid_bits: 32,
-                ..default
-            },
-        ]);
-        assert_eq!(
-            router.queue_family_to_types,
-            vec![
-                vk::QueueFlags::GRAPHICS,
-                vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
-                vk::QueueFlags::COMPUTE,
-                vk::QueueFlags::empty(),
-            ]
-        );
-        for (i, expected_index) in [0, 2, 1, 1].iter().enumerate() {
-            assert_eq!(router.queue_type_to_index[i].index, *expected_index);
-            assert_eq!(router.queue_type_to_index[i].family, *expected_index);
-        }
-    }
-    #[test]
-    fn test_intel_windows() {
-        let default = vk::QueueFamilyProperties {
-            queue_flags: vk::QueueFlags::empty(),
-            queue_count: 16,
-            timestamp_valid_bits: 36,
-            min_image_transfer_granularity: vk::Extent3D {
-                width: 1,
-                height: 1,
-                depth: 1,
-            },
-        };
-        let router = QueuesRouter::find_with_queue_family_properties(&[
-            vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::GRAPHICS
-                    | vk::QueueFlags::COMPUTE
-                    | vk::QueueFlags::TRANSFER
-                    | vk::QueueFlags::SPARSE_BINDING,
-                queue_count: 1,
-                ..default
-            },
-            vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::VIDEO_DECODE_KHR,
-                queue_count: 2,
-                ..default
-            },
-        ]);
-        assert_eq!(
-            router.queue_family_to_types,
-            vec![
-                vk::QueueFlags::GRAPHICS
-                    | vk::QueueFlags::COMPUTE
-                    | vk::QueueFlags::SPARSE_BINDING
-                    | vk::QueueFlags::TRANSFER,
-                vk::QueueFlags::empty(),
-            ]
-        );
-        for (i, expected_index) in [0, 0, 0, 0, 0].iter().enumerate() {
-            assert_eq!(router.queue_type_to_index[i].index, *expected_index);
-            assert_eq!(router.queue_type_to_index[i].family, *expected_index);
-        }
-    }
-
-    #[test]
-    fn test_single_queue_no_transfer_bit() {
-        let default = vk::QueueFamilyProperties {
-            queue_flags: vk::QueueFlags::empty(),
-            queue_count: 3,
-            timestamp_valid_bits: 48,
-            min_image_transfer_granularity: vk::Extent3D {
-                width: 1,
-                height: 1,
-                depth: 1,
-            },
-        };
-        let router =
-            QueuesRouter::find_with_queue_family_properties(&[vk::QueueFamilyProperties {
-                queue_flags: vk::QueueFlags::GRAPHICS
-                    | vk::QueueFlags::COMPUTE
-                    | vk::QueueFlags::SPARSE_BINDING,
-                queue_count: 3,
-                ..default
-            }]);
-        assert_eq!(
-            router.queue_family_to_types,
-            vec![
-                vk::QueueFlags::GRAPHICS
-                    | vk::QueueFlags::COMPUTE
-                    | vk::QueueFlags::SPARSE_BINDING
-                    | vk::QueueFlags::TRANSFER,
-            ]
-        );
-        for (i, expected_index) in [0, 0, 0, 0].iter().enumerate() {
-            assert_eq!(router.queue_type_to_index[i].index, *expected_index);
-            assert_eq!(router.queue_type_to_index[i].family, *expected_index);
+    pub(crate) fn create(device: &ash::Device, create_info: &[vk::DeviceQueueCreateInfo],
+        available_queue_family: &[vk::QueueFamilyProperties],) -> Self {
+        let (queues, mut queue_refs) : (Vec<_>, Vec<_>) = create_info.iter().flat_map(|info| {
+            let queue_family = &available_queue_family[info.queue_family_index as usize];
+            (0..info.queue_count).map(|i| {
+                let queue = unsafe{ device.get_device_queue(info.queue_family_index, i) };
+                let sharing = if info.queue_count >= 2 {
+                    QueueSharing::Exclusive { queue, marker: AtomicBool::new(false) }
+                } else {
+                    QueueSharing::Shared(Mutex::new(queue))
+                };
+                let r = QueueRef {
+                    index: 0,
+                    family: info.queue_family_index,
+                    caps: queue_family.queue_flags,
+                };
+                (sharing, r)
+            })
+        }).unzip();
+        queue_refs.iter_mut().enumerate().for_each(|(i, r)| r.index = i as u32);
+        queue_refs.sort_by_cached_key(|i| i.caps.as_raw().count_ones());
+        Self {
+            queues,
+            queue_refs,
         }
     }
 }
+
+const PRIORITY_HIGH: [f32; 2] = [1.0, 0.1];
+const PRIORITY_MEDIUM: [f32; 2] = [0.5, 0.1];
+const PRIORITY_LOW: [f32; 2] = [0.0, 0.0];

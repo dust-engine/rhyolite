@@ -45,7 +45,6 @@ use crate::{
     commands::{CommandRecorder, ImmediateTransitions, SemaphoreSignalCommands},
     debug::DebugCommands,
     ecs::Barriers,
-    queue::QueueType,
     semaphore::TimelineSemaphore,
     Device, HasDevice, QueueRef,
 };
@@ -306,15 +305,23 @@ where
         }
     }
     fn default_configs(config: &mut bevy::utils::ConfigMap) {
-        let flags = match Q {
-            'g' => QueueType::Graphics,
-            'c' => QueueType::Compute,
-            't' => QueueType::Transfer,
-            'u' => QueueType::UniversalCompute,
+        let config = config.entry::<RenderSystemConfig>().or_default();
+        match Q {
+            'g' => {
+                config.required_queue_flags = vk::QueueFlags::GRAPHICS;
+            },
+            'c' => {
+                config.required_queue_flags = vk::QueueFlags::COMPUTE;
+            },
+            't' => {
+                config.required_queue_flags = vk::QueueFlags::TRANSFER;
+            },
+            'u' => {
+                config.required_queue_flags = vk::QueueFlags::COMPUTE;
+                config.preferred_queue_flags = vk::QueueFlags::GRAPHICS;
+            },
             _ => unreachable!(),
         };
-        let config = config.entry::<RenderSystemConfig>().or_default();
-        config.queue = flags;
     }
     fn configurate(
         state: &mut Self::State,
@@ -578,6 +585,9 @@ pub(crate) fn submit_system_graph(
 
     unsafe {
         let queue = device.get_raw_queue(queue);
+        // TODO: Ensure submission safety on vk::Queue by adding
+        // execution dependencies between all instances of submit_system_graph and
+        // vkQueuePresentKHR
         device
             .queue_submit2(
                 queue,

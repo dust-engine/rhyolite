@@ -13,7 +13,6 @@ use bevy::ecs::{
 use bevy::utils::smallvec::SmallVec;
 
 use crate::commands::{ResourceTransitionCommands, SemaphoreSignalCommands};
-use crate::queue::QueueType;
 use crate::semaphore::TimelineSemaphore;
 use crate::QueueRef;
 
@@ -21,7 +20,8 @@ use super::{QueueSubmissionInfo, RenderSystemPass};
 
 pub struct RenderSystemConfig {
     /// The render system must be assigned onto a queue supporting these feature flags.
-    pub queue: QueueType,
+    pub required_queue_flags: vk::QueueFlags,
+    pub preferred_queue_flags: vk::QueueFlags,
     /// If enabled, the system will not signal a timeline semaphore.
     pub force_binary_semaphore: bool,
     pub is_queue_op: bool,
@@ -38,7 +38,8 @@ unsafe impl Sync for RenderSystemBarrierProducerConfig {}
 impl Default for RenderSystemConfig {
     fn default() -> Self {
         Self {
-            queue: QueueType::Graphics,
+            required_queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
+            preferred_queue_flags: vk::QueueFlags::TRANSFER,
             force_binary_semaphore: false,
             is_queue_op: false,
             barrier_producer_config: None,
@@ -218,10 +219,11 @@ where
     /// Ensure that this render system will be assigned to a queue supporting the specified queue flags
     /// while minimizing the amount of overhead associated with semaphore syncronizations.
     /// Should be called for most smaller render systems in-between heavier operations.
-    fn on_queue(self, queue_type: QueueType) -> SystemConfigs {
+    fn on_queue(self, required_flags: vk::QueueFlags, preferred_flags: vk::QueueFlags) -> SystemConfigs {
         self.with_option::<RenderSystemPass>(|entry| {
             let config = entry.or_default();
-            config.queue = queue_type;
+            config.required_queue_flags = required_flags;
+            config.preferred_queue_flags = preferred_flags;
         })
     }
     fn with_barriers<M, O: 'static, T: IntoSystem<Barriers, O, M>>(

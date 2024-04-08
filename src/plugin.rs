@@ -250,14 +250,10 @@ impl Plugin for RhyolitePlugin {
         let features = PhysicalDeviceFeaturesSetup::new(physical_device.clone());
         let extensions = DeviceExtensions::new(&physical_device).unwrap();
 
-        let queue_router = QueuesRouter::find_with_queue_family_properties(
-            &physical_device.get_queue_family_properties(),
-        );
         app.insert_resource(extensions)
             .insert_resource(instance)
             .insert_resource(physical_device)
             .insert_resource(features)
-            .insert_resource(queue_router)
             .init_asset::<crate::shader::ShaderModule>()
             .init_asset::<crate::shader::loader::SpirvShaderSource>();
         // Add build pass
@@ -297,16 +293,15 @@ impl Plugin for RhyolitePlugin {
             .unwrap()
             .finalize();
         let physical_device: &PhysicalDevice = app.world.resource();
-        let queues_router = app.world.resource::<QueuesRouter>();
-        let device = Device::create(
+        let (device, queues) = Device::create(
             physical_device.clone(),
-            &queues_router.create_infos(),
             &extension_settings.enabled_extensions,
             features,
             extension_settings.extension_builders,
         )
         .unwrap();
         app.insert_resource(device);
+        app.insert_resource(queues);
 
         // Add allocator
         app.world.init_resource::<crate::Allocator>();

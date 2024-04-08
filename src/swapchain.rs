@@ -19,7 +19,7 @@ use crate::{
     ecs::{Barriers, IntoRenderSystemConfigs, RenderImage, RenderSystemPass},
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
-    Access, Device, ImageLike, ImageViewLike, PhysicalDevice, QueueType, QueuesRouter, Surface,
+    Access, Device, ImageLike, ImageViewLike, PhysicalDevice, QueuesRouter, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -850,18 +850,18 @@ fn present_barriers(
                     subresource_range: image.subresource_range(),
                     ..Default::default()
                 },
-                queues_router.of_type(QueueType::Graphics),
+                queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap(),
             );
             barriers.signal_binary_semaphore_prev_stage(
                 i.present_semaphore,
                 barrier.dst_stage_mask,
-                queues_router.of_type(QueueType::Graphics),
+                queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap(),
             );
             // This previous queue now needs to wait for the swapchain acquire semaphore, since nobody else is waiting on it.
             barriers.wait_binary_semaphore_prev_stage(
                 i.acquire_semaphore,
                 barrier.src_stage_mask,
-                queues_router.of_type(QueueType::Graphics),
+                queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap(),
             );
         }
         image.layout = vk::ImageLayout::PRESENT_SRC_KHR;
@@ -875,7 +875,7 @@ pub fn present(
 ) {
     // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
     // select the best one.
-    let present_queue = queues_router.of_type(QueueType::Graphics);
+    let present_queue = queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap();
     let queue = device.get_raw_queue(present_queue);
 
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();

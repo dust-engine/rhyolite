@@ -32,7 +32,7 @@ use crate::{
     },
     queue::{QueueRef, QueuesRouter},
     semaphore::TimelineSemaphore,
-    Device, QueueType,
+    Device,
 };
 
 use super::RenderSystemConfig;
@@ -120,7 +120,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             selected_queue: QueueRef,
             stage_index: u32,
             queue_graph_node: u32,
-            queue_type: QueueType,
         }
         let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> =
             (0..graph.systems.len()).map(|_| None).collect();
@@ -137,7 +136,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             let Some(render_system_config) = system.config.get::<RenderSystemConfig>() else {
                 continue; // not a render system
             };
-            let selected_queue = queue_router.of_type(render_system_config.queue);
+            let selected_queue = queue_router.with_caps(render_system_config.required_queue_flags, render_system_config.preferred_queue_flags).unwrap();
             num_queues = num_queues.max(selected_queue.index + 1);
 
             render_graph_meta[node_id] = Some(RenderGraphNodeMeta {
@@ -147,7 +146,6 @@ impl ScheduleBuildPass for RenderSystemPass {
                 selected_queue,
                 stage_index: u32::MAX,
                 queue_graph_node: 0,
-                queue_type: render_system_config.queue,
             });
             render_graph.add_node(node_id);
             for neighbor in dependency_flattened.neighbors(node) {
@@ -302,7 +300,6 @@ impl ScheduleBuildPass for RenderSystemPass {
         struct QueueGraphNode {
             stage_index: u32,
             queue: QueueRef,
-            queue_type: QueueType,
         }
 
         let mut queue_graph = bevy::utils::petgraph::graphmap::DiGraphMap::<u32, ()>::new();
@@ -366,7 +363,6 @@ impl ScheduleBuildPass for RenderSystemPass {
                     queue_graph_node_info.get_or_insert(QueueGraphNode {
                         stage_index: meta.stage_index,
                         queue: meta.selected_queue,
-                        queue_type: meta.queue_type,
                     });
                     force_binary_semaphore |= meta.force_binary_semaphore;
                 }
