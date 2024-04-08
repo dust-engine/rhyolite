@@ -16,7 +16,7 @@ use bevy::{
             Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, With,
         },
         removal_detection::RemovedComponents,
-        system::{ParamSet, Query, ResMut, Resource},
+        system::{ParamSet, Query, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem},
     },
     utils::smallvec::SmallVec,
 };
@@ -33,53 +33,60 @@ use crate::{
     Access, Buffer, DeviceAddressBuffer,
 };
 
-use super::ray_tracing::{HitgroupHandle, PipelineGroupManager, RayTracingPipeline};
+use super::{ray_tracing::{HitgroupHandle, PipelineGroupManager, RayTracingPipeline}, HitGroup, PipelineCache};
 
 pub struct HitgroupSbtLayout {
     /// The layout for one raytype.
     /// | Raytype 1                                    |
     /// | shader_handles | inline_parameters | padding |
     /// | <--              size           -> | align   |
-    one_raytype: Layout,
+    pub one_raytype: Layout,
 
     // The layout for one entry with all its raytypes
     /// | Raytype 1                                    | Raytype 2                                    |
     /// | shader_handles | inline_parameters | padding | shader_handles | inline_parameters | padding |
     /// | <---                                      size                               ---> |  align  |
-    one_entry: Layout,
+    pub one_entry: Layout,
 
     /// The size of the shader group handles, padded.
     /// | Raytype 1                                    |
     /// | shader_handles | inline_parameters | padding |
     /// | <--- size ---> |
-    handle_size: usize,
+    pub handle_size: usize,
+
+    /// The size of the inline params
+    /// | Raytype 1                                    |
+    /// | shader_handles | inline_parameters | padding |
+    ///                  | <---- size -----> |
+    pub inline_params_size: usize,
 }
 
 pub trait SbtMarker: Send + Sync + 'static {
-    /// Typicall a union.
-    type HitgroupParam: Pod + Send + Sync + Ord;
-    const NUM_RAYTYPES: usize;
+    /// Type to uniquely identify a SBT entry.
+    type HitgroupKey: Send + Sync + Ord + Copy;
 
     /// The marker component. Any additions of this component will trigger an update of the SBT.
     type Marker: Component;
     type QueryData: ReadOnlyQueryData;
     type QueryFilter: QueryFilter + ArchetypeFilter;
+    type Params: SystemParam;
 
-    fn hitgroup_param(data: &QueryItem<Self::QueryData>, raytype: u32) -> Self::HitgroupParam;
+    /// The inline parameters for the hitgroup.
+    /// ret is a slice of size inline_params_size * Self::NUM_RAYTYPES.
+    fn hitgroup_param(params: &mut SystemParamItem<Self::Params>, data: &QueryItem<Self::QueryData>, ret: &mut [u8]);
 
     /// Note: For any given entity, this function is assumed to never change.
     /// It will be called only once, when the entity was originally added.
-    fn hitgroup(data: &QueryItem<Self::QueryData>) -> HitgroupHandle;
+    fn hitgroup_handle(params: &mut SystemParamItem<Self::Params>, data: &QueryItem<Self::QueryData>) -> HitgroupHandle;
+    
+    fn hitgroup_key(params: &mut SystemParamItem<Self::Params>, data: &QueryItem<Self::QueryData>) -> Self::HitgroupKey;
 }
 
-type SbtEntry<T: SbtMarker> = Box<(HitgroupHandle, [T::HitgroupParam; T::NUM_RAYTYPES])>;
-type SbtEntryRef<T: SbtMarker> = NonNull<(HitgroupHandle, [T::HitgroupParam; T::NUM_RAYTYPES])>;
+
 #[derive(Resource)]
-pub struct SbtManager<T: SbtMarker>
-where
-    [(); T::NUM_RAYTYPES]: Sized,
+pub struct SbtManager<T: SbtMarker, const NUM_RAYTYPES: usize>
 {
-    pipeline_group: PipelineGroupManager<{ T::NUM_RAYTYPES }>,
+    pipeline_group: PipelineGroupManager<NUM_RAYTYPES>,
     hitgroup_layout: HitgroupSbtLayout,
 
     allocator: Allocator,
@@ -90,9 +97,9 @@ where
     free_entries: Vec<u32>,
 
     /// Mapping from handle and params to sbt_index
-    sbt_map_reverse: BTreeMap<SbtEntry<T>, u32>,
+    sbt_map_reverse: BTreeMap<T::HitgroupKey, u32>,
     /// Indexed by sbt_index. (num of entities with this SBT index, SbtEntry)
-    sbt_map: Vec<Option<(NonZeroU32, SbtEntryRef<T>)>>,
+    sbt_map: Vec<Option<(NonZeroU32, HitgroupHandle, Box<[u8]>, T::HitgroupKey)>>,
     /// Mapping from Entity to sbt_index
     entity_map: BTreeMap<Entity, u32>,
 
@@ -100,11 +107,11 @@ where
 
     full_update_required: bool,
 
-    pipelines: Option<SmallVec<[RenderObject<RayTracingPipeline>; T::NUM_RAYTYPES]>>,
+    pipelines: Option<SmallVec<[RenderObject<RayTracingPipeline>; NUM_RAYTYPES]>>,
 }
 // Note: For this to be safe we cannot leak the SbtEntry.
-unsafe impl<T: SbtMarker> Send for SbtManager<T> where [(); T::NUM_RAYTYPES]: Sized {}
-unsafe impl<T: SbtMarker> Sync for SbtManager<T> where [(); T::NUM_RAYTYPES]: Sized {}
+unsafe impl<T: SbtMarker, const NUM_RAYTYPES: usize> Send for SbtManager<T, NUM_RAYTYPES> {}
+unsafe impl<T: SbtMarker, const NUM_RAYTYPES: usize> Sync for SbtManager<T, NUM_RAYTYPES> {}
 
 #[derive(Component)]
 pub struct SbtHandle<T: SbtMarker> {
@@ -120,13 +127,16 @@ impl<T: SbtMarker> Default for SbtHandle<T> {
     }
 }
 
-impl<T: SbtMarker> SbtManager<T>
+impl<T: SbtMarker, const NUM_RAYTYPES: usize> SbtManager<T, NUM_RAYTYPES>
 where
-    [(); T::NUM_RAYTYPES]: Sized,
+    [(); NUM_RAYTYPES]: Sized,
 {
+    pub fn hitgroup_layout(&self) -> &HitgroupSbtLayout {
+        &self.hitgroup_layout
+    }
     pub fn new(
         allocator: Allocator,
-        pipeline_group: PipelineGroupManager<{ T::NUM_RAYTYPES }>,
+        pipeline_group: PipelineGroupManager<NUM_RAYTYPES>,
         hitgroup_layout: HitgroupSbtLayout,
     ) -> Self {
         Self {
@@ -152,11 +162,11 @@ where
         let size = size.next_power_of_two().max(8);
     }
     fn remove_sbt_index(&mut self, sbt_index: u32) {
-        let (num_entities, ptr) = &mut self.sbt_map[sbt_index as usize].take().unwrap();
+        let (num_entities, handle, ptr, key) = &mut self.sbt_map[sbt_index as usize].take().unwrap();
         if num_entities.get() == 1 {
             // Last entity with this sbt_index
             self.free_entries.push(sbt_index);
-            self.sbt_map_reverse.remove(unsafe { ptr.as_ref() });
+            self.sbt_map_reverse.remove(key).unwrap();
             self.sbt_map[sbt_index as usize] = None;
         } else {
             *num_entities = unsafe { NonZeroU32::new_unchecked(num_entities.get() - 1) };
@@ -177,6 +187,7 @@ where
                 (T::QueryFilter, Or<(Added<T::Marker>, Changed<T::Marker>)>),
             >,
         )>,
+        mut params: StaticSystemParam<T::Params>,
     ) {
         let this = &mut *this;
         for entity in removals.read() {
@@ -185,17 +196,12 @@ where
         }
         for (entity, handle, data) in query.p0().iter_mut() {
             // For all new entities, allocate their sbt handles.
-            let hitgroup_handle = T::hitgroup(&data);
-            let hitgroup_params = (0..T::NUM_RAYTYPES)
-                .map(|i| T::hitgroup_param(&data, i as u32))
-                .collect::<SmallVec<[T::HitgroupParam; T::NUM_RAYTYPES]>>()
-                .into_inner()
-                .ok()
-                .unwrap();
+            let hitgroup_key = T::hitgroup_key(&mut params, &data);
+
             // Deduplicate
             let sbt_index = if let Some(&sbt_index) = this
                 .sbt_map_reverse
-                .get(&(hitgroup_handle, hitgroup_params))
+                .get(&hitgroup_key)
             {
                 this.sbt_map[sbt_index as usize]
                     .as_mut()
@@ -206,7 +212,10 @@ where
                 // Reuse the existing sbt_index
                 sbt_index
             } else {
-                let mut key = Box::new((hitgroup_handle, hitgroup_params));
+                let hitgroup_handle = T::hitgroup_handle(&mut params, &data);
+                let mut hitgroup_params: Vec<u8> = vec![0; this.hitgroup_layout.inline_params_size * NUM_RAYTYPES];
+                T::hitgroup_param(&mut params, &data,  &mut hitgroup_params);
+
                 // Allocate a new sbt_index
                 let sbt_index = this.free_entries.pop().unwrap_or_else(|| {
                     let index = this.sbt_map.len() as u32;
@@ -217,10 +226,12 @@ where
                 unsafe {
                     this.sbt_map[sbt_index as usize] = Some((
                         NonZeroU32::new_unchecked(1),
-                        NonNull::new_unchecked(key.as_mut() as *mut _),
+                        hitgroup_handle,
+                        hitgroup_params.into_boxed_slice(),
+                        hitgroup_key,
                     ));
                 }
-                this.sbt_map_reverse.insert(key, sbt_index);
+                this.sbt_map_reverse.insert(hitgroup_key, sbt_index);
                 sbt_index
             };
             this.entity_map.insert(entity, sbt_index);
@@ -270,14 +281,13 @@ where
                 .start(&mut commands)
                 .allocate_buffer(total_size, 1);
 
-            for (i, (_, r)) in this
+            for (i, (_, handle, params, _)) in this
                 .sbt_map
                 .iter()
                 .enumerate()
                 .filter_map(|(i, item)| Some((i, item.as_ref()?)))
             {
-                let (handle, params) = unsafe { r.as_ref() };
-                this.copy_sbt(&mut host_buffer, i, *params, *handle, pipelines);
+                this.copy_sbt(&mut host_buffer, i, params, *handle, pipelines);
             }
             let device_buffer = this.allocation.as_mut().unwrap();
             commands.copy_buffer(
@@ -302,9 +312,8 @@ where
                 .allocate_buffer(total_size, 1);
 
             for (i, &sbt_index) in this.changes.iter().enumerate() {
-                let r = this.sbt_map[sbt_index as usize].as_ref().unwrap().1;
-                let (handle, params) = unsafe { r.as_ref() };
-                this.copy_sbt(&mut host_buffer, i, *params, *handle, pipelines);
+                let (_, handle, params, _) = this.sbt_map[sbt_index as usize].as_ref().unwrap();
+                this.copy_sbt(&mut host_buffer, i, params, *handle, pipelines);
             }
             let regions = this
                 .changes
@@ -337,13 +346,14 @@ where
         &self,
         dst_buffer: &mut [u8],
         dst_index: usize,
-        raytype_params: [T::HitgroupParam; T::NUM_RAYTYPES],
+        raytype_params: &[u8],
         hitgroup_handle: HitgroupHandle,
         pipelines: &[RenderObject<RayTracingPipeline>],
     ) {
+        assert_eq!(raytype_params.len(), self.hitgroup_layout.inline_params_size * NUM_RAYTYPES);
         let offset = dst_index * self.hitgroup_layout.one_entry.pad_to_align().size();
         let entry = &mut dst_buffer[offset..offset + self.hitgroup_layout.one_entry.size()];
-        for (raytype, params) in raytype_params.iter().enumerate() {
+        for raytype in 0..NUM_RAYTYPES {
             let offset = raytype * self.hitgroup_layout.one_raytype.pad_to_align().size();
             let entry = &mut entry[offset..offset + self.hitgroup_layout.one_raytype.size()];
 
@@ -353,7 +363,23 @@ where
                 as usize];
             entry[0..self.hitgroup_layout.handle_size]
                 .copy_from_slice(pipeline.get().handles().hitgroup(hitgroup_handle));
-            entry[self.hitgroup_layout.handle_size..].copy_from_slice(bytemuck::bytes_of(params));
+            entry[self.hitgroup_layout.handle_size..].copy_from_slice(&raytype_params[
+                raytype * self.hitgroup_layout.inline_params_size
+                    ..(raytype + 1) * self.hitgroup_layout.inline_params_size
+            ]);
         }
+    }
+
+    pub fn add_hitgroup(&mut self,
+        hitgroup: HitGroup,
+        pipeline_cache: &PipelineCache) -> HitgroupHandle {
+        let handle = self.pipeline_group.add_hitgroup(hitgroup, pipeline_cache);
+        self.full_update_required = true; // TODO: Disable this for when pipeline library can be enabled
+        handle
+    }
+
+    pub fn remove_hitgroup(&mut self, handle: HitgroupHandle) {
+        self.pipeline_group.remove_hitgroup(handle);
+        self.full_update_required = true; // TODO: Disable this for when pipeline library can be enabled
     }
 }

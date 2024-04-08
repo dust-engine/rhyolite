@@ -684,6 +684,13 @@ pub struct HitGroupShaderIndexAnyHit(nonmax::NonMaxU32);
 #[derive(Clone, Copy)]
 pub struct HitGroupShaderIndexIntersection(nonmax::NonMaxU32);
 impl HitGroup {
+    pub fn new(ty: vk::RayTracingShaderGroupTypeKHR) -> Self {
+        Self {
+            ty,
+            shaders: Vec::new(),
+            groups: Vec::new(),
+        }
+    }
     pub fn new_triangles() -> Self {
         Self {
             ty: vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP,
@@ -872,6 +879,7 @@ impl<const NUM_RAYTYPES: usize> PipelineGroupManager<NUM_RAYTYPES> {
         hitgroup: HitGroup,
         pipeline_cache: &PipelineCache,
     ) -> HitgroupHandle {
+        assert_eq!(hitgroup.groups.len(), NUM_RAYTYPES);
         let handle = self.free_hitgroup_handles.pop();
 
         let mut new_handle: Option<HitgroupHandle> = None;
