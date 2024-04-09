@@ -47,7 +47,9 @@ impl Device {
     ) -> VkResult<(Self, Queues)> {
         let mut available_queue_family = physical_device.get_queue_family_properties();
         available_queue_family.iter_mut().for_each(|props| {
-            if props.queue_flags.contains(vk::QueueFlags::COMPUTE) || props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+            if props.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                || props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            {
                 props.queue_flags |= vk::QueueFlags::TRANSFER;
             }
         });
@@ -74,12 +76,15 @@ impl Device {
             })
             .collect();
         let queues = Queues::create(&device, &queue_create_infos, &available_queue_family);
-        Ok((Self(Arc::new(DeviceInner {
-            physical_device,
-            device,
-            extensions,
-            features,
-        })), queues))
+        Ok((
+            Self(Arc::new(DeviceInner {
+                physical_device,
+                device,
+                extensions,
+                features,
+            })),
+            queues,
+        ))
     }
     pub fn instance(&self) -> &Instance {
         self.0.physical_device.instance()

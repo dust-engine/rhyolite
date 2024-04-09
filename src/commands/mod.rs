@@ -197,8 +197,7 @@ where
     T: BufferLike,
 {
     type State = ();
-    fn current_state(&self) -> Self::State {
-    }
+    fn current_state(&self) -> Self::State {}
     fn transition(
         &mut self,
         access: Access,

@@ -356,7 +356,7 @@ pub struct SwapchainConfig {
     /// the implementation will select the best available HDR color space.
     /// On Windows 11, it is recommended to turn this off when the application was started in Windowed mode
     /// and the system HDR toggle was turned off. Otherwise, the screen may flash when the application is started.
-    /// 
+    ///
     /// Ignored when `image_format` is set.
     pub hdr: bool,
 
@@ -368,7 +368,7 @@ pub struct SwapchainConfig {
     ///
     /// Set this to true if the swapchain will be directly used as a render target. In this case,
     /// the sRGB gamma correction will be applied automatically. This is the default.
-    /// 
+    ///
     /// Ignored when `image_format` is set.
     pub srgb_format: bool,
 }
@@ -850,18 +850,24 @@ fn present_barriers(
                     subresource_range: image.subresource_range(),
                     ..Default::default()
                 },
-                queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap(),
+                queues_router
+                    .with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty())
+                    .unwrap(),
             );
             barriers.signal_binary_semaphore_prev_stage(
                 i.present_semaphore,
                 barrier.dst_stage_mask,
-                queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap(),
+                queues_router
+                    .with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty())
+                    .unwrap(),
             );
             // This previous queue now needs to wait for the swapchain acquire semaphore, since nobody else is waiting on it.
             barriers.wait_binary_semaphore_prev_stage(
                 i.acquire_semaphore,
                 barrier.src_stage_mask,
-                queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap(),
+                queues_router
+                    .with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty())
+                    .unwrap(),
             );
         }
         image.layout = vk::ImageLayout::PRESENT_SRC_KHR;
@@ -893,7 +899,9 @@ pub fn present(
 
     // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
     // select the best one.
-    let present_queue = queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap();
+    let present_queue = queues_router
+        .with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty())
+        .unwrap();
     let queue = queues_router.get(present_queue);
     unsafe {
         device

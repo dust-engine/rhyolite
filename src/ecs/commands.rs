@@ -309,17 +309,17 @@ where
         match Q {
             'g' => {
                 config.required_queue_flags = vk::QueueFlags::GRAPHICS;
-            },
+            }
             'c' => {
                 config.required_queue_flags = vk::QueueFlags::COMPUTE;
-            },
+            }
             't' => {
                 config.required_queue_flags = vk::QueueFlags::TRANSFER;
-            },
+            }
             'u' => {
                 config.required_queue_flags = vk::QueueFlags::COMPUTE;
                 config.preferred_queue_flags = vk::QueueFlags::GRAPHICS;
-            },
+            }
             _ => unreachable!(),
         };
     }

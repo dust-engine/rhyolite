@@ -16,7 +16,9 @@ use bevy::{
             Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, With,
         },
         removal_detection::RemovedComponents,
-        system::{ParamSet, Query, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem},
+        system::{
+            ParamSet, Query, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem,
+        },
     },
     utils::smallvec::SmallVec,
 };
@@ -33,7 +35,10 @@ use crate::{
     Access, Buffer, DeviceAddressBuffer,
 };
 
-use super::{ray_tracing::{HitgroupHandle, PipelineGroupManager, RayTracingPipeline}, HitGroup, PipelineCache};
+use super::{
+    ray_tracing::{HitgroupHandle, PipelineGroupManager, RayTracingPipeline},
+    HitGroup, PipelineCache,
+};
 
 pub struct HitgroupSbtLayout {
     /// The layout for one raytype.
@@ -73,19 +78,27 @@ pub trait SbtMarker: Send + Sync + 'static {
 
     /// The inline parameters for the hitgroup.
     /// ret is a slice of size inline_params_size * Self::NUM_RAYTYPES.
-    fn hitgroup_param(params: &mut SystemParamItem<Self::Params>, data: &QueryItem<Self::QueryData>, ret: &mut [u8]);
+    fn hitgroup_param(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+        ret: &mut [u8],
+    );
 
     /// Note: For any given entity, this function is assumed to never change.
     /// It will be called only once, when the entity was originally added.
-    fn hitgroup_handle(params: &mut SystemParamItem<Self::Params>, data: &QueryItem<Self::QueryData>) -> HitgroupHandle;
-    
-    fn hitgroup_key(params: &mut SystemParamItem<Self::Params>, data: &QueryItem<Self::QueryData>) -> Self::HitgroupKey;
+    fn hitgroup_handle(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+    ) -> HitgroupHandle;
+
+    fn hitgroup_key(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+    ) -> Self::HitgroupKey;
 }
 
-
 #[derive(Resource)]
-pub struct SbtManager<T: SbtMarker, const NUM_RAYTYPES: usize>
-{
+pub struct SbtManager<T: SbtMarker, const NUM_RAYTYPES: usize> {
     pipeline_group: PipelineGroupManager<NUM_RAYTYPES>,
     hitgroup_layout: HitgroupSbtLayout,
 
@@ -162,7 +175,8 @@ where
         let size = size.next_power_of_two().max(8);
     }
     fn remove_sbt_index(&mut self, sbt_index: u32) {
-        let (num_entities, handle, ptr, key) = &mut self.sbt_map[sbt_index as usize].take().unwrap();
+        let (num_entities, handle, ptr, key) =
+            &mut self.sbt_map[sbt_index as usize].take().unwrap();
         if num_entities.get() == 1 {
             // Last entity with this sbt_index
             self.free_entries.push(sbt_index);
@@ -199,10 +213,7 @@ where
             let hitgroup_key = T::hitgroup_key(&mut params, &data);
 
             // Deduplicate
-            let sbt_index = if let Some(&sbt_index) = this
-                .sbt_map_reverse
-                .get(&hitgroup_key)
-            {
+            let sbt_index = if let Some(&sbt_index) = this.sbt_map_reverse.get(&hitgroup_key) {
                 this.sbt_map[sbt_index as usize]
                     .as_mut()
                     .unwrap()
@@ -213,8 +224,9 @@ where
                 sbt_index
             } else {
                 let hitgroup_handle = T::hitgroup_handle(&mut params, &data);
-                let mut hitgroup_params: Vec<u8> = vec![0; this.hitgroup_layout.inline_params_size * NUM_RAYTYPES];
-                T::hitgroup_param(&mut params, &data,  &mut hitgroup_params);
+                let mut hitgroup_params: Vec<u8> =
+                    vec![0; this.hitgroup_layout.inline_params_size * NUM_RAYTYPES];
+                T::hitgroup_param(&mut params, &data, &mut hitgroup_params);
 
                 // Allocate a new sbt_index
                 let sbt_index = this.free_entries.pop().unwrap_or_else(|| {
@@ -350,7 +362,10 @@ where
         hitgroup_handle: HitgroupHandle,
         pipelines: &[RenderObject<RayTracingPipeline>],
     ) {
-        assert_eq!(raytype_params.len(), self.hitgroup_layout.inline_params_size * NUM_RAYTYPES);
+        assert_eq!(
+            raytype_params.len(),
+            self.hitgroup_layout.inline_params_size * NUM_RAYTYPES
+        );
         let offset = dst_index * self.hitgroup_layout.one_entry.pad_to_align().size();
         let entry = &mut dst_buffer[offset..offset + self.hitgroup_layout.one_entry.size()];
         for raytype in 0..NUM_RAYTYPES {
@@ -363,16 +378,18 @@ where
                 as usize];
             entry[0..self.hitgroup_layout.handle_size]
                 .copy_from_slice(pipeline.get().handles().hitgroup(hitgroup_handle));
-            entry[self.hitgroup_layout.handle_size..].copy_from_slice(&raytype_params[
-                raytype * self.hitgroup_layout.inline_params_size
-                    ..(raytype + 1) * self.hitgroup_layout.inline_params_size
-            ]);
+            entry[self.hitgroup_layout.handle_size..].copy_from_slice(
+                &raytype_params[raytype * self.hitgroup_layout.inline_params_size
+                    ..(raytype + 1) * self.hitgroup_layout.inline_params_size],
+            );
         }
     }
 
-    pub fn add_hitgroup(&mut self,
+    pub fn add_hitgroup(
+        &mut self,
         hitgroup: HitGroup,
-        pipeline_cache: &PipelineCache) -> HitgroupHandle {
+        pipeline_cache: &PipelineCache,
+    ) -> HitgroupHandle {
         let handle = self.pipeline_group.add_hitgroup(hitgroup, pipeline_cache);
         self.full_update_required = true; // TODO: Disable this for when pipeline library can be enabled
         handle

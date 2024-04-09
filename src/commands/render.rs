@@ -2,13 +2,15 @@ use ash::vk::{self};
 use bevy::math::IVec3;
 
 use crate::{
-    dispose::RenderObject, ecs::{queue_cap::IsGraphicsQueueCap, RenderCommands, RenderImage}, pipeline::GraphicsPipeline, Device, HasDevice, ImageLike, QueueRef
+    dispose::RenderObject,
+    ecs::{queue_cap::IsGraphicsQueueCap, RenderCommands, RenderImage},
+    pipeline::GraphicsPipeline,
+    Device, HasDevice, ImageLike, QueueRef,
 };
 
 use super::{CommandRecorder, SemaphoreSignalCommands, TrackedResource};
 
 pub trait GraphicsCommands: Sized + CommandRecorder {
-    
     fn blit_image<S: ImageLike, D: ImageLike>(
         &mut self,
         src: &impl TrackedResource<State = vk::ImageLayout, Target = S>,
@@ -66,7 +68,7 @@ pub trait GraphicsCommands: Sized + CommandRecorder {
             )
         }
     }
-    
+
     fn begin_rendering(&mut self, info: &vk::RenderingInfo) -> DynamicRenderPass<Self> {
         unsafe {
             let cmd_buf = self.cmd_buf();
@@ -76,11 +78,7 @@ pub trait GraphicsCommands: Sized + CommandRecorder {
     }
 }
 
-impl<const Q: char> GraphicsCommands for RenderCommands<'_, '_, Q>
-where
-    (): IsGraphicsQueueCap<Q>,
-{
-}
+impl<const Q: char> GraphicsCommands for RenderCommands<'_, '_, Q> where (): IsGraphicsQueueCap<Q> {}
 
 pub struct DynamicRenderPass<'w, T: GraphicsCommands> {
     recorder: &'w mut T,

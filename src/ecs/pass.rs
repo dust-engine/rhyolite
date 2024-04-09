@@ -136,7 +136,12 @@ impl ScheduleBuildPass for RenderSystemPass {
             let Some(render_system_config) = system.config.get::<RenderSystemConfig>() else {
                 continue; // not a render system
             };
-            let selected_queue = queue_router.with_caps(render_system_config.required_queue_flags, render_system_config.preferred_queue_flags).unwrap();
+            let selected_queue = queue_router
+                .with_caps(
+                    render_system_config.required_queue_flags,
+                    render_system_config.preferred_queue_flags,
+                )
+                .unwrap();
             num_queues = num_queues.max(selected_queue.index + 1);
 
             render_graph_meta[node_id] = Some(RenderGraphNodeMeta {

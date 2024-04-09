@@ -45,8 +45,8 @@ fn main() {
         PostUpdate,
         (
             run_compute_shader
-            .with_barriers(run_compute_shader_barrier)
-            .run_if(|count: Res<FrameCount>| count.0 % 30 == 0),
+                .with_barriers(run_compute_shader_barrier)
+                .run_if(|count: Res<FrameCount>| count.0 % 30 == 0),
             blit_image_to_swapchain
                 .with_barriers(blit_image_to_swapchain_barrier)
                 .after(acquire_swapchain_image::<With<PrimaryWindow>>)
@@ -150,10 +150,9 @@ fn initialize_pipeline(
     commands.insert_resource(GameOfLifePipeline {
         init_pipeline,
         run_pipeline,
-        game: RenderImage::new(Image::new_device_image(
-            allocator.clone(),
-            &game_img_create_info,
-        ).unwrap()),
+        game: RenderImage::new(
+            Image::new_device_image(allocator.clone(), &game_img_create_info).unwrap(),
+        ),
         layout,
     });
 }
@@ -200,13 +199,12 @@ fn run_compute_shader(
             dst_binding: 0,
             descriptor_count: 1,
             descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-            p_image_info: [
-                vk::DescriptorImageInfo {
-                    image_view: game_of_life_pipeline.game.view,
-                    image_layout: vk::ImageLayout::GENERAL,
-                    ..Default::default()
-                },
-            ].as_ptr(),
+            p_image_info: [vk::DescriptorImageInfo {
+                image_view: game_of_life_pipeline.game.view,
+                image_layout: vk::ImageLayout::GENERAL,
+                ..Default::default()
+            }]
+            .as_ptr(),
             ..Default::default()
         }],
         vk::PipelineBindPoint::COMPUTE,

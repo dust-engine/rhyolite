@@ -219,7 +219,11 @@ where
     /// Ensure that this render system will be assigned to a queue supporting the specified queue flags
     /// while minimizing the amount of overhead associated with semaphore syncronizations.
     /// Should be called for most smaller render systems in-between heavier operations.
-    fn on_queue(self, required_flags: vk::QueueFlags, preferred_flags: vk::QueueFlags) -> SystemConfigs {
+    fn on_queue(
+        self,
+        required_flags: vk::QueueFlags,
+        preferred_flags: vk::QueueFlags,
+    ) -> SystemConfigs {
         self.with_option::<RenderSystemPass>(|entry| {
             let config = entry.or_default();
             config.required_queue_flags = required_flags;
