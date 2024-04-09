@@ -19,7 +19,7 @@ use crate::{
     ecs::{Barriers, IntoRenderSystemConfigs, RenderImage, RenderSystemPass},
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
-    Access, Device, ImageLike, ImageViewLike, PhysicalDevice, QueuesRouter, Surface,
+    Access, Device, ImageLike, ImageViewLike, PhysicalDevice, Queues, Surface,
 };
 
 pub struct SwapchainPlugin {
@@ -801,7 +801,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
 fn present_barriers(
     In(mut barriers): In<Barriers>,
     mut query: Query<&mut SwapchainImage>,
-    queues_router: Res<QueuesRouter>,
+    queues_router: Res<Queues>,
 ) {
     for i in query.iter_mut() {
         let i = i.into_inner();
@@ -870,14 +870,9 @@ fn present_barriers(
 }
 pub fn present(
     device: Res<Device>,
-    queues_router: Res<QueuesRouter>,
+    queues_router: Res<Queues>,
     mut query: Query<(&mut Swapchain, &mut SwapchainImage)>,
 ) {
-    // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
-    // select the best one.
-    let present_queue = queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap();
-    let queue = device.get_raw_queue(present_queue);
-
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut semaphores: Vec<vk::Semaphore> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
@@ -896,11 +891,15 @@ pub fn present(
         return;
     }
 
+    // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
+    // select the best one.
+    let present_queue = queues_router.with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty()).unwrap();
+    let queue = queues_router.get(present_queue);
     unsafe {
         device
             .extension::<khr::Swapchain>()
             .queue_present(
-                queue,
+                *queue,
                 &vk::PresentInfoKHR {
                     swapchain_count: swapchains.len() as u32,
                     p_swapchains: swapchains.as_ptr(),
@@ -912,4 +911,5 @@ pub fn present(
             )
             .unwrap();
     }
+    drop(queue);
 }

@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicBool, Mutex};
+use std::{ops::Deref, sync::{atomic::{AtomicBool, Ordering}, Mutex, MutexGuard}};
 
 use ash::vk;
 use bevy::ecs::system::Resource;
@@ -39,14 +39,49 @@ enum QueueSharing {
 }
 
 #[derive(Resource)]
-pub struct QueuesRouter {
+pub struct Queues {
     queues: Vec<QueueSharing>,
     queue_refs: Vec<QueueRef>,
 }
 
 const QUEUE_FLAGS_ASYNC: vk::QueueFlags = vk::QueueFlags::from_raw(1 << 31);
 
-impl QueuesRouter {
+pub enum QueueGuard<'a> {
+    Exclusive {
+        queue: vk::Queue,
+        marker: &'a AtomicBool,
+    },
+    Shared(MutexGuard<'a, vk::Queue>),
+}
+impl<'a> Drop for QueueGuard<'a> {
+    fn drop(&mut self) {
+        match self {
+            QueueGuard::Exclusive { marker, .. } => marker.store(false, Ordering::Relaxed),
+            QueueGuard::Shared(_) => {}
+        }
+    }
+}
+impl<'a> Deref for QueueGuard<'a> {
+    type Target = vk::Queue;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            QueueGuard::Exclusive { queue, .. } => queue,
+            QueueGuard::Shared(q) => &*q,
+        }
+    }
+}
+
+impl Queues {
+    pub fn get(&self, r: QueueRef) -> QueueGuard {
+        match &self.queues[r.index as usize] {
+            QueueSharing::Shared(q) => QueueGuard::Shared(q.lock().unwrap()),
+            QueueSharing::Exclusive { queue, marker } => {
+                assert!(marker.load(Ordering::Relaxed) == false, "Queue is already in use");
+                marker.store(true, Ordering::Relaxed);
+                QueueGuard::Exclusive { queue: *queue, marker }
+            },
+        }
+    }
     pub fn with_caps(&self, required_caps: vk::QueueFlags, preferred_caps: vk::QueueFlags) -> Option<QueueRef> {
         if !preferred_caps.is_empty() {
             return self.queue_refs.iter().find(|r| r.caps.contains(required_caps | preferred_caps)).map(|r| *r)
@@ -85,15 +120,21 @@ impl QueuesRouter {
             let queue_family = &available_queue_family[info.queue_family_index as usize];
             (0..info.queue_count).map(|i| {
                 let queue = unsafe{ device.get_device_queue(info.queue_family_index, i) };
-                let sharing = if info.queue_count >= 2 {
-                    QueueSharing::Exclusive { queue, marker: AtomicBool::new(false) }
-                } else {
-                    QueueSharing::Shared(Mutex::new(queue))
-                };
-                let r = QueueRef {
+                let mut r = QueueRef {
                     index: 0,
                     family: info.queue_family_index,
                     caps: queue_family.queue_flags,
+                };
+                let sharing = if info.queue_count >= 2 {
+                    if i == 1 {
+                        // The second queue created is exclusive async
+                        r.caps |= QUEUE_FLAGS_ASYNC;
+                    }
+                    QueueSharing::Exclusive { queue, marker: AtomicBool::new(false) }
+                } else {
+                    // The only queue created is shared and async
+                    r.caps |= QUEUE_FLAGS_ASYNC;
+                    QueueSharing::Shared(Mutex::new(queue))
                 };
                 (sharing, r)
             })

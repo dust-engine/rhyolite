@@ -6,7 +6,7 @@ use crate::FeatureMap;
 use crate::Instance;
 use crate::PhysicalDevice;
 use crate::QueueRef;
-use crate::QueuesRouter;
+use crate::Queues;
 use ash::prelude::VkResult;
 use ash::vk;
 use bevy::ecs::system::Resource;
@@ -34,28 +34,24 @@ pub struct Device(Arc<DeviceInner>);
 pub struct DeviceInner {
     physical_device: PhysicalDevice,
     device: ash::Device,
-    queues: Vec<vk::Queue>,
     extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     features: FeatureMap,
 }
 
 impl Device {
-    pub(crate) fn get_raw_queue(&self, queue: QueueRef) -> vk::Queue {
-        self.0.queues[queue.index as usize]
-    }
     pub(crate) fn create(
         physical_device: PhysicalDevice,
         extensions: &[*const c_char],
         mut features: FeatureMap,
         meta: Vec<DeviceMetaBuilder>,
-    ) -> VkResult<(Self, QueuesRouter)> {
+    ) -> VkResult<(Self, Queues)> {
         let mut available_queue_family = physical_device.get_queue_family_properties();
         available_queue_family.iter_mut().for_each(|props| {
             if props.queue_flags.contains(vk::QueueFlags::COMPUTE) || props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
                 props.queue_flags |= vk::QueueFlags::TRANSFER;
             }
         });
-        let queue_create_infos = QueuesRouter::find_with_queue_family_properties(&available_queue_family);
+        let queue_create_infos = Queues::find_with_queue_family_properties(&available_queue_family);
         let pdevice_features2 = features.as_physical_device_features();
         let create_info = vk::DeviceCreateInfo {
             p_next: &pdevice_features2 as *const vk::PhysicalDeviceFeatures2 as *const _,
@@ -70,13 +66,6 @@ impl Device {
                 .instance()
                 .create_device(physical_device.raw(), &create_info, None)
         }?;
-        let queues_created = queue_create_infos
-            .iter()
-            .flat_map(|queue_info| unsafe {
-                (0..queue_info.queue_count)
-                    .map(|i| device.get_device_queue(queue_info.queue_family_index, i))
-            })
-            .collect::<Vec<_>>();
         let extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>> = meta
             .into_iter()
             .filter_map(|builder| {
@@ -84,10 +73,9 @@ impl Device {
                 Some((item.as_ref().type_id(), item))
             })
             .collect();
-        let queues = QueuesRouter::create(&device, &queue_create_infos, &available_queue_family);
+        let queues = Queues::create(&device, &queue_create_infos, &available_queue_family);
         Ok((Self(Arc::new(DeviceInner {
             physical_device,
-            queues: queues_created,
             device,
             extensions,
             features,

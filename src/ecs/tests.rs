@@ -1,4 +1,4 @@
-use crate::queue::{QueueRef, QueuesRouter};
+use crate::queue::{QueueRef, Queues};
 
 use super::*;
 use bevy::app::Update;
@@ -44,7 +44,7 @@ fn render_res_mut_panics_on_non_render_system() {
     assert!(schedule.initialize(&mut world).is_err());
 }
 
-const ROUTER: QueuesRouter = QueuesRouter {
+const ROUTER: Queues = Queues {
     queue_type_to_index: [QueueRef(0), QueueRef(1), QueueRef(2), QueueRef(3)],
     queue_type_to_family: [0, 0, 0, 0],
     queue_family_to_types: Vec::new(),

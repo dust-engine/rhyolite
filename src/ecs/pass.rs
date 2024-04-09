@@ -30,7 +30,7 @@ use crate::{
         BarrierProducerOutConfig, DefaultCommandPool, PerFrame, QueueSubmissionInfo,
         RenderSystemInitialState, ResInstanceConfig,
     },
-    queue::{QueueRef, QueuesRouter},
+    queue::{QueueRef, Queues},
     semaphore::TimelineSemaphore,
     Device,
 };
@@ -123,7 +123,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> =
             (0..graph.systems.len()).map(|_| None).collect();
-        let queue_router = world.resource::<QueuesRouter>();
+        let queue_router = world.resource::<Queues>();
 
         // Step 1: Queue coloring.
         // Step 1.1: Generate render graph
@@ -336,7 +336,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                         }
                     })),
                     prev_stage_submission_info: SmallVec::from_iter(
-                        std::iter::repeat(None).take(3),
+                        std::iter::repeat(None).take(num_queues as usize),
                     ),
                 });
             }
@@ -382,7 +382,7 @@ impl ScheduleBuildPass for RenderSystemPass {
                             ..Default::default()
                         })),
                         prev_stage_submission_info: SmallVec::from_iter(
-                            std::iter::repeat(None).take(3),
+                            std::iter::repeat(None).take(num_queues as usize),
                         ),
                     });
                 }

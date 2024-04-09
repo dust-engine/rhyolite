@@ -46,7 +46,7 @@ use crate::{
     debug::DebugCommands,
     ecs::Barriers,
     semaphore::TimelineSemaphore,
-    Device, HasDevice, QueueRef,
+    Device, HasDevice, QueueRef, Queues,
 };
 
 use super::{
@@ -481,6 +481,7 @@ pub(crate) fn flush_system_graph(
 pub(crate) fn submit_system_graph(
     mut default_cmd_pool: ResInstanceMut<PerFrame<DefaultCommandPool>>,
     submission_info: SubmissionInfo,
+    queues: Res<Queues>,
     device: Res<Device>,
     frame_index: Res<FrameCount>,
 ) {
@@ -584,13 +585,13 @@ pub(crate) fn submit_system_graph(
     }
 
     unsafe {
-        let queue = device.get_raw_queue(queue);
+        let queue = queues.get(queue);
         // TODO: Ensure submission safety on vk::Queue by adding
         // execution dependencies between all instances of submit_system_graph and
         // vkQueuePresentKHR
         device
             .queue_submit2(
-                queue,
+                *queue,
                 &[vk::SubmitInfo2KHR {
                     flags: vk::SubmitFlags::empty(),
                     wait_semaphore_info_count: semaphore_waits.len() as u32,
@@ -604,6 +605,7 @@ pub(crate) fn submit_system_graph(
                 vk::Fence::null(),
             )
             .unwrap();
+        drop(queue);
     }
 
     submission_info.signal_semaphore_value += 1;
