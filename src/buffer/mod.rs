@@ -1,6 +1,4 @@
-mod ext;
 pub mod staging;
-pub use ext::*;
 
 use std::{
     alloc::Layout,
@@ -20,6 +18,9 @@ pub trait BufferLike: HasDevice {
     }
     fn size(&self) -> vk::DeviceSize {
         vk::WHOLE_SIZE
+    }
+    fn device_address(&self) -> vk::DeviceAddress {
+        panic!()
     }
 }
 /// A buffer fully bound to a memory allocation.
@@ -81,6 +82,16 @@ impl BufferLike for Buffer {
     }
     fn size(&self) -> vk::DeviceSize {
         self.size
+    }
+    fn device_address(&self) -> vk::DeviceAddress {
+        unsafe {
+            self.allocator
+                .device()
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                    buffer: self.buffer,
+                    ..Default::default()
+                })
+        }
     }
 }
 

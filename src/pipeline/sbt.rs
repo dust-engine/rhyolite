@@ -32,7 +32,7 @@ use crate::{
     dispose::RenderObject,
     ecs::{Barriers, RenderCommands, RenderRes},
     staging::StagingBelt,
-    Access, Buffer, DeviceAddressBuffer,
+    Access, Buffer,
 };
 
 use super::{
@@ -103,7 +103,7 @@ pub struct SbtManager<T: SbtMarker, const NUM_RAYTYPES: usize> {
     hitgroup_layout: HitgroupSbtLayout,
 
     allocator: Allocator,
-    allocation: Option<RenderRes<DeviceAddressBuffer<Buffer>>>,
+    allocation: Option<RenderRes<Buffer>>,
     capacity: u32,
 
     /// Number of entries in the SBT.
@@ -195,12 +195,10 @@ where
     pub fn extract(
         mut this: ResMut<Self>,
         mut removals: RemovedComponents<T::Marker>,
-        mut query: ParamSet<(
-            Query<
-                (Entity, &mut SbtHandle<T>, T::QueryData),
-                (T::QueryFilter, Or<(Added<T::Marker>, Changed<T::Marker>)>),
-            >,
-        )>,
+        mut query: Query<
+            (Entity, &mut SbtHandle<T>, T::QueryData),
+            (T::QueryFilter, Or<(Added<T::Marker>, Changed<T::Marker>)>),
+        >,
         mut params: StaticSystemParam<T::Params>,
     ) {
         let this = &mut *this;
@@ -208,7 +206,7 @@ where
             let sbt_index = this.entity_map.remove(&entity).unwrap();
             this.remove_sbt_index(sbt_index);
         }
-        for (entity, handle, data) in query.p0().iter_mut() {
+        for (entity, handle, data) in query.iter_mut() {
             // For all new entities, allocate their sbt handles.
             let hitgroup_key = T::hitgroup_key(&mut params, &data);
 

@@ -410,3 +410,7 @@ impl_feature!(
     vk::PhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT,
     khr::RayTracingPipeline
 );
+impl_feature!(
+    vk::PhysicalDeviceBufferDeviceAddressFeatures,
+    khr::BufferDeviceAddress
+);

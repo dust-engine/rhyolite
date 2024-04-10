@@ -6,8 +6,10 @@
 #![feature(ptr_metadata)]
 #![feature(alloc_layout_extra)]
 #![feature(maybe_uninit_array_assume_init)]
+#![feature(let_chains)]
 #![feature(specialization)]
 
+pub mod accel_struct;
 mod access;
 mod alloc;
 pub mod buffer;
@@ -31,7 +33,6 @@ mod semaphore;
 pub mod shader;
 mod surface;
 mod swapchain;
-//mod accel_struct;
 mod task;
 
 pub mod utils;

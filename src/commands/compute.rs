@@ -38,6 +38,54 @@ pub trait ComputeCommands: Sized + CommandRecorder {
             );
         }
     }
+    fn build_acceleration_structure<'a>(
+        &mut self,
+        infos: &[vk::AccelerationStructureBuildGeometryInfoKHR],
+        build_range_infos: impl Iterator<Item = &'a [vk::AccelerationStructureBuildRangeInfoKHR]>,
+    ) {
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            let ptrs = build_range_infos
+                .zip(infos.iter())
+                .map(|(ranges, info)| {
+                    assert_eq!(ranges.len() as u32, info.geometry_count);
+                    ranges.as_ptr()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(infos.len(), ptrs.len());
+            (self
+                .device()
+                .extension::<ash::extensions::khr::AccelerationStructure>()
+                .fp()
+                .cmd_build_acceleration_structures_khr)(
+                cmd_buf,
+                infos.len() as u32,
+                infos.as_ptr(),
+                ptrs.as_ptr(),
+            );
+        }
+    }
+
+    fn build_acceleration_structure_indirect(
+        &mut self,
+        infos: &[vk::AccelerationStructureBuildGeometryInfoKHR],
+        indirect_device_addresses: &[vk::DeviceAddress],
+        indirect_strides: &[u32],
+        max_primitive_counts: &[&[u32]],
+    ) {
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .extension::<ash::extensions::khr::AccelerationStructure>()
+                .cmd_build_acceleration_structures_indirect(
+                    cmd_buf,
+                    infos,
+                    indirect_device_addresses,
+                    indirect_strides,
+                    max_primitive_counts,
+                );
+        }
+    }
 }
 
 impl<T> ComputeCommands for T

@@ -1,6 +1,6 @@
 use std::{ops::Deref, sync::Arc};
 
-use ash::prelude::VkResult;
+use ash::{extensions::khr, prelude::VkResult, vk};
 use bevy::ecs::{system::Resource, world::FromWorld};
 
 use crate::{Device, HasDevice};
@@ -32,6 +32,22 @@ impl Allocator {
             &device,
             device.physical_device().raw(),
         );
+        let mut flags = vk_mem::AllocatorCreateFlags::NONE;
+
+        let buffer_device_address_enabled = device
+            .feature::<vk::PhysicalDeviceVulkan12Features>()
+            .map(|f| f.buffer_device_address)
+            .or_else(|| {
+                device
+                    .feature::<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
+                    .map(|f| f.buffer_device_address)
+            })
+            .map(|b| b == vk::TRUE)
+            .unwrap_or(false);
+        if buffer_device_address_enabled {
+            flags |= vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+        }
+        let info = info.flags(flags);
         let alloc = vk_mem::Allocator::new(info)?;
         Ok(Self(Arc::new(AllocatorInner {
             device,

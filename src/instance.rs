@@ -20,7 +20,7 @@ pub struct Instance(Arc<InstanceInner>);
 struct InstanceInner {
     entry: Arc<ash::Entry>,
     instance: ash::Instance,
-    extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    extensions: HashMap<&'static CStr, Option<Box<dyn Any + Send + Sync>>>,
     api_version: Version,
 }
 
@@ -87,12 +87,9 @@ pub struct InstanceCreateInfo<'a> {
     pub engine_version: Version,
     pub api_version: Version,
     pub enabled_layer_names: &'a [*const c_char],
-    pub enabled_extension_names: &'a [*const c_char],
-    pub meta_builders: Vec<InstanceMetaBuilder>,
+    pub enabled_extensions: HashMap<&'static CStr, Option<InstanceMetaBuilder>>,
 }
 
-const DEFAULT_INSTANCE_EXTENSIONS: &[*const c_char] =
-    &[ash::extensions::ext::DebugUtils::name().as_ptr()];
 impl<'a> Default for InstanceCreateInfo<'a> {
     fn default() -> Self {
         Self {
@@ -103,8 +100,7 @@ impl<'a> Default for InstanceCreateInfo<'a> {
             engine_version: Default::default(),
             api_version: Version::new(0, 1, 2, 0),
             enabled_layer_names: Default::default(),
-            enabled_extension_names: DEFAULT_INSTANCE_EXTENSIONS,
-            meta_builders: Default::default(),
+            enabled_extensions: Default::default(),
         }
     }
 }
@@ -120,23 +116,28 @@ impl Instance {
             ..Default::default()
         };
 
+        let enabled_extension_names = info
+            .enabled_extensions
+            .iter()
+            .map(|(name, _)| name.as_ptr())
+            .collect::<Vec<_>>();
         let create_info = vk::InstanceCreateInfo {
             p_application_info: &application_info,
             enabled_layer_count: info.enabled_layer_names.len() as u32,
             pp_enabled_layer_names: info.enabled_layer_names.as_ptr(),
-            enabled_extension_count: info.enabled_extension_names.len() as u32,
-            pp_enabled_extension_names: info.enabled_extension_names.as_ptr(),
+            enabled_extension_count: enabled_extension_names.len() as u32,
+            pp_enabled_extension_names: enabled_extension_names.as_ptr(),
             flags: info.flags,
             ..Default::default()
         };
         // Safety: No Host Syncronization rules for vkCreateInstance.
         let instance = unsafe { entry.create_instance(&create_info, None)? };
-        let extensions: HashMap<TypeId, _> = info
-            .meta_builders
+        let extensions: HashMap<&'static CStr, _> = info
+            .enabled_extensions
             .into_iter()
-            .map(|builder| {
-                let item = builder(&entry, &instance);
-                (item.as_ref().type_id(), item)
+            .map(|(name, builder)| {
+                let item = builder.map(|builder| builder(&entry, &instance));
+                (name, item)
             })
             .collect();
         Ok(Instance(Arc::new(InstanceInner {
@@ -152,8 +153,13 @@ impl Instance {
     pub fn get_extension<T: InstanceExtension>(&self) -> Result<&T, ExtensionNotFoundError> {
         self.0
             .extensions
-            .get(&TypeId::of::<T>())
-            .map(|item| item.downcast_ref::<T>().unwrap())
+            .get(&T::name())
+            .map(|item| {
+                item.as_ref()
+                    .expect("Instance extension does not have a function table.")
+                    .downcast_ref::<T>()
+                    .unwrap()
+            })
             .ok_or(ExtensionNotFoundError)
     }
     pub fn extension<T: InstanceExtension>(&self) -> &T {

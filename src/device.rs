@@ -15,6 +15,7 @@ use bevy::utils::hashbrown::HashMap;
 use std::any::Any;
 use std::any::TypeId;
 use std::ffi::c_char;
+use std::ffi::CStr;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -34,16 +35,15 @@ pub struct Device(Arc<DeviceInner>);
 pub struct DeviceInner {
     physical_device: PhysicalDevice,
     device: ash::Device,
-    extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    extensions: HashMap<&'static CStr, Option<Box<dyn Any + Send + Sync>>>,
     features: FeatureMap,
 }
 
 impl Device {
     pub(crate) fn create(
         physical_device: PhysicalDevice,
-        extensions: &[*const c_char],
         mut features: FeatureMap,
-        meta: Vec<DeviceMetaBuilder>,
+        extensions: HashMap<&'static CStr, Option<DeviceMetaBuilder>>,
     ) -> VkResult<(Self, Queues)> {
         let mut available_queue_family = physical_device.get_queue_family_properties();
         available_queue_family.iter_mut().for_each(|props| {
@@ -55,12 +55,13 @@ impl Device {
         });
         let queue_create_infos = Queues::find_with_queue_family_properties(&available_queue_family);
         let pdevice_features2 = features.as_physical_device_features();
+        let extension_names = extensions.keys().map(|k| k.as_ptr()).collect::<Vec<_>>();
         let create_info = vk::DeviceCreateInfo {
             p_next: &pdevice_features2 as *const vk::PhysicalDeviceFeatures2 as *const _,
             queue_create_info_count: queue_create_infos.len() as u32,
             p_queue_create_infos: queue_create_infos.as_ptr(),
             enabled_extension_count: extensions.len() as u32,
-            pp_enabled_extension_names: extensions.as_ptr(),
+            pp_enabled_extension_names: extension_names.as_ptr(),
             ..Default::default()
         };
         let mut device = unsafe {
@@ -68,11 +69,13 @@ impl Device {
                 .instance()
                 .create_device(physical_device.raw(), &create_info, None)
         }?;
-        let extensions: HashMap<TypeId, Box<dyn Any + Send + Sync>> = meta
+        let extensions: HashMap<&'static CStr, Option<Box<dyn Any + Send + Sync>>> = extensions
             .into_iter()
-            .filter_map(|builder| {
-                let item = builder(&physical_device.instance(), &mut device)?;
-                Some((item.as_ref().type_id(), item))
+            .map(|(name, builder)| {
+                return (
+                    name,
+                    builder.and_then(|builder| builder(&physical_device.instance(), &mut device)),
+                );
             })
             .collect();
         let queues = Queues::create(&device, &queue_create_infos, &available_queue_family);
@@ -93,13 +96,23 @@ impl Device {
         &self.0.physical_device
     }
 
+    /// Only applicable to extensions not promoted to Vulkan core.
+    /// For extensions promoted to Vulkan core, you may directly call the corresponding
+    /// function on [`Device`].
     pub fn get_extension<T: DeviceExtension>(&self) -> Result<&T, ExtensionNotFoundError> {
         self.0
             .extensions
-            .get(&TypeId::of::<T>())
-            .map(|item| item.downcast_ref::<T>().unwrap())
+            .get(T::name())
+            .map(|item| item.as_ref().expect("Extension did not add any additional commands; use `has_extension_named` to test if the extension was enabled.").downcast_ref::<T>().unwrap())
             .ok_or(ExtensionNotFoundError)
     }
+    pub fn has_extension_named(&self, name: &CStr) -> bool {
+        self.0.extensions.contains_key(name)
+    }
+
+    /// Only applicable to extensions not promoted to Vulkan core.
+    /// For extensions promoted to Vulkan core, you may directly call the corresponding
+    /// function on [`Device`].
     #[track_caller]
     pub fn extension<T: DeviceExtension>(&self) -> &T {
         self.get_extension::<T>().unwrap()
