@@ -3,42 +3,34 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     num::NonZeroU32,
-    ops::DerefMut,
-    ptr::NonNull,
 };
 
-use ash::vk;
 use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{
-            Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, With,
-        },
+        query::{Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData},
         removal_detection::RemovedComponents,
-        system::{
-            ParamSet, Query, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem,
-        },
+        system::{Query, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem},
     },
     utils::smallvec::SmallVec,
 };
-use bytemuck::Pod;
 use itertools::Itertools;
-use vk_mem::Allocator;
+use rhyolite::{ash::vk, Allocator};
 
-use crate::{
+use rhyolite::{
     buffer::BufferLike,
     commands::{ResourceTransitionCommands, TransferCommands},
     dispose::RenderObject,
     ecs::{Barriers, RenderCommands, RenderRes},
+    pipeline::PipelineCache,
     staging::StagingBelt,
     Access, Buffer,
 };
 
-use super::{
-    ray_tracing::{HitgroupHandle, PipelineGroupManager, RayTracingPipeline},
-    HitGroup, PipelineCache,
-};
+use crate::pipeline::HitGroup;
+
+use super::pipeline::{HitgroupHandle, PipelineGroupManager, RayTracingPipeline};
 
 pub struct HitgroupSbtLayout {
     /// The layout for one raytype.

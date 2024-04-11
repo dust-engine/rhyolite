@@ -9,8 +9,6 @@ use std::{
 use ash::vk;
 use bevy::ecs::system::Resource;
 
-use crate::Device;
-
 /// Index of a created queue
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct QueueRef {

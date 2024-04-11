@@ -4,12 +4,11 @@ use super::Instance;
 use ash::{
     extensions::khr,
     prelude::VkResult,
-    vk::{self, ExtendsPhysicalDeviceFeatures2, ExtendsPhysicalDeviceProperties2, TaggedStructure},
+    vk::{self, ExtendsPhysicalDeviceProperties2, TaggedStructure},
 };
 use bevy::ecs::system::Resource;
 use core::ffi::c_void;
 use std::{
-    any::{Any, TypeId},
     collections::BTreeMap,
     ffi::CStr,
     ops::{Deref, DerefMut},

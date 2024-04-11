@@ -1,0 +1,10 @@
+[package]
+name = "rhyolite_rtx"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rhyolite = { path = "../../" }
+bevy = { version = "0.13", default-features = false }
+bytemuck = "1.15"
+itertools = "0.12"

@@ -5,22 +5,18 @@ use crate::{
     deferred::{DeferredOperationTaskPool, Task},
     dispose::RenderObject,
     shader::ShaderModule,
-    Device,
+    Device, HasDevice,
 };
 
 mod cache;
 mod compute;
 mod graphics;
 mod layout;
-mod ray_tracing;
 
 pub use cache::*;
 pub use compute::*;
 pub use graphics::*;
 pub use layout::*;
-pub use ray_tracing::*;
-
-pub mod sbt;
 
 pub trait Pipeline: Sized + Send + Sync + 'static {
     type BuildInfo: PipelineBuildInfo;
@@ -72,8 +68,24 @@ pub trait PipelineBuildInfo {
 }
 
 pub struct PipelineInner {
-    pub(crate) device: Device,
-    pub(crate) pipeline: vk::Pipeline,
+    device: Device,
+    pipeline: vk::Pipeline,
+}
+impl HasDevice for PipelineInner {
+    fn device(&self) -> &Device {
+        &self.device
+    }
+}
+impl PipelineInner {
+    pub fn from_raw(device: Device, raw: vk::Pipeline) -> Self {
+        Self {
+            device,
+            pipeline: raw,
+        }
+    }
+    pub fn raw(&self) -> vk::Pipeline {
+        self.pipeline
+    }
 }
 impl Drop for PipelineInner {
     fn drop(&mut self) {

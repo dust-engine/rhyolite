@@ -7,7 +7,7 @@ use ash::{prelude::VkResult, vk};
 use bevy::ecs::system::Resource;
 use bevy::utils::hashbrown::HashMap;
 use std::{
-    any::{Any, TypeId},
+    any::Any,
     ffi::{c_char, CStr},
     fmt::Debug,
     ops::Deref,

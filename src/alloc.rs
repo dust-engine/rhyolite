@@ -1,6 +1,6 @@
 use std::{ops::Deref, sync::Arc};
 
-use ash::{extensions::khr, prelude::VkResult, vk};
+use ash::{prelude::VkResult, vk};
 use bevy::ecs::{system::Resource, world::FromWorld};
 
 use crate::{Device, HasDevice};

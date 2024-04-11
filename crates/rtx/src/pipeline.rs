@@ -1,6 +1,5 @@
 use std::{alloc::Layout, collections::BTreeSet, sync::Arc};
 
-use ash::{prelude::VkResult, vk};
 use bevy::{
     asset::{AssetId, Assets},
     utils::{
@@ -9,18 +8,17 @@ use bevy::{
     },
 };
 
-use crate::{
+use rhyolite::{
+    ash::{extensions::khr, prelude::VkResult, vk},
     deferred::{DeferredOperationTaskPool, Task},
     dispose::RenderObject,
-    utils::SendBox,
-    Device,
-};
-use crate::{
+    pipeline::{
+        CachedPipeline, Pipeline, PipelineBuildInfo, PipelineCache, PipelineInner, PipelineLayout,
+    },
     shader::{ShaderModule, SpecializedShader},
-    HasDevice,
+    utils::SendBox,
+    Device, HasDevice,
 };
-
-use super::{CachedPipeline, PipelineCache, PipelineInner, PipelineLayout};
 
 #[derive(Clone)]
 pub struct RayTracingPipeline {
@@ -35,24 +33,24 @@ impl RayTracingPipeline {
 
 impl RayTracingPipeline {
     pub fn raw(&self) -> vk::Pipeline {
-        self.inner.pipeline
+        self.inner.raw()
     }
 }
-impl super::Pipeline for RayTracingPipeline {
+impl Pipeline for RayTracingPipeline {
     type BuildInfo = RayTracingPipelineBuildInfo;
     const TYPE: vk::PipelineBindPoint = vk::PipelineBindPoint::RAY_TRACING_KHR;
 
     fn as_raw(&self) -> vk::Pipeline {
-        self.inner.pipeline
+        self.inner.raw()
     }
     fn from_built(
         info: &mut RayTracingPipelineBuildInfo,
-        item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
+        item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
         RayTracingPipeline {
             handles: SbtHandles::new(
-                &item.device,
-                item.pipeline,
+                item.device(),
+                item.raw(),
                 info.hitgroup_mapping.clone(),
                 info.num_raygen,
                 info.num_miss,
@@ -66,12 +64,12 @@ impl super::Pipeline for RayTracingPipeline {
 
     fn from_built_with_owned_info(
         info: RayTracingPipelineBuildInfo,
-        item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
+        item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
         RayTracingPipeline {
             handles: SbtHandles::new(
-                &item.device,
-                item.pipeline,
+                item.device(),
+                item.raw(),
                 info.hitgroup_mapping,
                 info.num_raygen,
                 info.num_miss,
@@ -110,7 +108,7 @@ pub struct RayTracingPipelineBuildInfo {
 unsafe impl Send for RayTracingPipelineBuildInfo {}
 unsafe impl Sync for RayTracingPipelineBuildInfo {}
 
-impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
+impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
     type Pipeline = PipelineInner;
 
     fn build(
@@ -151,7 +149,7 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
 
             let raw_libraries = libraries
                 .iter()
-                .map(|library| library.pipeline.pipeline)
+                .map(|library| library.pipeline.raw())
                 .collect::<Vec<_>>();
             let library_info = vk::PipelineLibraryCreateInfoKHR {
                 library_count: raw_libraries.len() as u32,
@@ -165,7 +163,7 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
                 let result = (common
                     .layout
                     .device()
-                    .extension::<ash::extensions::khr::RayTracingPipeline>()
+                    .extension::<khr::RayTracingPipeline>()
                     .fp()
                     .create_ray_tracing_pipelines_khr)(
                     common.layout.device().handle(),
@@ -186,7 +184,7 @@ impl super::PipelineBuildInfo for RayTracingPipelineBuildInfo {
             drop(groups);
             drop(libraries);
             drop(raw_libraries);
-            (result, PipelineInner { device, pipeline })
+            (result, PipelineInner::from_raw(device, pipeline))
         }))
     }
     fn all_shaders(&self) -> impl Iterator<Item = AssetId<ShaderModule>> {
@@ -204,16 +202,16 @@ pub struct RayTracingPipelineLibrary {
     /// Should always be empty if shader hot reloading is disabled
     shaders: Vec<AssetId<ShaderModule>>,
 }
-impl super::Pipeline for RayTracingPipelineLibrary {
+impl Pipeline for RayTracingPipelineLibrary {
     type BuildInfo = RayTracingPipelineBuildInfo;
     const TYPE: vk::PipelineBindPoint = vk::PipelineBindPoint::RAY_TRACING_KHR;
 
     fn as_raw(&self) -> vk::Pipeline {
-        self.pipeline.pipeline
+        self.pipeline.raw()
     }
     fn from_built(
         info: &mut RayTracingPipelineBuildInfo,
-        item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
+        item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
         RayTracingPipelineLibrary {
             pipeline: Arc::new(item),
@@ -226,7 +224,7 @@ impl super::Pipeline for RayTracingPipelineLibrary {
     }
     fn from_built_with_owned_info(
         _info: Self::BuildInfo,
-        item: <Self::BuildInfo as super::PipelineBuildInfo>::Pipeline,
+        item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
         RayTracingPipelineLibrary {
             pipeline: Arc::new(item),
@@ -539,7 +537,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
             )
             .map(|library| {
                 pipeline_cache
-                    .retrieve_inner(library, assets, pool, false)
+                    .retrieve_pipeline(library, assets, pool, false)
                     .cloned()
             })
             .collect::<Option<Vec<RayTracingPipelineLibrary>>>()?;
@@ -605,7 +603,7 @@ impl SbtHandles {
             .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
         let sbt_handles_host_vec = unsafe {
             device
-                .extension::<ash::extensions::khr::RayTracingPipeline>()
+                .extension::<khr::RayTracingPipeline>()
                 .get_ray_tracing_shader_group_handles(
                     pipeline,
                     0,

@@ -16,7 +16,7 @@ use std::{
 use crate::{
     ecs::RenderSystemPass,
     extensions::{DeviceExtension, InstanceExtension, PromotedDeviceExtension},
-    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeaturesSetup, Queues, Version,
+    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeaturesSetup, Version,
 };
 use cstr::cstr;
 

@@ -5,7 +5,6 @@ use crate::Feature;
 use crate::FeatureMap;
 use crate::Instance;
 use crate::PhysicalDevice;
-use crate::QueueRef;
 use crate::Queues;
 use ash::prelude::VkResult;
 use ash::vk;
@@ -13,8 +12,6 @@ use bevy::ecs::system::Resource;
 use bevy::utils::hashbrown::HashMap;
 
 use std::any::Any;
-use std::any::TypeId;
-use std::ffi::c_char;
 use std::ffi::CStr;
 use std::ops::Deref;
 use std::sync::Arc;

@@ -1,11 +1,6 @@
 //! Async compute tasks
 
-use std::{
-    borrow::Cow,
-    mem::ManuallyDrop,
-    ops::Deref,
-    sync::{atomic::AtomicU32, Arc},
-};
+use std::{borrow::Cow, sync::Arc};
 
 use ash::vk;
 use bevy::ecs::{
@@ -83,11 +78,7 @@ pub struct AsyncComputeTask<T> {
 }
 impl<T> AsyncComputeTask<T> {
     pub fn is_finished(&self) -> bool {
-        unsafe {
-            self.device
-                .get_fence_status(self.fence)
-                .unwrap()
-        }
+        unsafe { self.device.get_fence_status(self.fence).unwrap() }
     }
 }
 struct AsyncComputeDropMarker;

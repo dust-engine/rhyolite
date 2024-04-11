@@ -69,7 +69,7 @@ impl<T: Pipeline> CachedPipeline<T> {
 }
 
 impl PipelineCache {
-    pub(crate) fn create<T: Pipeline>(&self, build_info: T::BuildInfo) -> CachedPipeline<T> {
+    pub fn create<T: Pipeline>(&self, build_info: T::BuildInfo) -> CachedPipeline<T> {
         CachedPipeline {
             pipeline: None,
             task: None,
@@ -109,9 +109,9 @@ impl PipelineCache {
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
     ) -> Option<&'a mut T> {
-        self.retrieve_inner(cached_pipeline, assets, pool, true)
+        self.retrieve_pipeline(cached_pipeline, assets, pool, true)
     }
-    pub(crate) fn retrieve_inner<'a, T: Pipeline>(
+    pub fn retrieve_pipeline<'a, T: Pipeline>(
         &self,
         cached_pipeline: &'a mut CachedPipeline<T>,
         assets: &Assets<ShaderModule>,

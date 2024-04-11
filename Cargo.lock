@@ -2546,7 +2546,6 @@ dependencies = [
  "arrayvec",
  "ash",
  "bevy",
- "bytemuck",
  "crossbeam-channel",
  "crossbeam-queue",
  "cstr",
@@ -2572,6 +2571,16 @@ dependencies = [
  "bevy_egui",
  "bytemuck",
  "playout_macro",
+ "rhyolite",
+]
+
+[[package]]
+name = "rhyolite_rtx"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bytemuck",
+ "itertools 0.12.1",
  "rhyolite",
 ]
 

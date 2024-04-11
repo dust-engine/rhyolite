@@ -10,7 +10,7 @@ use bevy::asset::{AssetServer, Assets};
 use bevy::ecs::prelude::*;
 use bevy::ecs::query::QuerySingleError;
 
-use bevy::math::{Vec2, Vec3, Vec3Swizzles};
+use bevy::math::Vec2;
 use bevy::utils::HashMap;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
@@ -331,7 +331,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer
 fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(&mut EguiRenderOutput), Filter>,
+    mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     commands: RenderCommands<'t'>,
     allocator: Res<Allocator>,
 ) {
@@ -405,7 +405,7 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
 }
 
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'t'>,
+    commands: RenderCommands<'t'>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     allocator: Res<Allocator>,
@@ -585,7 +585,7 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
 /// Resize the device buffers if necessary. Only runs on Discrete GPUs.
 fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut commands: RenderCommands<'t'>,
+    commands: RenderCommands<'t'>,
     allocator: Res<Allocator>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;

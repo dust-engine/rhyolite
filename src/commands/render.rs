@@ -2,9 +2,7 @@ use ash::vk::{self};
 use bevy::math::IVec3;
 
 use crate::{
-    dispose::RenderObject,
-    ecs::{queue_cap::IsGraphicsQueueCap, RenderCommands, RenderImage},
-    pipeline::GraphicsPipeline,
+    ecs::{queue_cap::IsGraphicsQueueCap, RenderCommands},
     Device, HasDevice, ImageLike, QueueRef,
 };
 

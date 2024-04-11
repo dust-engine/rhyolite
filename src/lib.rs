@@ -6,17 +6,15 @@
 #![feature(ptr_metadata)]
 #![feature(alloc_layout_extra)]
 #![feature(maybe_uninit_array_assume_init)]
-#![feature(let_chains)]
 #![feature(specialization)]
 
-pub mod accel_struct;
 mod access;
 mod alloc;
 pub mod buffer;
 mod command_pool;
 pub mod commands;
 pub mod debug;
-mod deferred;
+pub mod deferred;
 mod device;
 pub mod dispose;
 pub mod ecs;
@@ -33,7 +31,7 @@ mod semaphore;
 pub mod shader;
 mod surface;
 mod swapchain;
-mod task;
+pub mod task;
 
 pub mod utils;
 
