@@ -1,7 +1,9 @@
 use std::{
+    alloc::Layout,
     any::Any,
     borrow::{BorrowMut, Cow},
     collections::{BTreeMap, BTreeSet},
+    ops::Deref,
     sync::Arc,
 };
 
@@ -11,10 +13,12 @@ use bevy::{
         entity::Entity,
         query::{Added, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, With},
         system::{
-            Local, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem,
+            Commands, Local, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
+            SystemParamItem,
         },
     },
     transform,
+    utils::petgraph::data,
 };
 
 use rhyolite::{
@@ -125,12 +129,6 @@ pub trait BLASBuildMarker: Send + Sync + 'static {
         false
     }
 
-    type BLASInputBufferType: HasDeviceOrHostAddress;
-    fn geometries(
-        params: &mut SystemParamItem<Self::Params>,
-        data: &QueryItem<Self::QueryData>,
-    ) -> impl Iterator<Item = BLASBuildGeometry<Self::BLASInputBufferType>>;
-
     fn build_flags(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
@@ -150,17 +148,39 @@ pub trait BLASBuildMarker: Send + Sync + 'static {
     }
 }
 
-trait HasDeviceOrHostAddress {
-    fn has_device_address(&self) -> bool;
-    fn has_host_address(&self) -> bool;
 
-    fn device_address(&mut self) -> vk::DeviceAddress;
-    fn host_buffer(&self) -> Vec<u8>;
-    fn host_writer(&self, dst: &mut [u8]) {
-        dst.copy_from_slice(&self.host_buffer());
-    }
+/// Builders with data not owned anywhere. Needing to be generated on the fly.
+/// Implementing this trait helps elimitating unnecessary copies by allowing you
+/// to write directly into the destination memory.
+pub trait BLASStagingBufferBuilder: BLASBuildMarker {
+    fn staging_layout(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+    ) -> Layout;
+    type GeometryIterator<'a>: Iterator<Item = BLASBuildGeometry<vk::DeviceSize>> + 'a;
+    /// The geometries to be built. The implementation shall write directly into the dst buffer.
+    /// The iterator returned shall contain offset values into the dst buffer.
+    fn geometries<'a>(
+        params: &'a mut SystemParamItem<Self::Params>,
+        data: &'a QueryItem<Self::QueryData>,
+        dst: &mut [u8],
+    ) -> Self::GeometryIterator<'a>;
 }
-pub enum DeviceOrHost {}
+/// Builders with data already located on host memory. Used for host builds.
+pub trait BLASHostBufferBuilder: BLASBuildMarker {
+    type Data: Deref<Target = [u8]>;
+    fn geometries(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+    ) -> impl Iterator<Item = BLASBuildGeometry<Self::Data>>;
+}
+/// Builders with data already located on owned device memory
+pub trait BLASDeviceBuilder: BLASBuildMarker {
+    fn geometries(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+    ) -> impl Iterator<Item = BLASBuildGeometry<vk::DeviceAddress>>;
+}
 pub enum BLASBuildGeometry<T> {
     Triangles {
         vertex_format: vk::Format,
@@ -189,69 +209,10 @@ impl<T> BLASBuildGeometry<T> {
             BLASBuildGeometry::Aabbs { .. } => vk::GeometryTypeKHR::AABBS,
         }
     }
-}
-struct BLASPendingBuild {
-    info: vk::AccelerationStructureBuildGeometryInfoKHR,
-    build_sizes: vk::AccelerationStructureBuildSizesInfoKHR,
-    geometry_array_index_start: usize,
-}
-
-struct PendingBuilds<T> {
-    pending_builds: BTreeMap<Entity, BLASPendingBuild>,
-    geometries: Vec<vk::AccelerationStructureGeometryKHR>,
-    build_ranges: Vec<vk::AccelerationStructureBuildRangeInfoKHR>,
-    geometry_objs: Vec<BLASBuildGeometry<T>>,
-}
-impl<T> Default for PendingBuilds<T> {
-    fn default() -> Self {
-        Self {
-            pending_builds: BTreeMap::new(),
-            geometries: Vec::new(),
-            build_ranges: Vec::new(),
-            geometry_objs: Vec::new(),
-        }
-    }
-}
-impl<T: HasDeviceOrHostAddress> BLASBuildGeometry<T> {
-    pub fn into_vec(self) -> BLASBuildGeometry<Vec<u8>> {
-        match self {
-            BLASBuildGeometry::Triangles {
-                vertex_format,
-                vertex_data,
-                vertex_stride,
-                max_vertex,
-                index_type,
-                index_data,
-                transform_data,
-                flags,
-                primitive_count,
-            } => BLASBuildGeometry::Triangles {
-                vertex_format,
-                vertex_data: vertex_data.host_buffer(),
-                vertex_stride,
-                max_vertex,
-                index_type,
-                index_data: index_data.host_buffer(),
-                transform_data: transform_data.map(|a| a.host_buffer()),
-                flags,
-                primitive_count,
-            },
-            BLASBuildGeometry::Aabbs {
-                buffer,
-                stride,
-                flags,
-                primitive_count,
-            } => BLASBuildGeometry::Aabbs {
-                buffer: buffer.host_buffer(),
-                stride,
-                flags,
-                primitive_count,
-            },
-        }
-    }
-    pub fn into_dyn(self) -> BLASBuildGeometry<Box<dyn HasDeviceOrHostAddress>>
-    where
-        Self: 'static,
+    pub fn to_device_or_host_address(
+        self,
+        mapper: impl Fn(T) -> vk::DeviceOrHostAddressConstKHR,
+    ) -> BLASBuildGeometry<vk::DeviceOrHostAddressConstKHR>
     {
         match self {
             BLASBuildGeometry::Triangles {
@@ -265,16 +226,15 @@ impl<T: HasDeviceOrHostAddress> BLASBuildGeometry<T> {
                 flags,
                 primitive_count,
             } => BLASBuildGeometry::Triangles {
-                vertex_format,
-                vertex_data: Box::new(vertex_data),
-                vertex_stride,
-                max_vertex,
-                index_type,
-                index_data: Box::new(index_data),
-                transform_data: transform_data
-                    .map(|a| Box::new(a) as Box<dyn HasDeviceOrHostAddress>),
-                flags,
-                primitive_count,
+                vertex_format: vertex_format,
+                vertex_data: mapper(vertex_data),
+                vertex_stride: vertex_stride,
+                max_vertex: max_vertex,
+                index_type: index_type,
+                index_data: mapper(index_data),
+                transform_data: transform_data.map(mapper),
+                flags: flags,
+                primitive_count: primitive_count,
             },
             BLASBuildGeometry::Aabbs {
                 buffer,
@@ -282,20 +242,214 @@ impl<T: HasDeviceOrHostAddress> BLASBuildGeometry<T> {
                 flags,
                 primitive_count,
             } => BLASBuildGeometry::Aabbs {
-                buffer: Box::new(buffer),
-                stride,
-                flags,
-                primitive_count,
+                buffer: mapper(buffer),
+                stride: stride,
+                flags: flags,
+                primitive_count: primitive_count,
             },
         }
     }
 }
+
 #[derive(Default, Resource)]
 struct BLASStore {
+    pending_entities: BTreeSet<Entity>,
     pending_task: Option<AsyncComputeTask<BLASBuildPendingTaskInfo>>,
+    scratch_buffer: Option<Buffer>,
 
-    host_builds: PendingBuilds<Vec<u8>>,
-    device_builds: PendingBuilds<Box<dyn HasDeviceOrHostAddress>>,
+    pending_builds: PendingBuilds,
+}
+
+/// 1. Maintains list of pending_entities and resolve pending entities
+fn extract_updated_entities<T: BLASBuildMarker>(
+    mut commands: Commands,
+    store: ResMut<BLASStore>,
+    mut task_pool: ResMut<AsyncTaskPool>,
+    mut staging_buffer_store: Option<ResMut<BLASStagingBuilderStore>>,
+    changed_entities: Query<Entity, (Or<(Added<T::Marker>, Changed<T::Marker>)>, T::QueryFilter)>,
+) {
+    let store = store.into_inner();
+    if let Some(task) = store.pending_task.as_ref() {
+        if !task.is_finished() {
+            return;
+        }
+        let task = store.pending_task.take().unwrap();
+        let mut result = task_pool.wait_blocked(task);
+        for (entity, accel_struct) in result.entities.drain(..) {
+            commands.entity(entity).insert(BLAS { accel_struct });
+        }
+        // Reuse some resources
+        assert!(store.scratch_buffer.is_none());
+        store.scratch_buffer = Some(result.scratch_buffer);
+
+        if let Some(staging_buffer_store) = &mut staging_buffer_store {
+            assert!(
+                staging_buffer_store.input_buffer.is_none()
+                    && staging_buffer_store.staging_buffer.is_none()
+            );
+            staging_buffer_store.input_buffer = result.input_buffer;
+            staging_buffer_store.staging_buffer = result.staging_buffer;
+            staging_buffer_store.total_buffer_size = 0;
+            staging_buffer_store.base_alignment = 1;
+            staging_buffer_store.current_write_ptr = 0;
+        }
+    }
+
+    for entity in changed_entities.iter() {
+        store.pending_entities.insert(entity);
+    }
+}
+
+#[derive(Resource)]
+struct BLASStagingBuilderStore {
+    total_buffer_size: u64,
+    base_alignment: u64,
+    input_buffer: Option<Buffer>,
+    staging_buffer: Option<Buffer>,
+
+    current_write_ptr: u64,
+}
+fn staging_builder_calculate_layout<T: BLASStagingBufferBuilder>(
+    mut params: StaticSystemParam<T::Params>,
+    entities: Query<T::QueryData, (With<T::Marker>, T::QueryFilter)>,
+    mut builder_store: ResMut<BLASStagingBuilderStore>,
+    store: Res<BLASStore>,
+) {
+    if store.pending_task.is_some() {
+        builder_store.total_buffer_size = 0;
+        builder_store.base_alignment = 1;
+        return;
+    }
+    if store.pending_entities.is_empty() {
+        builder_store.total_buffer_size = 0;
+        builder_store.base_alignment = 1;
+        return;
+    }
+    let store = store.into_inner();
+    for entity in store.pending_entities.iter() {
+        let data = entities.get(*entity).unwrap();
+        let layout = T::staging_layout(&mut params, &data);
+        builder_store.total_buffer_size = builder_store
+            .total_buffer_size
+            .next_multiple_of(layout.align() as u64);
+        builder_store.total_buffer_size += layout.size() as u64;
+        builder_store.base_alignment = builder_store.base_alignment.max(layout.align() as u64);
+    }
+}
+fn staging_builder_realloc_buffer(
+    allocator: Res<Allocator>,
+    store: ResMut<BLASStagingBuilderStore>,
+) {
+    let store = store.into_inner();
+    if store.total_buffer_size == 0 {
+        return;
+    }
+
+    let use_staging_buffer = allocator
+        .device()
+        .physical_device()
+        .properties()
+        .memory_model
+        .storage_buffer_should_use_staging();
+
+    // Resize input_buffer
+    if let Some(buffer) = store.input_buffer.as_ref()
+        && buffer.size() >= store.total_buffer_size
+    {
+        // Preserve old buffer: it's big enough.
+    } else {
+        store.input_buffer = None;
+        store.input_buffer = Some(if use_staging_buffer {
+            Buffer::new_resource(
+                allocator.clone(),
+                store.total_buffer_size,
+                store.base_alignment,
+                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+            )
+            .unwrap()
+        } else {
+            Buffer::new_dynamic(
+                allocator.clone(),
+                store.total_buffer_size,
+                store.base_alignment,
+                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            )
+            .unwrap()
+        });
+    };
+}
+fn staging_builder_extract_changes<T: BLASStagingBufferBuilder>(
+    allocator: Res<Allocator>,
+    mut params: StaticSystemParam<T::Params>,
+    mut store: ResMut<BLASStore>,
+    mut staging_build_store: ResMut<BLASStagingBuilderStore>,
+    all_entities: Query<(Option<&mut BLAS>, T::QueryData), (With<T::Marker>, T::QueryFilter)>,
+) {
+    let staging_build_store = staging_build_store.into_inner();
+    let Some(dst_buffer) = staging_build_store
+        .staging_buffer
+        .as_mut()
+        .or(staging_build_store.input_buffer.as_mut())
+    else {
+        return;
+    };
+    let base_device_address = dst_buffer.device_address();
+    let dst_buffer = dst_buffer.as_slice_mut();
+
+    struct MyCallback<'a> {
+        dst_buffer: &'a mut [u8],
+        base_device_address: vk::DeviceAddress,
+        current_write_ptr: &'a mut u64,
+    }
+    impl<'a, 'b, T: BLASStagingBufferBuilder> Callback<'a, T> for MyCallback<'b> {
+        type Iterator = impl Iterator<Item = BLASBuildGeometry<vk::DeviceOrHostAddressConstKHR>> + 'a;
+        fn call(
+            &mut self,
+            params: &'a mut SystemParamItem<T::Params>,
+            data: &'a QueryItem<T::QueryData>,
+        ) -> Self::Iterator {
+            let size = T::staging_layout(params, data);
+            let base_device_address = self.base_device_address + *self.current_write_ptr;
+            let dst_buffer = &mut self.dst_buffer[(*self.current_write_ptr) as usize .. (*self.current_write_ptr as usize + size.size())];
+            T::geometries(params, data, dst_buffer).map(move |g| g.to_device_or_host_address(|offset|
+                vk::DeviceOrHostAddressConstKHR {
+                    device_address: base_device_address + offset
+                }
+            ))
+        }
+    }
+    
+    extract_blas_inner::<T, _>(
+        allocator,
+        params,
+        store,
+        all_entities,
+        MyCallback { dst_buffer, base_device_address, current_write_ptr: &mut staging_build_store.current_write_ptr },
+    );
+}
+
+struct BLASPendingBuild {
+    info: vk::AccelerationStructureBuildGeometryInfoKHR,
+    build_sizes: vk::AccelerationStructureBuildSizesInfoKHR,
+    geometry_array_index_start: usize,
+}
+
+struct PendingBuilds {
+    pending_builds: BTreeMap<Entity, BLASPendingBuild>,
+    geometries: Vec<vk::AccelerationStructureGeometryKHR>,
+    build_ranges: Vec<vk::AccelerationStructureBuildRangeInfoKHR>,
+}
+impl Default for PendingBuilds {
+    fn default() -> Self {
+        Self {
+            pending_builds: BTreeMap::new(),
+            geometries: Vec::new(),
+            build_ranges: Vec::new(),
+        }
+    }
 }
 unsafe impl Send for BLASStore {}
 unsafe impl Sync for BLASStore {}
@@ -303,26 +457,36 @@ unsafe impl Sync for BLASStore {}
 struct BLASBuildPendingTaskInfo {
     entities: Vec<(Entity, AccelStruct)>,
     scratch_buffer: Buffer,
+    input_buffer: Option<Buffer>,
+    staging_buffer: Option<Buffer>,
 }
 
-fn extract_blas_updates<T: BLASBuildMarker>(
+trait Callback<'a, T: BLASBuildMarker> {
+    type Iterator: Iterator<Item = BLASBuildGeometry<vk::DeviceOrHostAddressConstKHR>> + 'a;
+    fn call(
+        &mut self,
+        params: &'a mut SystemParamItem<T::Params>,
+        data: &'a QueryItem<T::QueryData>,
+    ) -> Self::Iterator;
+}
+
+fn extract_blas_inner<T: BLASBuildMarker, F>(
     allocator: Res<Allocator>,
     mut params: StaticSystemParam<T::Params>,
-    changes: Query<
-        (Entity, Option<&BLAS>, T::QueryData),
-        Or<(Added<T::Marker>, Changed<T::Marker>)>,
-    >,
-    mut store: ResMut<BLASStore>,
-) {
+    store: ResMut<BLASStore>,
+    all_entities: Query<(Option<&mut BLAS>, T::QueryData), (With<T::Marker>, T::QueryFilter)>,
+    mut geometries: F,
+) where
+    F: for<'a> Callback<'a, T>,
+{
+    let params = &mut *params;
     let store = store.into_inner();
-    let driver_supports_host_build = allocator
-        .device()
-        .feature::<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>()
-        .map(|x| x.acceleration_structure_host_commands == vk::TRUE)
-        .unwrap_or(false);
     let mut primitive_counts: Vec<u32> = Vec::new();
-    changes.iter().for_each(|(entity, old_blas, query_data)| {
-        let build_on_host = driver_supports_host_build && T::should_use_host_build(&mut params);
+
+    for entity in store.pending_entities.iter() {
+        let Ok((old_blas, query_data)) = all_entities.get(*entity) else {
+            return;
+        };
         let should_update = old_blas
             .as_ref()
             .map(|a| {
@@ -331,25 +495,15 @@ fn extract_blas_updates<T: BLASBuildMarker>(
                     .contains(vk::BuildAccelerationStructureFlagsKHR::ALLOW_UPDATE)
             })
             .unwrap_or(false)
-            && T::should_update(&mut params, &query_data);
-        let (geometries, build_ranges, pending_builds) = if build_on_host {
-            (
-                &mut store.host_builds.geometries,
-                &mut store.host_builds.build_ranges,
-                &mut store.host_builds.pending_builds,
-            )
-        } else {
-            (
-                &mut store.device_builds.geometries,
-                &mut store.device_builds.build_ranges,
-                &mut store.device_builds.pending_builds,
-            )
-        };
+            && T::should_update(params, &query_data);
         let mut geometry_count: u32 = 0;
-        let geometry_array_index_start = geometries.len();
-        debug_assert_eq!(geometries.len(), build_ranges.len());
+        let geometry_array_index_start = store.pending_builds.geometries.len();
+        debug_assert_eq!(
+            store.pending_builds.geometries.len(),
+            store.pending_builds.build_ranges.len()
+        );
         primitive_counts.clear();
-        for geometry in T::geometries(&mut params, &query_data) {
+        for geometry in geometries.call(params, &query_data) {
             let geometry_type = geometry.ty();
             geometry_count += 1;
 
@@ -365,25 +519,36 @@ fn extract_blas_updates<T: BLASBuildMarker>(
                     flags,
                     primitive_count,
                 } => {
-                    geometries.push(vk::AccelerationStructureGeometryKHR {
-                        geometry_type,
-                        geometry: vk::AccelerationStructureGeometryDataKHR {
-                            triangles: vk::AccelerationStructureGeometryTrianglesDataKHR {
-                                vertex_format: *vertex_format,
-                                vertex_stride: *vertex_stride,
-                                max_vertex: *max_vertex,
-                                index_type: *index_type,
-                                ..Default::default()
+                    store
+                        .pending_builds
+                        .geometries
+                        .push(vk::AccelerationStructureGeometryKHR {
+                            geometry_type,
+                            geometry: vk::AccelerationStructureGeometryDataKHR {
+                                triangles: vk::AccelerationStructureGeometryTrianglesDataKHR {
+                                    vertex_format: *vertex_format,
+                                    vertex_stride: *vertex_stride,
+                                    max_vertex: *max_vertex,
+                                    index_type: *index_type,
+                                    vertex_data: *vertex_data,
+                                    index_data: *index_data,
+                                    transform_data: transform_data
+                                        .as_ref()
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    ..Default::default()
+                                },
                             },
-                        },
-                        flags: *flags,
-                        ..Default::default()
-                    });
+                            flags: *flags,
+                            ..Default::default()
+                        });
                     primitive_counts.push(*primitive_count);
-                    build_ranges.push(vk::AccelerationStructureBuildRangeInfoKHR {
-                        primitive_count: *primitive_count,
-                        ..Default::default()
-                    });
+                    store.pending_builds.build_ranges.push(
+                        vk::AccelerationStructureBuildRangeInfoKHR {
+                            primitive_count: *primitive_count,
+                            ..Default::default()
+                        },
+                    );
                 }
                 BLASBuildGeometry::Aabbs {
                     buffer,
@@ -391,33 +556,34 @@ fn extract_blas_updates<T: BLASBuildMarker>(
                     flags,
                     primitive_count,
                 } => {
-                    geometries.push(vk::AccelerationStructureGeometryKHR {
-                        geometry_type,
-                        geometry: vk::AccelerationStructureGeometryDataKHR {
-                            aabbs: vk::AccelerationStructureGeometryAabbsDataKHR {
-                                stride: *stride,
-                                ..Default::default()
+                    store
+                        .pending_builds
+                        .geometries
+                        .push(vk::AccelerationStructureGeometryKHR {
+                            geometry_type,
+                            geometry: vk::AccelerationStructureGeometryDataKHR {
+                                aabbs: vk::AccelerationStructureGeometryAabbsDataKHR {
+                                    stride: *stride,
+                                    data: *buffer,
+                                    ..Default::default()
+                                },
                             },
-                        },
-                        flags: *flags,
-                        ..Default::default()
-                    });
+                            flags: *flags,
+                            ..Default::default()
+                        });
                     primitive_counts.push(*primitive_count);
-                    build_ranges.push(vk::AccelerationStructureBuildRangeInfoKHR {
-                        primitive_count: *primitive_count,
-                        ..Default::default()
-                    });
+                    store.pending_builds.build_ranges.push(
+                        vk::AccelerationStructureBuildRangeInfoKHR {
+                            primitive_count: *primitive_count,
+                            ..Default::default()
+                        },
+                    );
                 }
             };
-            if build_on_host {
-                store.host_builds.geometry_objs.push(geometry.into_vec());
-            } else {
-                store.device_builds.geometry_objs.push(geometry.into_dyn());
-            }
         }
         let info = vk::AccelerationStructureBuildGeometryInfoKHR {
             ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
-            flags: T::build_flags(&mut params, &query_data),
+            flags: T::build_flags(params, &query_data),
             mode: if should_update {
                 vk::BuildAccelerationStructureModeKHR::UPDATE
             } else {
@@ -441,15 +607,15 @@ fn extract_blas_updates<T: BLASBuildMarker>(
                     &primitive_counts,
                 )
         };
-        pending_builds.insert(
-            entity,
+        store.pending_builds.pending_builds.insert(
+            *entity,
             BLASPendingBuild {
                 info,
                 build_sizes,
                 geometry_array_index_start,
             },
         );
-    });
+    }
 }
 
 fn device_build_blas_system(
@@ -457,32 +623,18 @@ fn device_build_blas_system(
     mut query: Query<&mut BLAS>,
     mut task_pool: ResMut<AsyncTaskPool>,
     mut store: ResMut<BLASStore>,
+    mut staging_store: ResMut<BLASStagingBuilderStore>,
 ) {
     let store = store.into_inner();
+    let staging_store = staging_store.into_inner();
     let mut entities: Vec<(Entity, AccelStruct)> = Vec::new();
-    let mut scratch_buffer: Option<Buffer> = None;
-    let mut staging_buffer: Option<Buffer> = None;
-    let mut build_input_buffer: Option<Buffer> = None;
+    let mut scratch_buffer: Option<Buffer> = store.scratch_buffer.take();
+    let mut staging_buffer: Option<Buffer> = staging_store.staging_buffer.take();
+    let mut build_input_buffer: Option<Buffer> = staging_store.input_buffer.take();
 
-    if let Some(task) = store.pending_task.as_ref() {
-        if !task.is_finished() {
-            return;
-        }
-        let task = store.pending_task.take().unwrap();
-        let mut result = task_pool.wait_blocked(task);
-        for (entity, accel_struct) in result.entities.drain(..) {
-            let mut blas = query.get_mut(entity).unwrap();
-            blas.accel_struct = accel_struct;
-        }
-        // Reuse some resources
-        entities = result.entities;
-        scratch_buffer = Some(result.scratch_buffer);
-    }
-
-    let mut build = std::mem::take(&mut store.device_builds);
+    let mut build = std::mem::take(&mut store.pending_builds);
 
     let mut total_scratch_size: u64 = 0;
-    let mut total_upload_buffer_size: u64 = 0;
     let scratch_offset_alignment: u32 = allocator
         .device()
         .physical_device()
@@ -492,63 +644,6 @@ fn device_build_blas_system(
     for pending in build.pending_builds.values() {
         total_scratch_size = total_scratch_size.next_multiple_of(scratch_offset_alignment as u64);
         total_scratch_size += pending.build_sizes.build_scratch_size;
-
-        let geometries = &build.geometries[pending.geometry_array_index_start
-            ..(pending.geometry_array_index_start + pending.info.geometry_count as usize)];
-        let geometry_objs = &build.geometry_objs[pending.geometry_array_index_start
-            ..(pending.geometry_array_index_start + pending.info.geometry_count as usize)];
-        let build_ranges = &build.build_ranges[pending.geometry_array_index_start
-            ..(pending.geometry_array_index_start + pending.info.geometry_count as usize)];
-        for ((geometry, obj), build_range) in geometries
-            .iter()
-            .zip(geometry_objs.iter())
-            .zip(build_ranges.iter())
-        {
-            match obj {
-                BLASBuildGeometry::Triangles {
-                    vertex_data,
-                    index_data,
-                    transform_data,
-                    ..
-                } => {
-                    let triangles = unsafe { &geometry.geometry.triangles };
-                    if !vertex_data.has_device_address() {
-                        total_upload_buffer_size = total_upload_buffer_size
-                            .next_multiple_of(triangles.vertex_stride as u64);
-                        total_upload_buffer_size +=
-                            triangles.vertex_stride as u64 * triangles.max_vertex as u64;
-                    }
-                    if !index_data.has_device_address()
-                        && triangles.index_type != vk::IndexType::NONE_KHR
-                    {
-                        let size = match triangles.index_type {
-                            vk::IndexType::UINT16 => std::mem::size_of::<u16>(),
-                            vk::IndexType::UINT32 => std::mem::size_of::<u32>(),
-                            _ => 0,
-                        } as u64;
-                        total_upload_buffer_size = total_upload_buffer_size.next_multiple_of(size);
-                        total_upload_buffer_size += size * build_range.primitive_count as u64;
-                    }
-                    if let Some(transform_data) = transform_data
-                        && !transform_data.has_device_address()
-                    {
-                        total_upload_buffer_size = total_upload_buffer_size
-                            .next_multiple_of(std::mem::size_of::<vk::TransformMatrixKHR>() as u64);
-                        total_upload_buffer_size +=
-                            std::mem::size_of::<vk::TransformMatrixKHR>() as u64;
-                    }
-                }
-                BLASBuildGeometry::Aabbs { buffer, .. } => {
-                    let aabbs = unsafe { &geometry.geometry.aabbs };
-                    if !buffer.has_device_address() {
-                        total_upload_buffer_size =
-                            total_upload_buffer_size.next_multiple_of(aabbs.stride as u64);
-                        total_upload_buffer_size +=
-                            aabbs.stride as u64 * build_range.primitive_count as u64;
-                    }
-                }
-            }
-        }
     }
     // Create scratch buffer
     let scratch_buffer = if let Some(s) = scratch_buffer.as_ref()
@@ -569,157 +664,24 @@ fn device_build_blas_system(
     let mut scratch_device_address = scratch_buffer.device_address();
 
     // Create upload buffer
-    let mut recorder = if total_upload_buffer_size > 0 {
-        let mut build_input_buffer = if let Some(s) = build_input_buffer.as_ref()
-            && s.size() >= total_upload_buffer_size
-        {
-            // Reuse scratch buffer from previous build
-            build_input_buffer.take().unwrap()
-        } else {
-            drop(build_input_buffer);
-            if allocator
-                .device()
-                .physical_device()
-                .properties()
-                .memory_model
-                .storage_buffer_should_use_staging()
-            {
-                Buffer::new_resource(
-                    allocator.clone(),
-                    total_upload_buffer_size,
-                    1,
-                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-                        | vk::BufferUsageFlags::TRANSFER_DST,
-                )
-                .unwrap()
-            } else {
-                Buffer::new_dynamic(
-                    allocator.clone(),
-                    total_upload_buffer_size,
-                    1,
-                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                )
-                .unwrap()
-            }
-        };
-        let mut copy_dst = &mut build_input_buffer;
-        let mut staging = None;
-        if allocator
-            .device()
-            .physical_device()
-            .properties()
-            .memory_model
-            .storage_buffer_should_use_staging()
-        {
-            let staging_buffer = if let Some(s) = staging_buffer.as_ref()
-                && s.size() >= total_upload_buffer_size
-            {
-                // Reuse scratch buffer from previous build
-                staging_buffer.take().unwrap()
-            } else {
-                drop(staging_buffer);
-
-                Buffer::new_staging(
-                    allocator.clone(),
-                    total_upload_buffer_size,
-                    1,
-                    vk::BufferUsageFlags::TRANSFER_SRC,
-                )
-                .unwrap()
-            };
-            staging = Some(staging_buffer);
-            copy_dst = staging.as_mut().unwrap();
-        }
-
-        // Now, copy data into copy_dst
-        let mut current_location: u64 = 0;
-        for pending in build.pending_builds.values() {
-            let geometries = &build.geometries[pending.geometry_array_index_start
-                ..(pending.geometry_array_index_start + pending.info.geometry_count as usize)];
-            let geometry_objs = &build.geometry_objs[pending.geometry_array_index_start
-                ..(pending.geometry_array_index_start + pending.info.geometry_count as usize)];
-            let build_ranges = &build.build_ranges[pending.geometry_array_index_start
-                ..(pending.geometry_array_index_start + pending.info.geometry_count as usize)];
-            for ((geometry, obj), build_range) in geometries
-                .iter()
-                .zip(geometry_objs.iter())
-                .zip(build_ranges.iter())
-            {
-                match obj {
-                    BLASBuildGeometry::Triangles {
-                        vertex_data,
-                        index_data,
-                        transform_data,
-                        ..
-                    } => {
-                        let triangles = unsafe { &geometry.geometry.triangles };
-                        if !vertex_data.has_device_address() {
-                            current_location =
-                                current_location.next_multiple_of(triangles.vertex_stride as u64);
-                            let len = triangles.vertex_stride as u64 * triangles.max_vertex as u64;
-                            let target_slice = &mut copy_dst.as_slice_mut()
-                                [current_location as usize..(current_location + len) as usize];
-                            vertex_data.host_writer(target_slice);
-                            current_location += len;
-                        }
-                        if !index_data.has_device_address()
-                            && triangles.index_type != vk::IndexType::NONE_KHR
-                        {
-                            let size = match triangles.index_type {
-                                vk::IndexType::UINT16 => std::mem::size_of::<u16>(),
-                                vk::IndexType::UINT32 => std::mem::size_of::<u32>(),
-                                _ => 0,
-                            } as u64;
-                            current_location = current_location.next_multiple_of(size);
-                            let len = size * build_range.primitive_count as u64;
-                            let target_slice = &mut copy_dst.as_slice_mut()
-                                [current_location as usize..(current_location + len) as usize];
-                            index_data.host_writer(target_slice);
-                            current_location += len;
-                        }
-                        if let Some(transform_data) = transform_data
-                            && !transform_data.has_device_address()
-                        {
-                            let size = std::mem::size_of::<vk::TransformMatrixKHR>() as u64;
-                            current_location = current_location.next_multiple_of(size);
-
-                            let target_slice = &mut copy_dst.as_slice_mut()
-                                [current_location as usize..(current_location + size) as usize];
-                            transform_data.host_writer(target_slice);
-                            current_location += size;
-                        }
-                    }
-                    BLASBuildGeometry::Aabbs { buffer, .. } => {
-                        let aabbs = unsafe { &geometry.geometry.aabbs };
-                        if !buffer.has_device_address() {
-                            let len = aabbs.stride as u64 * build_range.primitive_count as u64;
-                            let target_slice = &mut copy_dst.as_slice_mut()
-                                [current_location as usize..(current_location + len) as usize];
-                            buffer.host_writer(target_slice);
-                            current_location += len;
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(staging_buffer) = staging {
+    let mut recorder = if staging_store.total_buffer_size > 0 {
+        let recorder = if let Some(staging_buffer) = &staging_buffer {
+            let input_buffer = build_input_buffer.as_ref().unwrap();
             let mut recorder = task_pool.spawn_transfer();
             recorder.copy_buffer(
                 staging_buffer.raw_buffer(),
-                build_input_buffer.raw_buffer(),
+                input_buffer.raw_buffer(),
                 &[vk::BufferCopy {
                     src_offset: 0,
                     dst_offset: 0,
-                    size: total_upload_buffer_size,
+                    size: staging_store.total_buffer_size,
                 }],
             );
             recorder.commit::<(), 'c'>()
         } else {
             task_pool.spawn_compute()
-        }
+        };
+        recorder
     } else {
         task_pool.spawn_compute()
     };
@@ -763,5 +725,7 @@ fn device_build_blas_system(
     store.pending_task = Some(recorder.finish(BLASBuildPendingTaskInfo {
         entities,
         scratch_buffer,
+        input_buffer: build_input_buffer,
+        staging_buffer,
     }));
 }
