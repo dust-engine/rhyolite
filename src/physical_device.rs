@@ -410,6 +410,10 @@ impl_feature!(
     khr::RayTracingPipeline
 );
 impl_feature!(
+    vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+    khr::AccelerationStructure
+);
+impl_feature!(
     vk::PhysicalDeviceBufferDeviceAddressFeatures,
     khr::BufferDeviceAddress
 );

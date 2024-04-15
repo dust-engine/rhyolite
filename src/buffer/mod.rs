@@ -41,6 +41,67 @@ impl Drop for Buffer {
     }
 }
 impl Buffer {
+    /// Create a new buffer with DEVICE_LOCAL, HOST_VISIBLE memory.
+    pub fn new_dynamic(
+        allocator: Allocator,
+        size: vk::DeviceSize,
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> VkResult<Self> {
+        unsafe {
+            let (buffer, allocation) = allocator.create_buffer_with_alignment(
+                &vk::BufferCreateInfo {
+                    size,
+                    usage,
+                    ..Default::default()
+                },
+                &vk_mem::AllocationCreateInfo {
+                    usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                    flags: vk_mem::AllocationCreateFlags::MAPPED
+                        | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                alignment,
+            )?;
+            Ok(Self {
+                allocator,
+                buffer,
+                allocation,
+                size,
+            })
+        }
+    }
+    /// Create a new buffer with DEVICE_LOCAL memory.
+    pub fn new_staging(
+        allocator: Allocator,
+        size: vk::DeviceSize,
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> VkResult<Self> {
+        unsafe {
+            let (buffer, allocation) = allocator.create_buffer_with_alignment(
+                &vk::BufferCreateInfo {
+                    size,
+                    usage,
+                    ..Default::default()
+                },
+                &vk_mem::AllocationCreateInfo {
+                    usage: vk_mem::MemoryUsage::AutoPreferHost,
+                    flags: vk_mem::AllocationCreateFlags::MAPPED
+                        | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                alignment,
+            )?;
+            Ok(Self {
+                allocator,
+                buffer,
+                allocation,
+                size,
+            })
+        }
+    }
+    /// Create a new buffer with DEVICE_LOCAL memory.
     pub fn new_resource(
         allocator: Allocator,
         size: vk::DeviceSize,
@@ -68,6 +129,27 @@ impl Buffer {
                 allocation,
                 size,
             })
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.allocator
+                    .get_allocation_info(&self.allocation)
+                    .mapped_data as *const u8,
+                self.size as usize,
+            )
+        }
+    }
+    pub fn as_slice_mut(&mut self) -> &mut [u8] {
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.allocator
+                    .get_allocation_info(&self.allocation)
+                    .mapped_data as *mut u8,
+                self.size as usize,
+            )
         }
     }
 }

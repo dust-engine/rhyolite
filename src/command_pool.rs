@@ -50,6 +50,9 @@ impl CommandPool {
         Ok(())
     }
     pub fn free(&mut self, buffers: &[vk::CommandBuffer]) {
+        if buffers.is_empty() {
+            return;
+        }
         unsafe {
             self.device.free_command_buffers(self.raw, buffers);
         }
