@@ -8,17 +8,19 @@ use std::{
 };
 
 use bevy::{
+    app::{App, Plugin, PostUpdate},
     ecs::{
         component::Component,
         entity::Entity,
         query::{Added, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, With},
+        schedule::{IntoSystemConfigs, SystemSet},
         system::{
             Commands, Local, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
             SystemParamItem,
         },
     },
     transform,
-    utils::petgraph::data,
+    utils::{petgraph::data, tracing},
 };
 
 use rhyolite::{
@@ -148,11 +150,10 @@ pub trait BLASBuildMarker: Send + Sync + 'static {
     }
 }
 
-
 /// Builders with data not owned anywhere. Needing to be generated on the fly.
 /// Implementing this trait helps elimitating unnecessary copies by allowing you
 /// to write directly into the destination memory.
-pub trait BLASStagingBufferBuilder: BLASBuildMarker {
+pub trait BLASStagingBuilder: BLASBuildMarker {
     fn staging_layout(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
@@ -212,8 +213,7 @@ impl<T> BLASBuildGeometry<T> {
     pub fn to_device_or_host_address(
         self,
         mapper: impl Fn(T) -> vk::DeviceOrHostAddressConstKHR,
-    ) -> BLASBuildGeometry<vk::DeviceOrHostAddressConstKHR>
-    {
+    ) -> BLASBuildGeometry<vk::DeviceOrHostAddressConstKHR> {
         match self {
             BLASBuildGeometry::Triangles {
                 vertex_format,
@@ -275,6 +275,7 @@ fn extract_updated_entities<T: BLASBuildMarker>(
         }
         let task = store.pending_task.take().unwrap();
         let mut result = task_pool.wait_blocked(task);
+        tracing::info!("BLAS build finished: Built {} BLASs", result.entities.len());
         for (entity, accel_struct) in result.entities.drain(..) {
             commands.entity(entity).insert(BLAS { accel_struct });
         }
@@ -295,12 +296,17 @@ fn extract_updated_entities<T: BLASBuildMarker>(
         }
     }
 
+    let mut count: u32 = 0;
     for entity in changed_entities.iter() {
         store.pending_entities.insert(entity);
+        count += 1;
+    }
+    if count > 0 {
+        tracing::info!("Queued {} BLASs", count);
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct BLASStagingBuilderStore {
     total_buffer_size: u64,
     base_alignment: u64,
@@ -309,7 +315,7 @@ struct BLASStagingBuilderStore {
 
     current_write_ptr: u64,
 }
-fn staging_builder_calculate_layout<T: BLASStagingBufferBuilder>(
+fn staging_builder_calculate_layout<T: BLASStagingBuilder>(
     mut params: StaticSystemParam<T::Params>,
     entities: Query<T::QueryData, (With<T::Marker>, T::QueryFilter)>,
     mut builder_store: ResMut<BLASStagingBuilderStore>,
@@ -335,6 +341,12 @@ fn staging_builder_calculate_layout<T: BLASStagingBufferBuilder>(
         builder_store.total_buffer_size += layout.size() as u64;
         builder_store.base_alignment = builder_store.base_alignment.max(layout.align() as u64);
     }
+
+    tracing::info!(
+        "BLAS Build staging buffer size: {}, alignment {}",
+        builder_store.total_buffer_size,
+        builder_store.base_alignment
+    );
 }
 fn staging_builder_realloc_buffer(
     allocator: Res<Allocator>,
@@ -356,32 +368,49 @@ fn staging_builder_realloc_buffer(
     if let Some(buffer) = store.input_buffer.as_ref()
         && buffer.size() >= store.total_buffer_size
     {
+        tracing::info!("BLAS Build reusing input buffer from previous build");
         // Preserve old buffer: it's big enough.
     } else {
         store.input_buffer = None;
-        store.input_buffer = Some(if use_staging_buffer {
-            Buffer::new_resource(
-                allocator.clone(),
-                store.total_buffer_size,
-                store.base_alignment,
-                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-                    | vk::BufferUsageFlags::TRANSFER_DST,
-            )
-            .unwrap()
+        if use_staging_buffer {
+            store.input_buffer = Some(
+                Buffer::new_resource(
+                    allocator.clone(),
+                    store.total_buffer_size,
+                    store.base_alignment,
+                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                        | vk::BufferUsageFlags::TRANSFER_DST,
+                )
+                .unwrap(),
+            );
+
+            store.staging_buffer = Some(
+                Buffer::new_staging(
+                    allocator.clone(),
+                    store.total_buffer_size,
+                    store.base_alignment,
+                    vk::BufferUsageFlags::TRANSFER_SRC,
+                )
+                .unwrap(),
+            );
+            tracing::info!("BLAS Build allocated new input and staging buffer");
         } else {
-            Buffer::new_dynamic(
-                allocator.clone(),
-                store.total_buffer_size,
-                store.base_alignment,
-                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-            )
-            .unwrap()
-        });
+            store.input_buffer = Some(
+                Buffer::new_dynamic(
+                    allocator.clone(),
+                    store.total_buffer_size,
+                    store.base_alignment,
+                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                )
+                .unwrap(),
+            );
+            tracing::info!("BLAS Build allocated new input buffer");
+        }
     };
 }
-fn staging_builder_extract_changes<T: BLASStagingBufferBuilder>(
+fn staging_builder_extract_changes<T: BLASStagingBuilder>(
     allocator: Res<Allocator>,
     mut params: StaticSystemParam<T::Params>,
     mut store: ResMut<BLASStore>,
@@ -404,8 +433,9 @@ fn staging_builder_extract_changes<T: BLASStagingBufferBuilder>(
         base_device_address: vk::DeviceAddress,
         current_write_ptr: &'a mut u64,
     }
-    impl<'a, 'b, T: BLASStagingBufferBuilder> Callback<'a, T> for MyCallback<'b> {
-        type Iterator = impl Iterator<Item = BLASBuildGeometry<vk::DeviceOrHostAddressConstKHR>> + 'a;
+    impl<'a, 'b, T: BLASStagingBuilder> Callback<'a, T> for MyCallback<'b> {
+        type Iterator =
+            impl Iterator<Item = BLASBuildGeometry<vk::DeviceOrHostAddressConstKHR>> + 'a;
         fn call(
             &mut self,
             params: &'a mut SystemParamItem<T::Params>,
@@ -413,22 +443,28 @@ fn staging_builder_extract_changes<T: BLASStagingBufferBuilder>(
         ) -> Self::Iterator {
             let size = T::staging_layout(params, data);
             let base_device_address = self.base_device_address + *self.current_write_ptr;
-            let dst_buffer = &mut self.dst_buffer[(*self.current_write_ptr) as usize .. (*self.current_write_ptr as usize + size.size())];
-            T::geometries(params, data, dst_buffer).map(move |g| g.to_device_or_host_address(|offset|
-                vk::DeviceOrHostAddressConstKHR {
-                    device_address: base_device_address + offset
-                }
-            ))
+            let dst_buffer = &mut self.dst_buffer[(*self.current_write_ptr) as usize
+                ..(*self.current_write_ptr as usize + size.size())];
+            T::geometries(params, data, dst_buffer).map(move |g| {
+                g.to_device_or_host_address(|offset| vk::DeviceOrHostAddressConstKHR {
+                    device_address: base_device_address + offset,
+                })
+            })
         }
     }
-    
+
     extract_blas_inner::<T, _>(
         allocator,
         params,
         store,
         all_entities,
-        MyCallback { dst_buffer, base_device_address, current_write_ptr: &mut staging_build_store.current_write_ptr },
+        MyCallback {
+            dst_buffer,
+            base_device_address,
+            current_write_ptr: &mut staging_build_store.current_write_ptr,
+        },
     );
+    tracing::info!("BLAS Build written to buffer");
 }
 
 struct BLASPendingBuild {
@@ -620,19 +656,30 @@ fn extract_blas_inner<T: BLASBuildMarker, F>(
 
 fn device_build_blas_system(
     allocator: Res<Allocator>,
-    mut query: Query<&mut BLAS>,
     mut task_pool: ResMut<AsyncTaskPool>,
-    mut store: ResMut<BLASStore>,
-    mut staging_store: ResMut<BLASStagingBuilderStore>,
+    store: ResMut<BLASStore>,
+    staging_store: ResMut<BLASStagingBuilderStore>,
 ) {
     let store = store.into_inner();
     let staging_store = staging_store.into_inner();
     let mut entities: Vec<(Entity, AccelStruct)> = Vec::new();
     let mut scratch_buffer: Option<Buffer> = store.scratch_buffer.take();
-    let mut staging_buffer: Option<Buffer> = staging_store.staging_buffer.take();
-    let mut build_input_buffer: Option<Buffer> = staging_store.input_buffer.take();
+    let staging_buffer: Option<Buffer> = staging_store.staging_buffer.take();
+    let build_input_buffer: Option<Buffer> = staging_store.input_buffer.take();
 
     let mut build = std::mem::take(&mut store.pending_builds);
+    if build.pending_builds.is_empty() {
+        if scratch_buffer.is_some() {
+            tracing::info!("BLAS Build dropped reused scratch buffer");
+        }
+        if build_input_buffer.is_some() {
+            tracing::info!("BLAS Build dropped reused build input buffer");
+        }
+        if staging_buffer.is_some() {
+            tracing::info!("BLAS Build dropped reused staging buffer");
+        }
+        return;
+    }
 
     let mut total_scratch_size: u64 = 0;
     let scratch_offset_alignment: u32 = allocator
@@ -665,6 +712,7 @@ fn device_build_blas_system(
 
     // Create upload buffer
     let mut recorder = if staging_store.total_buffer_size > 0 {
+        tracing::info!("BLAS Build scheduled transfer");
         let recorder = if let Some(staging_buffer) = &staging_buffer {
             let input_buffer = build_input_buffer.as_ref().unwrap();
             let mut recorder = task_pool.spawn_transfer();
@@ -722,10 +770,53 @@ fn device_build_blas_system(
         .collect();
 
     recorder.build_acceleration_structure(&build_geometry_info, build_range_infos);
+    tracing::info!("BLAS Build scheduled build for {} BLASs", entities.len());
     store.pending_task = Some(recorder.finish(BLASBuildPendingTaskInfo {
         entities,
         scratch_buffer,
         input_buffer: build_input_buffer,
         staging_buffer,
     }));
+}
+
+pub struct BLASStagingBuilderPlugin<M: BLASStagingBuilder>(std::marker::PhantomData<M>);
+impl<M: BLASStagingBuilder> Default for BLASStagingBuilderPlugin<M> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+#[derive(SystemSet, Hash, PartialEq, Eq, Clone, Copy, Debug)]
+pub struct BLASBuilderSet;
+
+impl<M: BLASStagingBuilder> Plugin for BLASStagingBuilderPlugin<M> {
+    fn build(&self, app: &mut App) {
+        if app
+            .world
+            .get_resource::<BLASStagingBuilderStore>()
+            .is_none()
+        {
+            // First time initializing a staging builder plugin
+            app.add_systems(PostUpdate, staging_builder_realloc_buffer)
+                .init_resource::<BLASStagingBuilderStore>();
+        }
+        if app.world.get_resource::<BLASStore>().is_none() {
+            // First time initializing any BLAS builder plugin
+            app.add_systems(PostUpdate, device_build_blas_system)
+                .init_resource::<BLASStore>();
+        }
+        app.add_systems(
+            PostUpdate,
+            (
+                extract_updated_entities::<M>,
+                (staging_builder_calculate_layout::<M>)
+                    .after(extract_updated_entities::<M>)
+                    .before(staging_builder_realloc_buffer),
+                staging_builder_extract_changes::<M>
+                    .after(staging_builder_realloc_buffer)
+                    .before(device_build_blas_system),
+            )
+                .in_set(BLASBuilderSet),
+        );
+    }
 }

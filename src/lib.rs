@@ -6,6 +6,7 @@
 #![feature(ptr_metadata)]
 #![feature(alloc_layout_extra)]
 #![feature(maybe_uninit_array_assume_init)]
+#![feature(let_chains)]
 #![feature(specialization)]
 
 mod access;

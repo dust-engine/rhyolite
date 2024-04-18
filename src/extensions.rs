@@ -1,8 +1,11 @@
 use ash::{vk, Device, Entry, Instance};
 
+use crate::Version;
+
 pub trait InstanceExtension: Send + Sync + 'static {
     fn new(entry: &Entry, instance: &Instance) -> Self;
     fn name() -> &'static std::ffi::CStr;
+    const PROMOTED_VK_VERSION: Option<Version>;
 }
 
 pub trait DeviceExtension: Send + Sync + Sized + 'static {
@@ -11,8 +14,8 @@ pub trait DeviceExtension: Send + Sync + Sized + 'static {
     /// For other extensions, implementations shall return a new instance of the extension, so that the extension can be accessed through [`crate::Device::extension`]
     fn new(instance: &Instance, device: &mut Device) -> Option<Self>;
     fn name() -> &'static std::ffi::CStr;
+    const PROMOTED_VK_VERSION: Option<Version>;
 }
-pub trait PromotedDeviceExtension: DeviceExtension {}
 
 #[derive(Debug)]
 pub struct ExtensionNotFoundError;
@@ -31,6 +34,18 @@ macro_rules! impl_device_extension {
             fn name() -> &'static std::ffi::CStr {
                 $name$(::$Vb)*::name()
             }
+            const PROMOTED_VK_VERSION: Option<Version> = None;
+        }
+    };
+    ($name:ident $( :: $Vb : ident )*, $promoted_version:expr) => {
+        impl DeviceExtension for $name$(::$Vb)* {
+            fn new(instance: &Instance, device: &mut Device) -> Option<Self> {
+                Some($name$(::$Vb)*::new(instance, device))
+            }
+            fn name() -> &'static std::ffi::CStr {
+                $name$(::$Vb)*::name()
+            }
+            const PROMOTED_VK_VERSION: Option<Version> = Some($promoted_version);
         }
     };
 }
@@ -43,12 +58,13 @@ macro_rules! impl_instance_extension {
             fn name() -> &'static std::ffi::CStr {
                 $name$(::$Vb)*::name()
             }
+            const PROMOTED_VK_VERSION: Option<Version> = None;
         }
     };
 }
 impl_device_extension!(ash::extensions::khr::AccelerationStructure);
 impl_instance_extension!(ash::extensions::khr::AndroidSurface);
-impl_device_extension!(ash::extensions::khr::BufferDeviceAddress);
+impl_device_extension!(ash::extensions::khr::BufferDeviceAddress, Version::V1_2);
 impl_device_extension!(ash::extensions::khr::CopyCommands2);
 impl_device_extension!(ash::extensions::khr::CreateRenderPass2);
 impl_device_extension!(ash::extensions::khr::DeferredHostOperations);
@@ -68,20 +84,20 @@ impl DeviceExtension for ash::extensions::khr::DynamicRendering {
     fn name() -> &'static std::ffi::CStr {
         ash::extensions::khr::DynamicRendering::name()
     }
+    const PROMOTED_VK_VERSION: Option<Version> = Some(Version::V1_3);
 }
-impl PromotedDeviceExtension for ash::extensions::khr::DynamicRendering {}
 impl_device_extension!(ash::extensions::khr::ExternalFenceFd);
 impl_device_extension!(ash::extensions::khr::ExternalFenceWin32);
 impl_device_extension!(ash::extensions::khr::ExternalMemoryFd);
 impl_device_extension!(ash::extensions::khr::ExternalMemoryWin32);
 impl_device_extension!(ash::extensions::khr::ExternalSemaphoreFd);
 impl_device_extension!(ash::extensions::khr::ExternalSemaphoreWin32);
-impl_device_extension!(ash::extensions::khr::GetMemoryRequirements2);
+impl_device_extension!(ash::extensions::khr::GetMemoryRequirements2, Version::V1_1);
 impl_instance_extension!(ash::extensions::khr::GetPhysicalDeviceProperties2);
 impl_instance_extension!(ash::extensions::khr::GetSurfaceCapabilities2);
-impl_device_extension!(ash::extensions::khr::Maintenance1);
-impl_device_extension!(ash::extensions::khr::Maintenance3);
-impl_device_extension!(ash::extensions::khr::Maintenance4);
+impl_device_extension!(ash::extensions::khr::Maintenance1, Version::V1_1);
+impl_device_extension!(ash::extensions::khr::Maintenance3, Version::V1_1);
+impl_device_extension!(ash::extensions::khr::Maintenance4, Version::V1_3);
 impl_instance_extension!(ash::extensions::khr::PerformanceQuery);
 impl_device_extension!(ash::extensions::khr::PipelineExecutableProperties);
 impl_device_extension!(ash::extensions::khr::PresentWait);
@@ -105,9 +121,9 @@ impl DeviceExtension for ash::extensions::khr::Synchronization2 {
     fn name() -> &'static std::ffi::CStr {
         ash::extensions::khr::Synchronization2::name()
     }
+    const PROMOTED_VK_VERSION: Option<Version> = Some(Version::V1_3);
 }
-impl PromotedDeviceExtension for ash::extensions::khr::Synchronization2 {}
-impl_device_extension!(ash::extensions::khr::TimelineSemaphore);
+impl_device_extension!(ash::extensions::khr::TimelineSemaphore, Version::V1_2);
 impl_instance_extension!(ash::extensions::khr::WaylandSurface);
 impl_instance_extension!(ash::extensions::khr::Win32Surface);
 impl_instance_extension!(ash::extensions::khr::XcbSurface);

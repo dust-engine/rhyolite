@@ -15,7 +15,7 @@ use std::{
 
 use crate::{
     ecs::RenderSystemPass,
-    extensions::{DeviceExtension, InstanceExtension, PromotedDeviceExtension},
+    extensions::{DeviceExtension, InstanceExtension},
     Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeaturesSetup, Version,
 };
 use cstr::cstr;
@@ -256,13 +256,15 @@ impl Plugin for RhyolitePlugin {
             .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
 
         // Required features
-        app.enable_feature::<vk::PhysicalDeviceVulkan12Features>(|f| &mut f.timeline_semaphore)
-            .unwrap();
-        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|f| &mut f.synchronization2)
-            .or_enable_in_extension::<vk::PhysicalDeviceSynchronization2FeaturesKHR>(|f| {
-                &mut f.synchronization2
-            })
-            .unwrap();
+        app.enable_feature::<vk::PhysicalDeviceTimelineSemaphoreFeatures>(|f| {
+            &mut f.timeline_semaphore
+        })
+        .unwrap();
+        app.add_device_extension::<khr::Synchronization2>().unwrap();
+        app.enable_feature::<vk::PhysicalDeviceSynchronization2Features>(|f| {
+            &mut f.synchronization2
+        })
+        .unwrap();
 
         // Optional extensions
         app.add_device_extension::<khr::DeferredHostOperations>();
@@ -297,6 +299,7 @@ impl Plugin for RhyolitePlugin {
         // Add allocator
         app.world.init_resource::<crate::Allocator>();
         app.world.init_resource::<crate::pipeline::PipelineCache>();
+        app.world.init_resource::<crate::task::AsyncTaskPool>();
         app.world
             .init_resource::<crate::DeferredOperationTaskPool>();
         app.init_asset_loader::<crate::shader::loader::SpirvLoader>();
@@ -334,6 +337,12 @@ pub trait RhyoliteApp {
 
 impl RhyoliteApp for App {
     fn add_device_extension<T: DeviceExtension>(&mut self) -> Option<Version> {
+        if let Some(promoted_extension) = T::PROMOTED_VK_VERSION {
+            let instance = self.world.resource::<Instance>();
+            if instance.api_version() >= promoted_extension {
+                return Some(instance.api_version());
+            }
+        }
         let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
             panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
         };
@@ -463,6 +472,30 @@ impl RhyoliteApp for App {
         &'a mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,
     ) -> FeatureEnableResult<'a> {
+        let device_extension = self.world.resource::<DeviceExtensions>();
+        let instance = self.world.resource::<Instance>();
+        if !device_extension
+            .extension_builders
+            .contains_key(T::Extension::name())
+        {
+            if let Some(promoted_version) = T::Extension::PROMOTED_VK_VERSION {
+                if instance.api_version() < promoted_version {
+                    tracing::warn!(
+                        "Feature {:?} requires either Vulkan {} or enabling extension {:?}. Current Vulkan version: {}",
+                        std::any::type_name::<T>(),
+                        promoted_version,
+                        T::Extension::name(),
+                        instance.api_version()
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    "Feature {:?} requires enabling extension {:?}",
+                    std::any::type_name::<T>(),
+                    T::Extension::name()
+                );
+            }
+        }
         let mut features = self.world.resource_mut::<PhysicalDeviceFeaturesSetup>();
         if features.enable_feature::<T>(selector).is_none() {
             return FeatureEnableResult::NotFound { app: self };
@@ -476,21 +509,10 @@ pub enum FeatureEnableResult<'a> {
     NotFound { app: &'a mut App },
 }
 impl<'a> FeatureEnableResult<'a> {
-    pub fn or_enable_in_extension<F: Feature + Default>(
-        &'a mut self,
-        selector: impl FnMut(&mut F) -> &mut vk::Bool32,
-    ) -> Self
-    where
-        F::Extension: PromotedDeviceExtension,
-    {
+    pub fn exists(&self) -> bool {
         match self {
-            FeatureEnableResult::Success => Self::Success,
-            FeatureEnableResult::NotFound { app } => {
-                if app.add_device_extension::<F::Extension>().is_none() {
-                    return Self::NotFound { app: *app };
-                }
-                app.enable_feature(selector)
-            }
+            FeatureEnableResult::Success => true,
+            FeatureEnableResult::NotFound { .. } => false,
         }
     }
     #[track_caller]

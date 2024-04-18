@@ -11,7 +11,6 @@ use bevy::ecs::{
 use crate::{
     command_pool::CommandPool,
     commands::{CommandRecorder, SemaphoreSignalCommands},
-    queue,
     semaphore::TimelineSemaphore,
     Device, HasDevice, QueueRef, Queues, QUEUE_FLAGS_ASYNC,
 };

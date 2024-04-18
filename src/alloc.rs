@@ -35,13 +35,8 @@ impl Allocator {
         let mut flags = vk_mem::AllocatorCreateFlags::NONE;
 
         let buffer_device_address_enabled = device
-            .feature::<vk::PhysicalDeviceVulkan12Features>()
+            .feature::<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
             .map(|f| f.buffer_device_address)
-            .or_else(|| {
-                device
-                    .feature::<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
-                    .map(|f| f.buffer_device_address)
-            })
             .map(|b| b == vk::TRUE)
             .unwrap_or(false);
         if buffer_device_address_enabled {

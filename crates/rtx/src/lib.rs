@@ -3,11 +3,45 @@
 #![feature(impl_trait_in_assoc_type)]
 #![feature(type_alias_impl_trait)]
 
-
 mod accel_struct;
 mod pipeline;
 mod sbt;
 
 pub use accel_struct::*;
 pub use pipeline::*;
+use rhyolite::ash::vk;
 pub use sbt::*;
+
+use bevy::app::{App, Plugin};
+pub struct RtxPlugin;
+impl Plugin for RtxPlugin {
+    fn build(&self, app: &mut App) {
+        use bevy::utils::tracing;
+        use rhyolite::{ash::extensions::khr, RhyoliteApp};
+        app.add_device_extension::<khr::AccelerationStructure>()
+            .unwrap();
+        app.add_device_extension::<khr::RayTracingPipeline>()
+            .unwrap();
+        app.enable_feature::<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>(|f| {
+            &mut f.acceleration_structure
+        })
+        .unwrap();
+        app.enable_feature::<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>(|f| {
+            &mut f.ray_tracing_pipeline
+        })
+        .unwrap();
+
+        app.enable_feature::<vk::PhysicalDeviceBufferDeviceAddressFeatures>(|f| {
+            &mut f.buffer_device_address
+        })
+        .unwrap();
+        if app
+            .enable_feature::<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>(|f| {
+                &mut f.acceleration_structure_host_commands
+            })
+            .exists()
+        {
+            tracing::info!("Acceleration structure host commands enabled");
+        }
+    }
+}

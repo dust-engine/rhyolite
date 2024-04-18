@@ -77,11 +77,11 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
         );
         app.init_resource::<PerFrame<EguiHostBuffer<Filter>>>();
         app.add_systems(Startup, initialize_pipelines);
-        app.enable_feature::<vk::PhysicalDeviceVulkan13Features>(|x| &mut x.dynamic_rendering)
-            .or_enable_in_extension::<vk::PhysicalDeviceDynamicRenderingFeatures>(|x| {
-                &mut x.dynamic_rendering
-            })
-            .unwrap();
+        app.add_device_extension::<khr::DynamicRendering>().unwrap();
+        app.enable_feature::<vk::PhysicalDeviceDynamicRenderingFeatures>(|x| {
+            &mut x.dynamic_rendering
+        })
+        .unwrap();
         app.add_device_extension::<khr::PushDescriptor>().unwrap();
     }
     fn finish(&self, app: &mut App) {

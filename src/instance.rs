@@ -27,6 +27,11 @@ struct InstanceInner {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version(pub u32);
 impl Version {
+    pub const V1_0: Self = Self::new(0, 1, 0, 0);
+    pub const V1_1: Self = Self::new(0, 1, 1, 0);
+    pub const V1_2: Self = Self::new(0, 1, 2, 0);
+    pub const V1_3: Self = Self::new(0, 1, 3, 0);
+
     pub const fn new(variant: u32, major: u32, minor: u32, patch: u32) -> Self {
         let num = vk::make_api_version(variant, major, minor, patch);
         Self(num)
@@ -56,6 +61,21 @@ impl Debug for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
             "Version({}.{}.{})",
+            self.major(),
+            self.minor(),
+            self.patch()
+        ))?;
+        let variant = self.variant();
+        if variant != 0 {
+            f.write_fmt(format_args!(" variant {variant}"))?;
+        }
+        Ok(())
+    }
+}
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "{}.{}.{}",
             self.major(),
             self.minor(),
             self.patch()
