@@ -26,6 +26,8 @@ use bevy::{
 use rhyolite::{
     ash::{extensions::khr, prelude::VkResult, vk},
     commands::{ComputeCommands, TransferCommands},
+    cstr,
+    debug::DebugObject,
     task::{AsyncComputeTask, AsyncTaskPool},
     Allocator, Buffer, BufferLike, HasDevice,
 };
@@ -59,13 +61,18 @@ impl AccelStruct {
         size: vk::DeviceSize,
         ty: vk::AccelerationStructureTypeKHR,
     ) -> VkResult<Self> {
-        let buffer = Buffer::new_resource(
+        let mut buffer = Buffer::new_resource(
             allocator,
             size,
             1,
-            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
-                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
         )?;
+        let name = if ty == vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL {
+            cstr!("BLAS backing buffer")
+        } else {
+            cstr!("TLAS backing buffer")
+        };
+        buffer.set_name(name).unwrap();
         unsafe {
             let raw = buffer
                 .device()
@@ -373,39 +380,43 @@ fn staging_builder_realloc_buffer(
     } else {
         store.input_buffer = None;
         if use_staging_buffer {
-            store.input_buffer = Some(
-                Buffer::new_resource(
-                    allocator.clone(),
-                    store.total_buffer_size,
-                    store.base_alignment,
-                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-                        | vk::BufferUsageFlags::TRANSFER_DST,
-                )
-                .unwrap(),
-            );
+            let mut input_buffer = Buffer::new_resource(
+                allocator.clone(),
+                store.total_buffer_size,
+                store.base_alignment,
+                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+            )
+            .unwrap();
+            input_buffer.set_name(cstr!("BLAS input buffer")).unwrap();
+            store.input_buffer = Some(input_buffer);
 
-            store.staging_buffer = Some(
-                Buffer::new_staging(
-                    allocator.clone(),
-                    store.total_buffer_size,
-                    store.base_alignment,
-                    vk::BufferUsageFlags::TRANSFER_SRC,
-                )
-                .unwrap(),
-            );
+            let mut staging_buffer = Buffer::new_staging(
+                allocator.clone(),
+                store.total_buffer_size,
+                store.base_alignment,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+            )
+            .unwrap();
+            staging_buffer
+                .set_name(cstr!("BLAS staging buffer"))
+                .unwrap();
+            store.staging_buffer = Some(staging_buffer);
             tracing::info!("BLAS Build allocated new input and staging buffer");
         } else {
-            store.input_buffer = Some(
-                Buffer::new_dynamic(
-                    allocator.clone(),
-                    store.total_buffer_size,
-                    store.base_alignment,
-                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                )
-                .unwrap(),
-            );
+            let mut input_buffer = Buffer::new_dynamic(
+                allocator.clone(),
+                store.total_buffer_size,
+                store.base_alignment,
+                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            )
+            .unwrap();
+            input_buffer
+                .set_name(cstr!("BLAS input buffer (direct write)"))
+                .unwrap();
+            store.input_buffer = Some(input_buffer);
             tracing::info!("BLAS Build allocated new input buffer");
         }
     };
@@ -418,6 +429,12 @@ fn staging_builder_extract_changes<T: BLASStagingBuilder>(
     all_entities: Query<(Option<&mut BLAS>, T::QueryData), (With<T::Marker>, T::QueryFilter)>,
 ) {
     let staging_build_store = staging_build_store.into_inner();
+    let base_device_address = if let Some(input_buffer) = staging_build_store.input_buffer.as_ref()
+    {
+        input_buffer.device_address()
+    } else {
+        return;
+    };
     let Some(dst_buffer) = staging_build_store
         .staging_buffer
         .as_mut()
@@ -425,7 +442,6 @@ fn staging_builder_extract_changes<T: BLASStagingBuilder>(
     else {
         return;
     };
-    let base_device_address = dst_buffer.device_address();
     let dst_buffer = dst_buffer.as_slice_mut();
 
     struct MyCallback<'a> {
@@ -442,9 +458,11 @@ fn staging_builder_extract_changes<T: BLASStagingBuilder>(
             data: &'a QueryItem<T::QueryData>,
         ) -> Self::Iterator {
             let size = T::staging_layout(params, data);
+            *self.current_write_ptr = self.current_write_ptr.next_multiple_of(size.align() as u64);
             let base_device_address = self.base_device_address + *self.current_write_ptr;
             let dst_buffer = &mut self.dst_buffer[(*self.current_write_ptr) as usize
                 ..(*self.current_write_ptr as usize + size.size())];
+            *self.current_write_ptr += size.size() as u64;
             T::geometries(params, data, dst_buffer).map(move |g| {
                 g.to_device_or_host_address(|offset| vk::DeviceOrHostAddressConstKHR {
                     device_address: base_device_address + offset,
@@ -630,6 +648,7 @@ fn extract_blas_inner<T: BLASBuildMarker, F>(
             } else {
                 vk::AccelerationStructureKHR::null()
             },
+            p_geometries: store.pending_builds.geometries[geometry_array_index_start..].as_ptr(),
             geometry_count,
             ..Default::default()
         };
@@ -700,19 +719,19 @@ fn device_build_blas_system(
         scratch_buffer.take().unwrap()
     } else {
         drop(scratch_buffer);
-        Buffer::new_resource(
+        let mut buffer = Buffer::new_resource(
             allocator.clone(),
             total_scratch_size,
             scratch_offset_alignment as u64,
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
-        .unwrap()
+        .unwrap();
+        buffer.set_name(cstr!("BLAS scratch buffer")).unwrap();
+        buffer
     };
     let mut scratch_device_address = scratch_buffer.device_address();
 
-    // Create upload buffer
     let mut recorder = if staging_store.total_buffer_size > 0 {
-        tracing::info!("BLAS Build scheduled transfer");
         let recorder = if let Some(staging_buffer) = &staging_buffer {
             let input_buffer = build_input_buffer.as_ref().unwrap();
             let mut recorder = task_pool.spawn_transfer();
@@ -725,7 +744,11 @@ fn device_build_blas_system(
                     size: staging_store.total_buffer_size,
                 }],
             );
-            recorder.commit::<(), 'c'>()
+            tracing::info!("BLAS Build scheduled transfer");
+            recorder.commit::<(), 'c'>(
+                vk::PipelineStageFlags2::empty(),
+                vk::PipelineStageFlags2::COPY,
+            )
         } else {
             task_pool.spawn_compute()
         };
@@ -746,7 +769,6 @@ fn device_build_blas_system(
         } else {
             scratch_device_address += pending.build_sizes.build_scratch_size;
         }
-        scratch_device_address += pending.build_sizes.build_scratch_size;
 
         // Create acceleration structure
         let accel_struct = AccelStruct::new(
@@ -771,12 +793,16 @@ fn device_build_blas_system(
 
     recorder.build_acceleration_structure(&build_geometry_info, build_range_infos);
     tracing::info!("BLAS Build scheduled build for {} BLASs", entities.len());
-    store.pending_task = Some(recorder.finish(BLASBuildPendingTaskInfo {
-        entities,
-        scratch_buffer,
-        input_buffer: build_input_buffer,
-        staging_buffer,
-    }));
+    store.pending_task = Some(recorder.finish(
+        BLASBuildPendingTaskInfo {
+            entities,
+            scratch_buffer,
+            input_buffer: build_input_buffer,
+            staging_buffer,
+        },
+        vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
+    ));
+    store.pending_entities.clear();
 }
 
 pub struct BLASStagingBuilderPlugin<M: BLASStagingBuilder>(std::marker::PhantomData<M>);

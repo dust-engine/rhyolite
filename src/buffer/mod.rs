@@ -6,9 +6,14 @@ use std::{
     ops::{Deref, DerefMut, Index, IndexMut, RangeBounds},
 };
 
-use ash::{prelude::VkResult, vk};
+use ash::{
+    prelude::VkResult,
+    vk::{self, Handle},
+};
 
-use crate::{utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel};
+use crate::{
+    debug::DebugObject, utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel,
+};
 use vk_mem::Alloc;
 
 pub trait BufferLike: HasDevice {
@@ -32,6 +37,13 @@ pub struct Buffer {
 }
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
+impl DebugObject for Buffer {
+    fn object_handle(&mut self) -> u64 {
+        self.buffer.as_raw()
+    }
+
+    const OBJECT_TYPE: vk::ObjectType = vk::ObjectType::BUFFER;
+}
 impl Drop for Buffer {
     fn drop(&mut self) {
         unsafe {
