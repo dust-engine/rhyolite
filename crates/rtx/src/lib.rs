@@ -4,10 +4,12 @@
 #![feature(type_alias_impl_trait)]
 
 mod accel_struct;
+mod blas;
 mod pipeline;
 mod sbt;
 
 pub use accel_struct::*;
+pub use blas::*;
 pub use pipeline::*;
 use rhyolite::ash::vk;
 pub use sbt::*;
