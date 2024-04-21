@@ -9,7 +9,7 @@ pub struct AccelStruct {
     buffer: Buffer,
     pub(crate) raw: vk::AccelerationStructureKHR,
     pub(crate) flags: vk::BuildAccelerationStructureFlagsKHR,
-    device_address: vk::DeviceAddress,
+    pub(crate) device_address: vk::DeviceAddress,
 }
 impl Drop for AccelStruct {
     fn drop(&mut self) {
@@ -22,12 +22,18 @@ impl Drop for AccelStruct {
     }
 }
 impl AccelStruct {
+    pub fn size(&self) -> vk::DeviceSize {
+        self.buffer.size()
+    }
     pub fn new_blas(allocator: Allocator, size: vk::DeviceSize) -> VkResult<Self> {
         Self::new(
             allocator,
             size,
             vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
         )
+    }
+    pub fn new_tlas(allocator: Allocator, size: vk::DeviceSize) -> VkResult<Self> {
+        Self::new(allocator, size, vk::AccelerationStructureTypeKHR::TOP_LEVEL)
     }
     pub fn new(
         allocator: Allocator,

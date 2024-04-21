@@ -1,6 +1,7 @@
-use std::{mem::ManuallyDrop, ops::Deref};
+use std::{mem::ManuallyDrop, ops::Deref, sync::Arc};
 
 use crate::{
+    commands::SemaphoreSignalCommands,
     dispose::{dispose, DisposeObject},
     semaphore::TimelineSemaphore,
     ResourceState,
@@ -29,6 +30,17 @@ impl<T: Send + Sync + 'static> RenderRes<T> {
     }
     pub unsafe fn get_mut(&mut self) -> &mut T {
         &mut self.inner
+    }
+    pub fn try_swap<Q: Send + Sync + 'static>(
+        &mut self,
+        swapper: impl FnOnce(&mut T) -> Option<Q>,
+    ) -> Option<RenderRes<Q>> {
+        let Some(swapped) = swapper(&mut self.inner) else {
+            return None;
+        };
+        let mut swapped = RenderRes::new(swapped);
+        std::mem::swap(&mut self.state, &mut swapped.state);
+        Some(swapped)
     }
 }
 impl<T: Send + Sync + 'static> Drop for RenderRes<T> {

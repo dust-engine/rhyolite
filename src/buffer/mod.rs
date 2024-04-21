@@ -16,7 +16,7 @@ use crate::{
 };
 use vk_mem::Alloc;
 
-pub trait BufferLike: HasDevice {
+pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
     fn offset(&self) -> vk::DeviceSize {
         0
@@ -53,6 +53,19 @@ impl Drop for Buffer {
     }
 }
 impl Buffer {
+    pub fn from_raw(
+        allocator: Allocator,
+        buffer: vk::Buffer,
+        allocation: vk_mem::Allocation,
+    ) -> Self {
+        let size = allocator.get_allocation_info(&allocation).size;
+        Self {
+            allocator,
+            buffer,
+            allocation,
+            size,
+        }
+    }
     /// Create a new buffer with DEVICE_LOCAL, HOST_VISIBLE memory.
     pub fn new_dynamic(
         allocator: Allocator,
@@ -227,15 +240,16 @@ impl<T> BufferArray<T> {
         self.len
     }
     /// Ensure that the array is at least `new_len` elements long.
-    pub fn realloc(&mut self, new_len: usize) -> VkResult<()> {
+    pub fn realloc(&mut self, new_len: usize) -> VkResult<Option<Buffer>> {
         let new_capacity = new_len.next_power_of_two().max(8);
         if new_capacity <= self.len {
-            return Ok(());
+            return Ok(None);
         }
         unsafe {
-            if let Some(allocation) = &mut self.allocation {
-                self.allocator.destroy_buffer(self.buffer, allocation);
-            }
+            let old_buffer = self
+                .allocation
+                .take()
+                .map(|a| Buffer::from_raw(self.allocator.clone(), self.buffer, a));
             let (buffer, allocation) = self.allocator.create_buffer(
                 &vk::BufferCreateInfo {
                     size: Layout::new::<T>()
@@ -258,7 +272,7 @@ impl<T> BufferArray<T> {
             self.buffer = buffer;
             self.allocation = Some(allocation);
             self.len = new_capacity;
-            Ok(())
+            Ok(old_buffer)
         }
     }
     /// Create a new HOST_VISIBLE upload buffer for sequential write.

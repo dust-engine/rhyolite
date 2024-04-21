@@ -476,15 +476,15 @@ impl RhyoliteApp for App {
         let instance = self.world.resource::<Instance>();
         if !device_extension
             .extension_builders
-            .contains_key(T::Extension::name())
+            .contains_key(T::REQUIRED_DEVICE_EXT)
         {
-            if let Some(promoted_version) = T::Extension::PROMOTED_VK_VERSION {
+            if let Some(promoted_version) = T::PROMOTED_VK_VERSION {
                 if instance.api_version() < promoted_version {
                     tracing::warn!(
                         "Feature {:?} requires either Vulkan {} or enabling extension {:?}. Current Vulkan version: {}",
                         std::any::type_name::<T>(),
                         promoted_version,
-                        T::Extension::name(),
+                        T::REQUIRED_DEVICE_EXT,
                         instance.api_version()
                     );
                 }
@@ -492,7 +492,7 @@ impl RhyoliteApp for App {
                 tracing::warn!(
                     "Feature {:?} requires enabling extension {:?}",
                     std::any::type_name::<T>(),
-                    T::Extension::name()
+                    T::REQUIRED_DEVICE_EXT
                 );
             }
         }

@@ -2,17 +2,20 @@
 #![feature(alloc_layout_extra)]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(type_alias_impl_trait)]
+#![feature(associated_type_defaults)]
 
 mod accel_struct;
 mod blas;
 mod pipeline;
 mod sbt;
+mod tlas;
 
 pub use accel_struct::*;
 pub use blas::*;
 pub use pipeline::*;
 use rhyolite::ash::vk;
 pub use sbt::*;
+pub use tlas::*;
 
 use bevy::app::{App, Plugin};
 pub struct RtxPlugin;

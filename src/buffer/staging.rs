@@ -14,7 +14,9 @@ use bevy::{
     },
 };
 
-use crate::{commands::SemaphoreSignalCommands, semaphore::TimelineSemaphore, Device};
+use crate::{
+    commands::SemaphoreSignalCommands, semaphore::TimelineSemaphore, BufferLike, Device, HasDevice,
+};
 
 impl FromWorld for StagingBelt {
     fn from_world(world: &mut bevy::ecs::world::World) -> Self {
@@ -125,6 +127,16 @@ pub struct StagingBeltBatchJob<'a> {
 }
 
 impl StagingBeltBatchJob<'_> {
+    pub fn allocate_item<T>(&mut self) -> StagingBeltSuballocationItem<T> {
+        let allocation = self.allocate_buffer(
+            std::mem::size_of::<T>() as u64,
+            std::mem::align_of::<T>() as u64,
+        );
+        StagingBeltSuballocationItem {
+            allocation,
+            item: std::marker::PhantomData,
+        }
+    }
     pub fn allocate_buffer(
         &mut self,
         size: vk::DeviceSize,
@@ -247,6 +259,34 @@ impl Deref for StagingBeltSuballocation {
 impl DerefMut for StagingBeltSuballocation {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.size as usize) }
+    }
+}
+
+pub struct StagingBeltSuballocationItem<T> {
+    allocation: StagingBeltSuballocation,
+    item: std::marker::PhantomData<T>,
+}
+
+impl<T> BufferLike for StagingBeltSuballocationItem<T> {
+    fn size(&self) -> vk::DeviceSize {
+        self.allocation.size
+    }
+    fn raw_buffer(&self) -> vk::Buffer {
+        self.allocation.buffer
+    }
+    fn offset(&self) -> vk::DeviceSize {
+        self.allocation.offset
+    }
+}
+impl<T> Deref for StagingBeltSuballocationItem<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*(self.allocation.ptr.as_ptr() as *const T) }
+    }
+}
+impl<T> DerefMut for StagingBeltSuballocationItem<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *(self.allocation.ptr.as_ptr() as *mut T) }
     }
 }
 

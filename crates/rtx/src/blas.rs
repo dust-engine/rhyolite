@@ -32,15 +32,6 @@ pub struct BLAS {
     accel_struct: AccelStruct,
 }
 
-// Three ways to update:
-// Device build, upload buffer immediately
-// Device build, buffer already uploaded
-// Host build, provide data ptr.
-
-// Three ownership models:
-// Data owned as third data structure. Use writer pattern
-// Data owned as plain buffer. Prefer providing ptr.
-// Data owned as device buffer. Use device address.
 pub trait BLASBuildMarker: Send + Sync + 'static {
     /// The marker component. Any entities with this component will have a BLAS built for them.
     type Marker: Component;
@@ -49,15 +40,6 @@ pub trait BLASBuildMarker: Send + Sync + 'static {
     type QueryFilter: QueryFilter;
     /// Additional system entities to be passed.
     type Params: SystemParam;
-
-    /// If returns true, we will attempt to bulid the BLAS on the host side if possible.
-    /// Host side build will occur if:
-    /// 1. The GPU driver supports host side builds
-    /// 2. This function returns true
-    /// Whenever this function returns true, `geometries` must return objects that will support host address.
-    fn should_use_host_build(_params: &mut SystemParamItem<Self::Params>) -> bool {
-        false
-    }
 
     fn build_flags(
         params: &mut SystemParamItem<Self::Params>,
@@ -98,7 +80,11 @@ pub trait BLASStagingBuilder: BLASBuildMarker {
 /// Builders with data already located on host memory. Used for host builds.
 pub trait BLASHostBufferBuilder: BLASBuildMarker {
     type Data: Deref<Target = [u8]>;
-    fn geometries(
+
+    fn should_use_host_build(_params: &mut SystemParamItem<Self::Params>) -> bool {
+        false
+    }
+    fn host_geometries(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
     ) -> impl Iterator<Item = BLASBuildGeometry<Self::Data>>;

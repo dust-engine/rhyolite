@@ -137,7 +137,7 @@ impl Drop for ImmediateTransitions<'_> {
 }
 
 pub trait TrackedResource: Deref {
-    type State;
+    type State = ();
     fn transition(
         &mut self,
         access: Access,
@@ -148,12 +148,11 @@ pub trait TrackedResource: Deref {
     fn current_state(&self) -> Self::State;
 }
 
-default impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T> {
+impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T> {
     type State = ();
     fn current_state(&self) -> Self::State {
-        panic!()
     }
-    fn transition(
+    default fn transition(
         &mut self,
         access: Access,
         _retain_data: bool,
@@ -192,12 +191,8 @@ default impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T> {
     }
 }
 
-impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T>
-where
-    T: BufferLike,
+impl<T: Send + Sync + 'static + BufferLike> TrackedResource for RenderRes<T>
 {
-    type State = ();
-    fn current_state(&self) -> Self::State {}
     fn transition(
         &mut self,
         access: Access,
@@ -439,7 +434,7 @@ pub trait ResourceTransitionCommands: SemaphoreSignalCommands {
         access: Access,
         retain_data: bool,
         next_state: T::State,
-    ) -> &mut Self {
+    ) -> &mut Self { 
         res.transition(access, retain_data, next_state, self);
         self
     }
