@@ -233,6 +233,24 @@ impl<T> BufferLike for BufferArray<T> {
     fn raw_buffer(&self) -> vk::Buffer {
         self.buffer
     }
+    fn device_address(&self) -> vk::DeviceAddress {
+        unsafe {
+            self.allocator
+                .device()
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                    buffer: self.buffer,
+                    ..Default::default()
+                })
+        }
+    }
+    fn size(&self) -> vk::DeviceSize {
+        Layout::new::<T>()
+            .repeat(self.len)
+            .unwrap()
+            .0
+            .pad_to_align()
+            .size() as vk::DeviceSize
+    }
 }
 
 impl<T> BufferArray<T> {

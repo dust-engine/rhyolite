@@ -179,7 +179,7 @@ fn default_callback(
     if level == Level::ERROR {
         let bt = std::backtrace::Backtrace::capture();
         if bt.status() == std::backtrace::BacktraceStatus::Captured {
-            //println!("{}", bt);
+            println!("{}", bt);
         }
     }
 

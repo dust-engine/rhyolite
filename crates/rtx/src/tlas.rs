@@ -17,10 +17,13 @@ use bevy::{
         world::FromWorld,
     },
     math::{Mat4, Quat, Vec3, Vec4},
+    utils::tracing,
 };
 use rhyolite::{
     ash::{extensions::khr, vk},
     commands::{CommonCommands, ComputeCommands, ResourceTransitionCommands, TransferCommands},
+    cstr,
+    debug::DebugObject,
     ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands, RenderRes},
     staging::StagingBelt,
     Access, Allocator, Buffer, BufferArray, BufferLike, Device, HasDevice, Instance,
@@ -216,7 +219,7 @@ impl TLASInstanceData<'_> {
             vk::Packed24_8::new(offset, flags.as_raw() as u8);
         self.dirty = true;
     }
-    pub fn set_accel_struct(&mut self, accel_struct: &AccelStruct) {
+    pub fn set_blas(&mut self, accel_struct: &AccelStruct) {
         let reference = if self.host_build {
             vk::AccelerationStructureReferenceKHR {
                 host_handle: accel_struct.raw,
@@ -260,6 +263,7 @@ pub trait TLASBuilder: Send + Sync + 'static {
     type QueryData: ReadOnlyQueryData;
     type QueryFilter: ArchetypeFilter;
 
+    type AddFilter: QueryFilter;
     type ChangeFilter: QueryFilter;
     /// Additional system entities to be passed.
     type Params: SystemParam;
@@ -267,7 +271,9 @@ pub trait TLASBuilder: Send + Sync + 'static {
     fn has_motion(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
-    ) -> bool;
+    ) -> bool {
+        false
+    }
     fn instance(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
@@ -302,6 +308,7 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
             motion_buffer = Some(BufferArray::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::TRANSFER_SRC,
             ))
@@ -310,6 +317,7 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
             static_buffer: RenderRes::new(BufferArray::new_resource(
                 allocator,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::TRANSFER_SRC,
             )),
@@ -325,7 +333,7 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
 }
 
 fn assign_index<B: TLASBuilder>(
-    new_instances: Query<(Entity, B::QueryData), (B::QueryFilter, Added<B::Marker>)>,
+    new_instances: Query<(Entity, B::QueryData), (B::QueryFilter, B::AddFilter)>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
     mut removed: RemovedComponents<B::Marker>,
 ) {
@@ -346,9 +354,12 @@ fn assign_index<B: TLASBuilder>(
 }
 
 fn resize_buffer<B: Send + Sync + 'static>(
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'c'>,
     mut store: ResMut<TLASDeviceBuildStore<B>>,
 ) {
+    if store.entity_map.is_empty() {
+        return;
+    }
     let new_capacity = store.entity_map.len() as u32;
     let old_buffer = store
         .static_buffer
@@ -368,6 +379,7 @@ fn resize_buffer<B: Send + Sync + 'static>(
         );
     }
     if let Some(motion) = store.motion_buffer.as_mut() {
+        tracing::info!("Resizing TLAS motion input buffer to {}", new_capacity);
         let old_buffer = motion.try_swap(|buffer| buffer.realloc(new_capacity as usize).unwrap());
         if let Some(mut old_buffer) = old_buffer {
             commands
@@ -398,10 +410,10 @@ fn extract_input_barrier<B: TLASBuilder>(
 }
 
 fn extract_input<B: TLASBuilder>(
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'c'>,
     updated_instances: Query<
         (Entity, B::QueryData),
-        (B::QueryFilter, Or<(B::ChangeFilter, Added<B::Marker>)>),
+        (B::QueryFilter, Or<(B::ChangeFilter, B::AddFilter)>),
     >,
     mut staging_belt: ResMut<StagingBelt>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
@@ -465,6 +477,9 @@ fn prepare_tlas<B: Send + Sync + 'static>(
     allocator: Res<Allocator>,
     mut store: ResMut<TLASDeviceBuildStore<B>>,
 ) {
+    if store.entity_map.is_empty() {
+        return;
+    }
     let geometry = vk::AccelerationStructureGeometryKHR {
         geometry_type: vk::GeometryTypeKHR::INSTANCES,
         geometry: vk::AccelerationStructureGeometryDataKHR {
@@ -525,6 +540,8 @@ fn prepare_tlas<B: Send + Sync + 'static>(
                     vk::BufferUsageFlags::STORAGE_BUFFER
                         | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 )
+                .unwrap()
+                .with_name(cstr!("TLAS scratch buffer"))
                 .unwrap(),
             );
         }
@@ -536,6 +553,8 @@ fn prepare_tlas<B: Send + Sync + 'static>(
                 scratch_offset_alignment as u64,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             )
+            .unwrap()
+            .with_name(cstr!("TLAS scratch buffer"))
             .unwrap(),
         ));
     };
@@ -545,6 +564,9 @@ fn build_tlas_barrier<B: Send + Sync + 'static>(
     In(mut barriers): In<Barriers>,
     mut store: ResMut<TLASDeviceBuildStore<B>>,
 ) {
+    if store.entity_map.is_empty() {
+        return;
+    }
     // Inputs from extract may overlap regions from resize copy, so we need a barrier here
     barriers.transition(
         &mut store.static_buffer,
@@ -572,7 +594,7 @@ fn build_tlas_barrier<B: Send + Sync + 'static>(
             access: vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR,
             stage: vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
         },
-        true,
+        false,
         (),
     ); // TODO: make sure that this is caulling the correct impl
     barriers.transition(
@@ -591,6 +613,9 @@ fn build_tlas<B: Send + Sync + 'static>(
     mut commands: RenderCommands<'c'>,
     store: Res<TLASDeviceBuildStore<B>>,
 ) {
+    if store.entity_map.is_empty() {
+        return;
+    }
     let geometry = vk::AccelerationStructureGeometryKHR {
         geometry_type: vk::GeometryTypeKHR::INSTANCES,
         geometry: vk::AccelerationStructureGeometryDataKHR {
@@ -603,6 +628,10 @@ fn build_tlas<B: Send + Sync + 'static>(
         },
         ..Default::default()
     };
+    println!(
+        "Scratch buffer size: {}",
+        store.scratch_buffer.as_ref().unwrap().size()
+    );
     let build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
         ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
         flags: vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE,
@@ -623,13 +652,25 @@ fn build_tlas<B: Send + Sync + 'static>(
         &[build_info],
         std::iter::once([build_range_info].as_slice()),
     );
+    println!(
+        "Building TLAS for {} instances",
+        store.entity_map.len() as u32
+    );
 }
 
-pub struct TLASPlugin<T: TLASBuilder> {
+pub struct TLASBuilderPlugin<T: TLASBuilder> {
     _marker: std::marker::PhantomData<T>,
 }
-impl<T: TLASBuilder> Plugin for TLASPlugin<T> {
-    fn build(&self, app: &mut App) {
+impl<T: TLASBuilder> Default for TLASBuilderPlugin<T> {
+    fn default() -> Self {
+        Self {
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
+    fn build(&self, _app: &mut App) {}
+    fn finish(&self, app: &mut App) {
         if app
             .world
             .get_resource::<TLASDeviceBuildStore<T::TLASType>>()
@@ -641,8 +682,10 @@ impl<T: TLASBuilder> Plugin for TLASPlugin<T> {
                 (
                     resize_buffer::<T::TLASType>,
                     prepare_tlas::<T::TLASType>,
-                (build_tlas::<T::TLASType>).with_barriers(build_tlas_barrier::<T::TLASType>).after(prepare_tlas::<T::TLASType>),
-                )
+                    (build_tlas::<T::TLASType>)
+                        .with_barriers(build_tlas_barrier::<T::TLASType>)
+                        .after(prepare_tlas::<T::TLASType>),
+                ),
             );
         }
 
@@ -653,7 +696,7 @@ impl<T: TLASBuilder> Plugin for TLASPlugin<T> {
                     .with_barriers(extract_input_barrier::<T>)
                     .after(resize_buffer::<T::TLASType>)
                     .before(prepare_tlas::<T::TLASType>),
-                assign_index::<T>.before(resize_buffer::<T>),
+                assign_index::<T>.before(resize_buffer::<T::TLASType>),
             ),
         );
 

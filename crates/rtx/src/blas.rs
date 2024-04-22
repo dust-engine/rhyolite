@@ -31,6 +31,12 @@ use crate::AccelStruct;
 pub struct BLAS {
     accel_struct: AccelStruct,
 }
+impl Deref for BLAS {
+    type Target = AccelStruct;
+    fn deref(&self) -> &Self::Target {
+        &self.accel_struct
+    }
+}
 
 pub trait BLASBuildMarker: Send + Sync + 'static {
     /// The marker component. Any entities with this component will have a BLAS built for them.

@@ -594,10 +594,25 @@ impl ScheduleBuildPass for RenderSystemPass {
                 // Produce a subgraph
                 for i in queue_node.nodes.iter() {
                     queue_node_graph.add_node(*i);
-                    for next in render_graph.neighbors(*i) {
-                        if nodes.contains(&next) {
-                            queue_node_graph.add_edge(*i, next, ());
-                        }
+                    let mut neighbors = dependency_flattened
+                        .neighbors(NodeId::System(*i))
+                        .map(|next| (*i, next.index()))
+                        .collect::<Vec<_>>();
+                    while let Some((from, to)) = neighbors.pop() {
+                        if nodes.contains(&to) {
+                            queue_node_graph.add_edge(from, to, ()); // Note: In here, we also need to connect indirect dependencies.
+                        } else {
+                            let system = &graph.systems[to];
+                            if system.config.get::<RenderSystemConfig>().is_none() {
+                                // not a render system. Add its childrens too.
+                                neighbors.extend(
+                                    dependency_flattened
+                                        .neighbors(NodeId::System(to))
+                                        .map(|to| (*i, to.index())),
+                                );
+                            }
+                            continue;
+                        };
                     }
                 }
                 let mut heap: Vec<usize> = queue_node_graph

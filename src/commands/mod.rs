@@ -150,8 +150,7 @@ pub trait TrackedResource: Deref {
 
 impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T> {
     type State = ();
-    fn current_state(&self) -> Self::State {
-    }
+    fn current_state(&self) -> Self::State {}
     default fn transition(
         &mut self,
         access: Access,
@@ -191,8 +190,7 @@ impl<T: Send + Sync + 'static> TrackedResource for RenderRes<T> {
     }
 }
 
-impl<T: Send + Sync + 'static + BufferLike> TrackedResource for RenderRes<T>
-{
+impl<T: Send + Sync + 'static + BufferLike> TrackedResource for RenderRes<T> {
     fn transition(
         &mut self,
         access: Access,
@@ -434,7 +432,7 @@ pub trait ResourceTransitionCommands: SemaphoreSignalCommands {
         access: Access,
         retain_data: bool,
         next_state: T::State,
-    ) -> &mut Self { 
+    ) -> &mut Self {
         res.transition(access, retain_data, next_state, self);
         self
     }

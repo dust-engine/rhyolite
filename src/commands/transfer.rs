@@ -51,12 +51,10 @@ impl<T: TransferCommands> BatchCopy<'_, T> {
         }
     }
     pub fn copy_buffer(&mut self, src: vk::Buffer, dst: vk::Buffer, regions: &[vk::BufferCopy]) {
-        if self.src != vk::Buffer::null() && self.dst != vk::Buffer::null() {
-            if self.src != src || self.dst != dst {
-                self.flush();
-                self.src = src;
-                self.dst = dst;
-            }
+        if self.src != src || self.dst != dst {
+            self.flush();
+            self.src = src;
+            self.dst = dst;
         }
         self.copies.extend_from_slice(regions);
     }

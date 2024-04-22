@@ -100,16 +100,17 @@ impl StagingBelt {
         for (curr_sem, curr_val) in self.lifetime_marker.iter_mut() {
             if Arc::ptr_eq(curr_sem, &sem) {
                 *curr_val = val.max(*curr_val);
-                return StagingBeltBatchJob { belt: self };
+                return StagingBeltBatchJob {
+                    belt: self,
+                    dirty: false,
+                };
             }
         }
         self.lifetime_marker.push((sem, val));
-        StagingBeltBatchJob { belt: self }
-    }
-
-    #[cfg(test)]
-    pub fn start_unsafe(&mut self) -> StagingBeltBatchJob {
-        StagingBeltBatchJob { belt: self }
+        StagingBeltBatchJob {
+            belt: self,
+            dirty: false,
+        }
     }
 }
 struct StagingBeltChunk {
@@ -124,6 +125,7 @@ unsafe impl Sync for StagingBeltChunk {}
 
 pub struct StagingBeltBatchJob<'a> {
     belt: &'a mut StagingBelt,
+    dirty: bool,
 }
 
 impl StagingBeltBatchJob<'_> {
@@ -142,6 +144,7 @@ impl StagingBeltBatchJob<'_> {
         size: vk::DeviceSize,
         alignment: vk::DeviceSize,
     ) -> StagingBeltSuballocation {
+        self.dirty = true;
         if size > self.belt.chunk_size {
             unimplemented!()
         }
@@ -238,6 +241,13 @@ impl StagingBeltBatchJob<'_> {
                 size,
                 ptr,
             };
+        }
+    }
+}
+impl Drop for StagingBeltBatchJob<'_> {
+    fn drop(&mut self) {
+        if !self.dirty {
+            self.belt.lifetime_marker.pop();
         }
     }
 }

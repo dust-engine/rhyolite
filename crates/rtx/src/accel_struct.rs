@@ -22,6 +22,9 @@ impl Drop for AccelStruct {
     }
 }
 impl AccelStruct {
+    pub fn device_address(&self) -> vk::DeviceAddress {
+        self.device_address
+    }
     pub fn size(&self) -> vk::DeviceSize {
         self.buffer.size()
     }

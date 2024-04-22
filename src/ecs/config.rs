@@ -5,10 +5,11 @@ use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
-use bevy::ecs::system::{In, IntoSystem};
+use bevy::ecs::system::{In, IntoSystem, PipeSystem};
 use bevy::ecs::{
     schedule::{IntoSystemConfigs, SystemConfigs},
     system::BoxedSystem,
+    system::System,
 };
 use bevy::utils::smallvec::SmallVec;
 
@@ -240,7 +241,9 @@ where
             Some(Arc::new(BarrierProducerCell(UnsafeCell::new(None))))
         };
         let cell2 = cell.clone();
-        let system = barriers.pipe(move |In(input): In<O>| unsafe {
+
+        let system_a = IntoSystem::into_system(barriers);
+        let system_b = IntoSystem::into_system(move |In(input): In<O>| unsafe {
             // Cell is only ever written to in the barrier producer and read from in the render system.
             let Some(cell) = &cell else {
                 return;
@@ -248,6 +251,8 @@ where
             let ptr = cell.0.get().as_mut().unwrap();
             ptr.replace(input);
         });
+        let name = system_a.name();
+        let system = PipeSystem::new(system_a, system_b, name);
         let mut barriers: Option<RenderSystemBarrierProducerConfig> =
             Some(RenderSystemBarrierProducerConfig {
                 barrier_producer: Box::new(system),
