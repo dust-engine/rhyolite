@@ -1,7 +1,6 @@
-use std::{mem::ManuallyDrop, ops::Deref, sync::Arc};
+use std::{mem::ManuallyDrop, ops::Deref};
 
 use crate::{
-    commands::SemaphoreSignalCommands,
     dispose::{dispose, DisposeObject},
     semaphore::TimelineSemaphore,
     ResourceState,

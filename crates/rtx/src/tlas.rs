@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, ops::DerefMut};
+use std::{collections::BTreeMap, ffi::CString, mem::MaybeUninit, ops::DerefMut};
 
 use bevy::{
     app::{App, Plugin, PostUpdate},
@@ -25,7 +25,7 @@ use rhyolite::{
     cstr,
     debug::DebugObject,
     ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands, RenderRes},
-    staging::StagingBelt,
+    staging::{StagingBelt, StagingBeltSuballocation},
     Access, Allocator, Buffer, BufferArray, BufferLike, Device, HasDevice, Instance,
 };
 
@@ -35,8 +35,8 @@ pub struct TLASInstanceData<'a> {
     ty: vk::AccelerationStructureMotionInstanceTypeNV,
     dirty: bool,
     host_build: bool,
-    data: &'a mut vk::AccelerationStructureInstanceKHR,
-    motion_data: Option<&'a mut vk::AccelerationStructureMotionInstanceNV>,
+    data: &'a mut MaybeUninit<vk::AccelerationStructureInstanceKHR>,
+    motion_data: Option<&'a mut MaybeUninit<vk::AccelerationStructureMotionInstanceNV>>,
 }
 #[derive(Clone)]
 pub struct SRTTransform {
@@ -84,11 +84,18 @@ impl TLASInstanceData<'_> {
         }
         self.ty = vk::AccelerationStructureMotionInstanceTypeNV::STATIC;
         let slice = &transform.transpose().to_cols_array()[0..12];
-        self.data.transform.matrix.clone_from_slice(slice);
+        unsafe {
+            self.data
+                .assume_init_mut()
+                .transform
+                .matrix
+                .clone_from_slice(slice);
+        }
         if let Some(motion) = &mut self.motion_data {
-            motion.ty = vk::AccelerationStructureMotionInstanceTypeNV::STATIC;
             unsafe {
+                motion.assume_init_mut().ty = vk::AccelerationStructureMotionInstanceTypeNV::STATIC;
                 motion
+                    .assume_init_mut()
                     .data
                     .static_instance
                     .transform
@@ -113,15 +120,21 @@ impl TLASInstanceData<'_> {
         let from = &from.transpose().to_cols_array()[0..12];
         let to = &to.transpose().to_cols_array()[0..12];
         unsafe {
-            self.data.transform.matrix.clone_from_slice(from);
+            self.data
+                .assume_init_mut()
+                .transform
+                .matrix
+                .clone_from_slice(from);
 
             motion_data
+                .assume_init_mut()
                 .data
                 .matrix_motion_instance
                 .transform_t0
                 .matrix
                 .clone_from_slice(from);
             motion_data
+                .assume_init_mut()
                 .data
                 .matrix_motion_instance
                 .transform_t1
@@ -144,10 +157,23 @@ impl TLASInstanceData<'_> {
         }
         self.ty = vk::AccelerationStructureMotionInstanceTypeNV::SRT_MOTION;
         let slice = &mat.transpose().to_cols_array()[0..12];
-        self.data.transform.matrix.clone_from_slice(slice);
-
-        motion_data.data.srt_motion_instance.transform_t0 = from.into();
-        motion_data.data.srt_motion_instance.transform_t1 = to.into();
+        unsafe {
+            self.data
+                .assume_init_mut()
+                .transform
+                .matrix
+                .clone_from_slice(slice);
+            motion_data
+                .assume_init_mut()
+                .data
+                .srt_motion_instance
+                .transform_t0 = from.into();
+            motion_data
+                .assume_init_mut()
+                .data
+                .srt_motion_instance
+                .transform_t1 = to.into();
+        }
     }
     pub fn set_custom_index_and_mask(&mut self, custom_index: u32, mask: u8) {
         assert_eq!(
@@ -159,16 +185,22 @@ impl TLASInstanceData<'_> {
             unsafe {
                 let dst = match self.ty {
                     vk::AccelerationStructureMotionInstanceTypeNV::STATIC => {
-                        &mut motion.data.static_instance.instance_custom_index_and_mask
+                        &mut motion
+                            .assume_init_mut()
+                            .data
+                            .static_instance
+                            .instance_custom_index_and_mask
                     }
                     vk::AccelerationStructureMotionInstanceTypeNV::MATRIX_MOTION => {
                         &mut motion
+                            .assume_init_mut()
                             .data
                             .matrix_motion_instance
                             .instance_custom_index_and_mask
                     }
                     vk::AccelerationStructureMotionInstanceTypeNV::SRT_MOTION => {
                         &mut motion
+                            .assume_init_mut()
                             .data
                             .srt_motion_instance
                             .instance_custom_index_and_mask
@@ -178,7 +210,10 @@ impl TLASInstanceData<'_> {
                 *dst = vk::Packed24_8::new(custom_index, mask);
             }
         }
-        self.data.instance_custom_index_and_mask = vk::Packed24_8::new(custom_index, mask);
+        unsafe {
+            self.data.assume_init_mut().instance_custom_index_and_mask =
+                vk::Packed24_8::new(custom_index, mask);
+        }
         self.dirty = true;
     }
     pub fn set_sbt_offset_and_flags(&mut self, offset: u32, flags: vk::GeometryInstanceFlagsKHR) {
@@ -192,18 +227,21 @@ impl TLASInstanceData<'_> {
                 match self.ty {
                     vk::AccelerationStructureMotionInstanceTypeNV::STATIC => {
                         &mut motion
+                            .assume_init_mut()
                             .data
                             .static_instance
                             .instance_shader_binding_table_record_offset_and_flags
                     }
                     vk::AccelerationStructureMotionInstanceTypeNV::MATRIX_MOTION => {
                         &mut motion
+                            .assume_init_mut()
                             .data
                             .matrix_motion_instance
                             .instance_shader_binding_table_record_offset_and_flags
                     }
                     vk::AccelerationStructureMotionInstanceTypeNV::SRT_MOTION => {
                         &mut motion
+                            .assume_init_mut()
                             .data
                             .srt_motion_instance
                             .instance_shader_binding_table_record_offset_and_flags
@@ -214,9 +252,12 @@ impl TLASInstanceData<'_> {
 
             *dst = vk::Packed24_8::new(offset, flags.as_raw() as u8);
         }
-        self.data
-            .instance_shader_binding_table_record_offset_and_flags =
-            vk::Packed24_8::new(offset, flags.as_raw() as u8);
+        unsafe {
+            self.data
+                .assume_init()
+                .instance_shader_binding_table_record_offset_and_flags =
+                vk::Packed24_8::new(offset, flags.as_raw() as u8);
+        }
         self.dirty = true;
     }
     pub fn set_blas(&mut self, accel_struct: &AccelStruct) {
@@ -233,16 +274,22 @@ impl TLASInstanceData<'_> {
             unsafe {
                 match self.ty {
                     vk::AccelerationStructureMotionInstanceTypeNV::STATIC => {
-                        motion.data.static_instance.acceleration_structure_reference = reference;
+                        motion
+                            .assume_init_mut()
+                            .data
+                            .static_instance
+                            .acceleration_structure_reference = reference;
                     }
                     vk::AccelerationStructureMotionInstanceTypeNV::MATRIX_MOTION => {
                         motion
+                            .assume_init_mut()
                             .data
                             .matrix_motion_instance
                             .acceleration_structure_reference = reference;
                     }
                     vk::AccelerationStructureMotionInstanceTypeNV::SRT_MOTION => {
                         motion
+                            .assume_init_mut()
                             .data
                             .srt_motion_instance
                             .acceleration_structure_reference = reference;
@@ -251,19 +298,31 @@ impl TLASInstanceData<'_> {
                 }
             }
         }
-        self.data.acceleration_structure_reference = reference;
+        unsafe {
+            self.data.assume_init_mut().acceleration_structure_reference = reference;
+        }
     }
 }
 
 pub struct DefaultTLAS;
+
+/// Trait for building top-level acceleration structures.
 pub trait TLASBuilder: Send + Sync + 'static {
     type TLASType: Send + Sync + 'static = DefaultTLAS;
+
+    /// The marker trait for removal detection.
     type Marker: Component;
-    /// Associated entities to be passed.
+
+    /// Associated components to be passed.
     type QueryData: ReadOnlyQueryData;
+
+    /// Additional filter for instances.
     type QueryFilter: ArchetypeFilter;
 
+    /// Entities with this filter will be added to the TLAS input buffer.
     type AddFilter: QueryFilter;
+
+    /// Entities with this filter will have their entry in the TLAS input buffer updated.
     type ChangeFilter: QueryFilter;
     /// Additional system entities to be passed.
     type Params: SystemParam;
@@ -440,8 +499,10 @@ fn extract_input<B: TLASBuilder>(
                 ty: vk::AccelerationStructureMotionInstanceTypeNV::STATIC,
                 dirty: false,
                 host_build: false,
-                data: &mut allocation,
-                motion_data: motion_allocation.as_deref_mut(),
+                data: allocation.uninit_mut(),
+                motion_data: motion_allocation
+                    .as_mut()
+                    .map(StagingBeltSuballocation::uninit_mut),
             },
         );
         job.copy_buffer(
@@ -514,12 +575,16 @@ fn prepare_tlas<B: Send + Sync + 'static>(
         if accel_struct.size() < build_size.acceleration_structure_size {
             *accel_struct = RenderRes::new(
                 AccelStruct::new_tlas(allocator.clone(), build_size.acceleration_structure_size)
+                    .unwrap()
+                    .with_name(CString::new(std::any::type_name::<B>()).unwrap().as_c_str())
                     .unwrap(),
             );
         }
     } else {
         store.accel_struct = Some(RenderRes::new(
             AccelStruct::new_tlas(allocator.clone(), build_size.acceleration_structure_size)
+                .unwrap()
+                .with_name(CString::new(std::any::type_name::<B>()).unwrap().as_c_str())
                 .unwrap(),
         ));
     };
@@ -652,12 +717,14 @@ fn build_tlas<B: Send + Sync + 'static>(
         &[build_info],
         std::iter::once([build_range_info].as_slice()),
     );
-    println!(
-        "Building TLAS for {} instances",
-        store.entity_map.len() as u32
-    );
 }
 
+/// Building the TLAS on the device.
+/// This plugin maintains a device local TLAS input buffer. On updates, it copies the updated entries to the buffer
+/// using the staging belt.
+///
+/// We use a staging belt regardless of the GPU memory architecture because the TLAS input buffer updates need to happen
+/// on device timeline.
 pub struct TLASBuilderPlugin<T: TLASBuilder> {
     _marker: std::marker::PhantomData<T>,
 }

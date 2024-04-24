@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     num::NonZeroU32,
+    ops::Range,
 };
 
 use bevy::{
@@ -13,10 +14,17 @@ use bevy::{
         removal_detection::RemovedComponents,
         system::{Query, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem},
     },
+    math::UVec3,
     utils::smallvec::SmallVec,
 };
+use bytemuck::{NoUninit, Pod};
 use itertools::Itertools;
-use rhyolite::{ash::vk, Allocator};
+use rhyolite::{
+    ash::{extensions::khr, vk},
+    commands::ComputeCommands,
+    staging::{StagingBeltBatchJob, UniformBelt},
+    Allocator, HasDevice,
+};
 
 use rhyolite::{
     buffer::BufferLike,
@@ -58,7 +66,7 @@ pub struct HitgroupSbtLayout {
     pub inline_params_size: usize,
 }
 
-pub trait SbtMarker: Send + Sync + 'static {
+pub trait SBTBuilder: Send + Sync + 'static {
     /// Type to uniquely identify a SBT entry.
     type HitgroupKey: Send + Sync + Ord + Copy;
 
@@ -90,7 +98,7 @@ pub trait SbtMarker: Send + Sync + 'static {
 }
 
 #[derive(Resource)]
-pub struct SbtManager<T: SbtMarker, const NUM_RAYTYPES: usize> {
+pub struct SbtManager<T: SBTBuilder, const NUM_RAYTYPES: usize> {
     pipeline_group: PipelineGroupManager<NUM_RAYTYPES>,
     hitgroup_layout: HitgroupSbtLayout,
 
@@ -115,15 +123,15 @@ pub struct SbtManager<T: SbtMarker, const NUM_RAYTYPES: usize> {
     pipelines: Option<SmallVec<[RenderObject<RayTracingPipeline>; NUM_RAYTYPES]>>,
 }
 // Note: For this to be safe we cannot leak the SbtEntry.
-unsafe impl<T: SbtMarker, const NUM_RAYTYPES: usize> Send for SbtManager<T, NUM_RAYTYPES> {}
-unsafe impl<T: SbtMarker, const NUM_RAYTYPES: usize> Sync for SbtManager<T, NUM_RAYTYPES> {}
+unsafe impl<T: SBTBuilder, const NUM_RAYTYPES: usize> Send for SbtManager<T, NUM_RAYTYPES> {}
+unsafe impl<T: SBTBuilder, const NUM_RAYTYPES: usize> Sync for SbtManager<T, NUM_RAYTYPES> {}
 
 #[derive(Component)]
-pub struct SbtHandle<T: SbtMarker> {
+pub struct SbtHandle<T: SBTBuilder> {
     index: u32,
     _marker: PhantomData<T>,
 }
-impl<T: SbtMarker> Default for SbtHandle<T> {
+impl<T: SBTBuilder> Default for SbtHandle<T> {
     fn default() -> Self {
         Self {
             index: u32::MAX,
@@ -132,7 +140,7 @@ impl<T: SbtMarker> Default for SbtHandle<T> {
     }
 }
 
-impl<T: SbtMarker, const NUM_RAYTYPES: usize> SbtManager<T, NUM_RAYTYPES>
+impl<T: SBTBuilder, const NUM_RAYTYPES: usize> SbtManager<T, NUM_RAYTYPES>
 where
     [(); NUM_RAYTYPES]: Sized,
 {
@@ -388,5 +396,142 @@ where
     pub fn remove_hitgroup(&mut self, handle: HitgroupHandle) {
         self.pipeline_group.remove_hitgroup(handle);
         self.full_update_required = true; // TODO: Disable this for when pipeline library can be enabled
+    }
+}
+
+pub struct TraceRayBuilder<'a, T: ComputeCommands> {
+    pipeline: &'a RayTracingPipeline,
+    copy_job: StagingBeltBatchJob<'a>,
+    commands: &'a mut T,
+    raygen_shader_binding_tables: SmallVec<[vk::StridedDeviceAddressRegionKHR; 1]>,
+    miss_shader_binding_tables: vk::StridedDeviceAddressRegionKHR,
+    callable_shader_binding_tables: vk::StridedDeviceAddressRegionKHR,
+    extent: UVec3,
+}
+impl RayTracingPipeline {
+    pub fn trace_rays<'a, T: ComputeCommands>(
+        &'a self,
+        uniform_belt: &'a mut UniformBelt,
+        commands: &'a mut T,
+    ) -> TraceRayBuilder<'_, T> {
+        TraceRayBuilder {
+            pipeline: self,
+            copy_job: uniform_belt.start(commands.semaphore_signal()),
+            raygen_shader_binding_tables: SmallVec::from_elem(
+                vk::StridedDeviceAddressRegionKHR::default(),
+                self.handles().num_raygen() as usize,
+            ),
+            miss_shader_binding_tables: vk::StridedDeviceAddressRegionKHR::default(),
+            callable_shader_binding_tables: vk::StridedDeviceAddressRegionKHR::default(),
+            extent: UVec3::default(),
+            commands,
+        }
+    }
+}
+
+impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
+    pub fn bind_raygen<D: NoUninit>(&mut self, index: u32, data: &D) -> &mut Self {
+        let handle = self.pipeline.handles().rgen(index as usize);
+        let data = bytemuck::bytes_of(data);
+
+        let properties = self
+            .pipeline
+            .device()
+            .physical_device()
+            .properties()
+            .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+        let mut allocation = self.copy_job.allocate_buffer(
+            handle.len() as u64 + data.len() as u64,
+            properties.shader_group_base_alignment as u64,
+        );
+        allocation[0..handle.len()].copy_from_slice(handle);
+        allocation[handle.len()..].copy_from_slice(data);
+
+        self.raygen_shader_binding_tables[index as usize] = vk::StridedDeviceAddressRegionKHR {
+            device_address: allocation.device_address(),
+            stride: handle.len() as u64 + data.len() as u64,
+            size: handle.len() as u64 + data.len() as u64,
+        };
+        self
+    }
+    fn bind_inner<'a, D: NoUninit, I>(&mut self, args: I) -> vk::StridedDeviceAddressRegionKHR
+    where
+        I: IntoIterator<Item = &'a D>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let args = args.into_iter();
+        let properties = self
+            .pipeline
+            .device()
+            .physical_device()
+            .properties()
+            .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+        let stride = (properties.shader_group_handle_size + std::mem::size_of::<D>() as u32)
+            .next_multiple_of(properties.shader_group_handle_alignment);
+        let total_size = stride as u64 * args.len() as u64;
+        let mut allocation = self
+            .copy_job
+            .allocate_buffer(total_size, properties.shader_group_base_alignment as u64);
+        for (i, arg) in args.enumerate() {
+            let handle = self.pipeline.handles().rmiss(i);
+            let arg = bytemuck::bytes_of(arg);
+            let entry = &mut allocation[i * stride as usize..(i + 1) * stride as usize];
+            entry[0..handle.len()].copy_from_slice(handle);
+            entry[handle.len()..].copy_from_slice(arg);
+        }
+        vk::StridedDeviceAddressRegionKHR {
+            device_address: allocation.device_address(),
+            stride: stride as u64,
+            size: total_size,
+        }
+    }
+    pub fn bind_miss<'a, D: NoUninit, I>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = &'a D>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        self.miss_shader_binding_tables = self.bind_inner(args);
+        self
+    }
+    pub fn bind_callable<'a, D: NoUninit, I>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = &'a D>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        self.callable_shader_binding_tables = self.bind_inner(args);
+        self
+    }
+    pub fn trace(self, raygen_index: usize) {
+        unsafe {
+            self.pipeline
+                .device()
+                .extension::<khr::RayTracingPipeline>()
+                .cmd_trace_rays(
+                    self.commands.cmd_buf(),
+                    &self.raygen_shader_binding_tables[raygen_index],
+                    &self.miss_shader_binding_tables,
+                    &vk::StridedDeviceAddressRegionKHR::default(),
+                    &self.callable_shader_binding_tables,
+                    self.extent.x,
+                    self.extent.y,
+                    self.extent.z,
+                );
+        }
+    }
+
+    pub fn trace_indirect(self, raygen_index: usize, indirect_device_address: vk::DeviceAddress) {
+        unsafe {
+            self.pipeline
+                .device()
+                .extension::<khr::RayTracingPipeline>()
+                .cmd_trace_rays_indirect(
+                    self.commands.cmd_buf(),
+                    &[self.raygen_shader_binding_tables[raygen_index]],
+                    &[self.miss_shader_binding_tables],
+                    &[vk::StridedDeviceAddressRegionKHR::default()],
+                    &[self.callable_shader_binding_tables],
+                    indirect_device_address,
+                );
+        }
     }
 }

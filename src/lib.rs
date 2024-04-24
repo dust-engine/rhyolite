@@ -7,6 +7,8 @@
 #![feature(alloc_layout_extra)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(let_chains)]
+#![feature(type_changing_struct_update)]
+#![feature(ptr_as_uninit)]
 #![feature(specialization)]
 
 mod access;

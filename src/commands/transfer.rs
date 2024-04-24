@@ -56,7 +56,16 @@ impl<T: TransferCommands> BatchCopy<'_, T> {
             self.src = src;
             self.dst = dst;
         }
-        self.copies.extend_from_slice(regions);
+        if let Some(last_copy) = self.copies.last_mut()
+            && let Some(current_copy) = regions.first()
+            && (current_copy.src_offset == last_copy.src_offset + last_copy.size
+                && current_copy.dst_offset == last_copy.dst_offset + last_copy.size)
+        {
+            // Optimization: extend the previous buffer copy instead
+            last_copy.size += current_copy.size;
+        } else {
+            self.copies.extend_from_slice(regions);
+        }
     }
 }
 impl<T: TransferCommands> Drop for BatchCopy<'_, T> {

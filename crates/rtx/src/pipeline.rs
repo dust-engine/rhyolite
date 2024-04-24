@@ -2,6 +2,7 @@ use std::{alloc::Layout, collections::BTreeSet, sync::Arc};
 
 use bevy::{
     asset::{AssetId, Assets},
+    math::UVec3,
     utils::{
         nonmax::{self, NonMaxU16, NonMaxU32},
         smallvec::SmallVec,
@@ -10,6 +11,7 @@ use bevy::{
 
 use rhyolite::{
     ash::{extensions::khr, prelude::VkResult, vk},
+    commands::ComputeCommands,
     deferred::{DeferredOperationTaskPool, Task},
     dispose::RenderObject,
     pipeline::{
@@ -24,6 +26,11 @@ use rhyolite::{
 pub struct RayTracingPipeline {
     inner: Arc<PipelineInner>,
     handles: SbtHandles,
+}
+impl HasDevice for RayTracingPipeline {
+    fn device(&self) -> &Device {
+        self.inner.device()
+    }
 }
 impl RayTracingPipeline {
     pub fn handles(&self) -> &SbtHandles {
@@ -631,6 +638,7 @@ impl SbtHandles {
     }
 
     pub fn rgen(&self, index: usize) -> &[u8] {
+        assert!(index < self.num_raygen as usize);
         // Note that
         // VUID-vkGetRayTracingShaderGroupHandlesKHR-dataSize-02420
         // dataSize must be at least VkPhysicalDeviceRayTracingPipelinePropertiesKHR::shaderGroupHandleSize × groupCount
@@ -640,15 +648,29 @@ impl SbtHandles {
         &self.data[start..end]
     }
     pub fn rmiss(&self, index: usize) -> &[u8] {
+        assert!(index < self.num_miss as usize);
         let start = self.handle_layout.size() * (index + self.num_raygen as usize);
         let end = start + self.handle_layout.size();
         &self.data[start..end]
     }
     pub fn callable(&self, index: usize) -> &[u8] {
+        assert!(index < self.num_callable as usize);
         let start =
             self.handle_layout.size() * (index + self.num_raygen as usize + self.num_miss as usize);
         let end = start + self.handle_layout.size();
         &self.data[start..end]
+    }
+    pub fn num_raygen(&self) -> u8 {
+        self.num_raygen
+    }
+    pub fn num_miss(&self) -> u8 {
+        self.num_miss
+    }
+    pub fn num_callable(&self) -> u8 {
+        self.num_callable
+    }
+    pub fn num_hitgroup(&self) -> u32 {
+        self.num_hitgroup
     }
     pub fn hitgroup(&self, hitgroup_index: HitgroupHandle) -> &[u8] {
         let index = self.hitgroup_handle_map[hitgroup_index.0.get() as usize];
@@ -856,6 +878,18 @@ pub struct PipelineGroupManager<const NUM_RAYTYPES: usize> {
 }
 
 impl<const NUM_RAYTYPES: usize> PipelineGroupManager<NUM_RAYTYPES> {
+    /// Create a pipeline group with `NUM_RAYTYPES` ray types, one for each pipeline object.
+    pub fn new(pipelines: [RayTracingPipelineManager; NUM_RAYTYPES]) -> Self {
+        let mut ray_types = [0; NUM_RAYTYPES];
+        ray_types.iter_mut().enumerate().for_each(|(i, ray_type)| {
+            *ray_type = i as u8;
+        });
+        Self {
+            ray_types,
+            pipelines: SmallVec::from(pipelines),
+            free_hitgroup_handles: Vec::new(),
+        }
+    }
     pub fn pipeline_index_of_raytype(&self, raytype: u32) -> u8 {
         self.ray_types[raytype as usize]
     }
