@@ -1,7 +1,8 @@
 use crate::{utils::unwrap_future, Device};
+use ash::khr::deferred_host_operations::Device as DeferredHostOperations;
 use ash::{
     prelude::VkResult,
-    vk::{self},
+    vk::{self, DeviceExtension},
 };
 use bevy::ecs::{system::Resource, world::FromWorld};
 use crossbeam_channel::Sender;
@@ -22,7 +23,7 @@ impl Drop for DeferredHostOperation {
     fn drop(&mut self) {
         unsafe {
             self.device
-                .extension::<ash::extensions::khr::DeferredHostOperations>()
+                .extension::<DeferredHostOperations>()
                 .destroy_deferred_operation(self.raw, None);
         }
     }
@@ -31,7 +32,7 @@ impl DeferredHostOperation {
     fn new(device: Device) -> VkResult<Self> {
         let raw = unsafe {
             device
-                .extension::<ash::extensions::khr::DeferredHostOperations>()
+                .extension::<DeferredHostOperations>()
                 .create_deferred_operation(None)?
         };
         Ok(Self { device, raw })
@@ -39,7 +40,7 @@ impl DeferredHostOperation {
     fn get_max_concurrency(&self) -> u32 {
         unsafe {
             self.device
-                .extension::<ash::extensions::khr::DeferredHostOperations>()
+                .extension::<DeferredHostOperations>()
                 .get_deferred_operation_max_concurrency(self.raw)
         }
     }
@@ -47,7 +48,7 @@ impl DeferredHostOperation {
         match unsafe {
             (self
                 .device
-                .extension::<ash::extensions::khr::DeferredHostOperations>()
+                .extension::<DeferredHostOperations>()
                 .fp()
                 .get_deferred_operation_result_khr)(self.device.handle(), self.raw)
         } {
@@ -95,10 +96,7 @@ impl Drop for DeferredOperationTaskPoolInner {
 
 impl DeferredOperationTaskPool {
     pub fn new(device: Device) -> Self {
-        if device
-            .get_extension::<ash::extensions::khr::DeferredHostOperations>()
-            .is_err()
-        {
+        if device.get_extension::<DeferredHostOperations>().is_err() {
             return Self(None);
         }
         // At most one Task may be in the channel at any given time
@@ -136,7 +134,7 @@ impl DeferredOperationTaskPool {
                         }
                         match unsafe {
                             (device
-                                .extension::<ash::extensions::khr::DeferredHostOperations>()
+                                .extension::<DeferredHostOperations>()
                                 .fp()
                                 .deferred_operation_join_khr)(
                                 device.handle(), task.op.raw()

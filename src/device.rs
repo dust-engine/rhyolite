@@ -1,4 +1,3 @@
-use crate::extensions::DeviceExtension;
 use crate::extensions::ExtensionNotFoundError;
 use crate::plugin::DeviceMetaBuilder;
 use crate::Feature;
@@ -8,6 +7,7 @@ use crate::PhysicalDevice;
 use crate::Queues;
 use ash::prelude::VkResult;
 use ash::vk;
+use ash::vk::DeviceExtension;
 use bevy::ecs::system::Resource;
 use bevy::utils::hashbrown::HashMap;
 
@@ -99,7 +99,7 @@ impl Device {
     pub fn get_extension<T: DeviceExtension>(&self) -> Result<&T, ExtensionNotFoundError> {
         self.0
             .extensions
-            .get(T::name())
+            .get(T::NAME)
             .map(|item| item.as_ref().expect("Extension did not add any additional commands; use `has_extension_named` to test if the extension was enabled.").downcast_ref::<T>().unwrap())
             .ok_or(ExtensionNotFoundError)
     }

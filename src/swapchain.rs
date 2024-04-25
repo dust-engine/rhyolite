@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, ops::Deref, sync::Arc};
 
-use ash::{extensions::khr, prelude::VkResult, vk};
+use ash::{prelude::VkResult, vk};
 use bevy::window::{PrimaryWindow, Window};
 use bevy::{
     app::{App, Plugin, PostUpdate},
@@ -21,7 +21,7 @@ use crate::{
     utils::{ColorSpace, SharingMode},
     Access, Device, ImageLike, ImageViewLike, PhysicalDevice, Queues, Surface,
 };
-
+use ash::khr::swapchain::Device as KhrSwapchain;
 pub struct SwapchainPlugin {
     num_frame_in_flight: u32,
 }
@@ -36,8 +36,7 @@ impl Default for SwapchainPlugin {
 
 impl Plugin for SwapchainPlugin {
     fn build(&self, app: &mut App) {
-        app.add_device_extension::<ash::extensions::khr::Swapchain>()
-            .unwrap();
+        app.add_device_extension::<KhrSwapchain>().unwrap();
 
         app.add_systems(
             PostUpdate,
@@ -100,7 +99,7 @@ impl Drop for SwapchainInner {
     fn drop(&mut self) {
         unsafe {
             self.device
-                .extension::<khr::Swapchain>()
+                .extension::<KhrSwapchain>()
                 .destroy_swapchain(self.inner, None);
         }
     }
@@ -133,7 +132,7 @@ impl Swapchain {
             color_space = ?info.image_color_space,
             "Creating swapchain"
         );
-        let swapchain_loader = device.extension::<khr::Swapchain>();
+        let swapchain_loader = device.extension::<KhrSwapchain>();
         unsafe {
             let mut create_info = vk::SwapchainCreateInfoKHR {
                 flags: info.flags,
@@ -268,13 +267,13 @@ impl Swapchain {
             let new_swapchain = self
                 .inner
                 .device
-                .extension::<khr::Swapchain>()
+                .extension::<KhrSwapchain>()
                 .create_swapchain(&create_info, None)?;
 
             let images = self
                 .inner
                 .device
-                .extension::<khr::Swapchain>()
+                .extension::<KhrSwapchain>()
                 .get_swapchain_images(new_swapchain)?;
 
             let inner = SwapchainInner {
@@ -737,7 +736,7 @@ impl ImageViewLike for SwapchainImageInner {
     }
 }
 
-/// Acquires the next image from the swapchain by calling [`ash::extensions::khr::Swapchain::acquire_next_image`].
+/// Acquires the next image from the swapchain by calling [`ash::khr::Swapchain::acquire_next_image`].
 /// Generic parameter `Filter` is used to uniquely specify the swapchain to acquire from.
 /// For example, `With<PrimaryWindow>` will only acquire the next image from the swapchain
 /// associated with the primary window.
@@ -769,7 +768,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         swapchain
             .inner
             .device
-            .extension::<khr::Swapchain>()
+            .extension::<KhrSwapchain>()
             .acquire_next_image(
                 swapchain.inner.inner,
                 !0,
@@ -905,7 +904,7 @@ pub fn present(
     let queue = queues_router.get(present_queue);
     unsafe {
         device
-            .extension::<khr::Swapchain>()
+            .extension::<KhrSwapchain>()
             .queue_present(
                 *queue,
                 &vk::PresentInfoKHR {

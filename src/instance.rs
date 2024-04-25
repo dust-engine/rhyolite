@@ -1,9 +1,8 @@
-use crate::{
-    cstr,
-    extensions::{ExtensionNotFoundError, InstanceExtension},
-    plugin::InstanceMetaBuilder,
+use crate::{cstr, extensions::ExtensionNotFoundError, plugin::InstanceMetaBuilder};
+use ash::{
+    prelude::VkResult,
+    vk::{self, InstanceExtension},
 };
-use ash::{prelude::VkResult, vk};
 use bevy::ecs::system::Resource;
 use bevy::utils::hashbrown::HashMap;
 use std::{
@@ -173,7 +172,7 @@ impl Instance {
     pub fn get_extension<T: InstanceExtension>(&self) -> Result<&T, ExtensionNotFoundError> {
         self.0
             .extensions
-            .get(&T::name())
+            .get(&T::NAME)
             .map(|item| {
                 item.as_ref()
                     .expect("Instance extension does not have a function table.")

@@ -27,12 +27,11 @@ impl HasDevice for Allocator {
 
 impl Allocator {
     pub fn new(device: Device) -> VkResult<Self> {
-        let info = vk_mem::AllocatorCreateInfo::new(
+        let mut info = vk_mem::AllocatorCreateInfo::new(
             device.instance(),
             &device,
             device.physical_device().raw(),
         );
-        let mut flags = vk_mem::AllocatorCreateFlags::NONE;
 
         let buffer_device_address_enabled = device
             .feature::<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
@@ -40,9 +39,8 @@ impl Allocator {
             .map(|b| b == vk::TRUE)
             .unwrap_or(false);
         if buffer_device_address_enabled {
-            flags |= vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+            info.flags |= vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
         }
-        let info = info.flags(flags);
         let alloc = vk_mem::Allocator::new(info)?;
         Ok(Self(Arc::new(AllocatorInner {
             device,

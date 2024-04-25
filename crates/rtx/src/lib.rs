@@ -22,7 +22,7 @@ pub struct RtxPlugin;
 impl Plugin for RtxPlugin {
     fn build(&self, app: &mut App) {
         use bevy::utils::tracing;
-        use rhyolite::{ash::extensions::khr, RhyoliteApp};
+        use rhyolite::{ash::khr, RhyoliteApp};
         app.add_device_extension::<khr::AccelerationStructure>()
             .unwrap();
         app.add_device_extension::<khr::RayTracingPipeline>()

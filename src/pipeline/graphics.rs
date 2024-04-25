@@ -9,7 +9,6 @@ use bevy::asset::{AssetId, Assets};
 use crate::shader::{ShaderModule, SpecializedShader};
 use crate::{
     deferred::{DeferredOperationTaskPool, Task},
-    utils::SendBox,
     Device,
 };
 
@@ -40,15 +39,15 @@ impl super::Pipeline for GraphicsPipeline {
 pub struct Builder<'a> {
     device: &'a Device,
     cache: vk::PipelineCache,
-    info: vk::GraphicsPipelineCreateInfo,
+    info: vk::GraphicsPipelineCreateInfo<'a>,
 }
-impl Deref for Builder<'_> {
-    type Target = vk::GraphicsPipelineCreateInfo;
+impl<'a> Deref for Builder<'a> {
+    type Target = vk::GraphicsPipelineCreateInfo<'a>;
     fn deref(&self) -> &Self::Target {
         &self.info
     }
 }
-impl DerefMut for Builder<'_> {
+impl<'a> DerefMut for Builder<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.info
     }
@@ -98,12 +97,17 @@ impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
     ) -> Option<Task<Self::Pipeline>> {
         let device = self.device.clone();
         let builder = self.builder.clone();
-        let stages = SendBox(SpecializedShader::as_raw_many(&self.stages, assets)?);
+        let modules = self.stages.iter().map(|shader| assets.get(&shader.shader).map(|s| s.raw())).collect::<Option<Vec<_>>>()?;
+        let stages = self.stages.clone();
         Some(pool.schedule(move || {
-            let (specialization_info, stages) = stages.into_inner();
-            let mut info = vk::GraphicsPipelineCreateInfo::default();
-            info.stage_count = stages.len() as u32;
-            info.p_stages = stages.as_ptr();
+            let raw_specialization_info = stages
+                .iter()
+                .map(SpecializedShader::raw_specialization_info)
+                .collect::<Vec<_>>();
+            let stages = stages.iter().zip(raw_specialization_info.iter()).zip(modules.into_iter()).map(|((shader, specialization_info), module)| {
+                vk::PipelineShaderStageCreateInfo::default().flags(shader.flags).stage(shader.stage).module(module).name(&shader.entry_point).specialization_info(specialization_info)
+            }).collect::<Vec<_>>();
+            let mut info = vk::GraphicsPipelineCreateInfo::default().stages(&stages);
             let result = builder(Builder {
                 device: &device,
                 cache,
@@ -111,7 +115,7 @@ impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
             })
             .0?;
             drop(stages);
-            drop(specialization_info);
+            drop(raw_specialization_info);
             Ok(PipelineInner {
                 device,
                 pipeline: result,

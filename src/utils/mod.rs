@@ -1,10 +1,8 @@
 mod format;
 mod future;
-mod send;
 use ash::vk::{self, TaggedStructure};
 pub use format::*;
 pub use future::*;
-pub use send::SendBox;
 use std::{ops::Deref, ptr::NonNull};
 
 #[derive(Debug, Clone)]

@@ -1,10 +1,10 @@
-use crate::{extensions::DeviceExtension, utils::VkTaggedObject, Version};
+use crate::{utils::VkTaggedObject, Version};
 
 use super::Instance;
 use ash::{
-    extensions::khr,
+    khr, nv,
     prelude::VkResult,
-    vk::{self, ExtendsPhysicalDeviceProperties2, TaggedStructure},
+    vk::{self, ExtendsPhysicalDeviceProperties2, PromotionStatus, TaggedStructure},
 };
 use bevy::ecs::system::Resource;
 use core::ffi::c_void;
@@ -298,7 +298,7 @@ unsafe impl Sync for PhysicalDeviceFeaturesSetup {}
 
 pub unsafe trait Feature: TaggedStructure + 'static {
     const REQUIRED_DEVICE_EXT: &'static CStr;
-    const PROMOTED_VK_VERSION: Option<Version> = None;
+    const PROMOTION_STATUS: PromotionStatus = PromotionStatus::None;
 }
 
 impl PhysicalDeviceFeaturesSetup {
@@ -365,50 +365,42 @@ impl PhysicalDeviceFeaturesSetup {
 }
 
 macro_rules! impl_feature_for_ext {
-    ($feature:ty, $ext:ty) => {
+    ($feature:ty, $ext:path) => {
         unsafe impl Feature for $feature {
-            const REQUIRED_DEVICE_EXT: &'static CStr = <$ext>::name();
-            const PROMOTED_VK_VERSION: Option<Version> = <$ext>::PROMOTED_VK_VERSION;
-        }
-    };
-}
-macro_rules! impl_feature_for_ext_named {
-    ($feature:ty, $ext:expr) => {
-        unsafe impl Feature for $feature {
-            const REQUIRED_DEVICE_EXT: &'static CStr = $ext;
-            const PROMOTED_VK_VERSION: Option<Version> = None;
+            const REQUIRED_DEVICE_EXT: &'static CStr = $ext::NAME;
+            const PROMOTION_STATUS: PromotionStatus = $ext::PROMOTED_VK_VERSION;
         }
     };
 }
 impl_feature_for_ext!(
-    vk::PhysicalDeviceSynchronization2FeaturesKHR,
-    khr::Synchronization2
+    vk::PhysicalDeviceSynchronization2FeaturesKHR<'_>,
+    khr::synchronization2
 );
 impl_feature_for_ext!(
-    vk::PhysicalDeviceTimelineSemaphoreFeatures,
-    khr::TimelineSemaphore
+    vk::PhysicalDeviceTimelineSemaphoreFeatures<'_>,
+    khr::timeline_semaphore
 );
 impl_feature_for_ext!(
-    vk::PhysicalDeviceDynamicRenderingFeatures,
-    khr::DynamicRendering
+    vk::PhysicalDeviceDynamicRenderingFeatures<'_>,
+    khr::dynamic_rendering
 );
 impl_feature_for_ext!(
-    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-    khr::RayTracingPipeline
+    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>,
+    khr::ray_tracing_pipeline
 );
 impl_feature_for_ext!(
-    vk::PhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT,
-    khr::RayTracingPipeline
+    vk::PhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT<'_>,
+    khr::ray_tracing_pipeline
 );
 impl_feature_for_ext!(
-    vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
-    khr::AccelerationStructure
+    vk::PhysicalDeviceAccelerationStructureFeaturesKHR<'_>,
+    khr::acceleration_structure
 );
 impl_feature_for_ext!(
-    vk::PhysicalDeviceBufferDeviceAddressFeatures,
-    khr::BufferDeviceAddress
+    vk::PhysicalDeviceBufferDeviceAddressFeatures<'_>,
+    khr::buffer_device_address
 );
-impl_feature_for_ext_named!(
-    vk::PhysicalDeviceRayTracingMotionBlurFeaturesNV,
-    vk::NvRayTracingMotionBlurFn::name()
+impl_feature_for_ext!(
+    vk::PhysicalDeviceRayTracingMotionBlurFeaturesNV<'_>,
+    nv::ray_tracing_motion_blur
 );

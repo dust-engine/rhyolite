@@ -1,4 +1,4 @@
-use ash::extensions::ext;
+use ash::ext;
 use ash::{prelude::VkResult, vk};
 use bevy::app::Plugin;
 use bevy::ecs::system::Resource;
@@ -15,7 +15,7 @@ pub struct DebugUtilsPlugin;
 
 impl Plugin for DebugUtilsPlugin {
     fn build(&self, app: &mut bevy::app::App) {
-        app.add_instance_extension::<ash::extensions::ext::DebugUtils>()
+        app.add_instance_extension::<ext::debug_utils::Instance>()
             .unwrap();
     }
     fn finish(&self, app: &mut bevy::app::App) {
@@ -41,9 +41,9 @@ pub struct DebugUtilsMessengerCallbackData<'a> {
     pub message_id_number: i32,
     /// Details on the trigger conditions
     pub message: Option<&'a CStr>,
-    pub queue_labels: &'a [vk::DebugUtilsLabelEXT],
-    pub cmd_buf_labels: &'a [vk::DebugUtilsLabelEXT],
-    pub objects: &'a [vk::DebugUtilsObjectNameInfoEXT],
+    pub queue_labels: &'a [vk::DebugUtilsLabelEXT<'a>],
+    pub cmd_buf_labels: &'a [vk::DebugUtilsLabelEXT<'a>],
+    pub objects: &'a [vk::DebugUtilsObjectNameInfoEXT<'a>],
 }
 
 #[derive(Resource)]
@@ -59,7 +59,7 @@ impl Drop for DebugUtilsMessenger {
         unsafe {
             self.0
                 .instance
-                .extension::<ext::DebugUtils>()
+                .extension::<ext::debug_utils::Instance>()
                 .destroy_debug_utils_messenger(self.0.messenger, None);
         }
     }
@@ -80,7 +80,7 @@ impl DebugUtilsMessenger {
             // with any Vulkan command that is also called with instance or child of instance as the dispatchable argument.
             // We do this by taking a mutable reference to Instance.
             this.instance
-                .extension::<ext::DebugUtils>()
+                .extension::<ext::debug_utils::Instance>()
                 .create_debug_utils_messenger(
                     &vk::DebugUtilsMessengerCreateInfoEXT {
                         message_severity: vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
@@ -208,20 +208,15 @@ pub trait DebugObject: crate::HasDevice {
     const OBJECT_TYPE: vk::ObjectType;
     fn set_name(&mut self, cstr: &CStr) -> VkResult<()> {
         unsafe {
-            let raw_device = self.device().handle();
             let object_handle = self.object_handle();
             self.device()
-                .instance()
-                .get_extension::<ext::DebugUtils>()?
-                .set_debug_utils_object_name(
-                    raw_device,
-                    &vk::DebugUtilsObjectNameInfoEXT {
-                        object_type: Self::OBJECT_TYPE,
-                        object_handle,
-                        p_object_name: cstr.as_ptr(),
-                        ..Default::default()
-                    },
-                )
+                .get_extension::<ext::debug_utils::Device>()?
+                .set_debug_utils_object_name(&vk::DebugUtilsObjectNameInfoEXT {
+                    object_type: Self::OBJECT_TYPE,
+                    object_handle,
+                    p_object_name: cstr.as_ptr(),
+                    ..Default::default()
+                })
         }
     }
     fn with_name(mut self, name: &CStr) -> VkResult<Self>
@@ -233,20 +228,15 @@ pub trait DebugObject: crate::HasDevice {
     }
     fn remove_name(&mut self) -> VkResult<()> {
         unsafe {
-            let raw_device = self.device().handle();
             let object_handle = self.object_handle();
             self.device()
-                .instance()
-                .get_extension::<ext::DebugUtils>()?
-                .set_debug_utils_object_name(
-                    raw_device,
-                    &vk::DebugUtilsObjectNameInfoEXT {
-                        object_type: Self::OBJECT_TYPE,
-                        object_handle,
-                        p_object_name: std::ptr::null(),
-                        ..Default::default()
-                    },
-                )
+                .get_extension::<ext::debug_utils::Device>()?
+                .set_debug_utils_object_name(&vk::DebugUtilsObjectNameInfoEXT {
+                    object_type: Self::OBJECT_TYPE,
+                    object_handle,
+                    p_object_name: std::ptr::null(),
+                    ..Default::default()
+                })
         }
     }
 }
@@ -255,8 +245,7 @@ pub trait DebugCommands: CommandRecorder {
     fn begin_debug_label(&mut self, label: &CStr, color: [f32; 4]) {
         if self
             .device()
-            .instance()
-            .get_extension::<ext::DebugUtils>()
+            .get_extension::<ext::debug_utils::Device>()
             .is_err()
         {
             return;
@@ -264,8 +253,7 @@ pub trait DebugCommands: CommandRecorder {
         unsafe {
             let cmd_buf = self.cmd_buf();
             self.device()
-                .instance()
-                .extension::<ext::DebugUtils>()
+                .extension::<ext::debug_utils::Device>()
                 .cmd_begin_debug_utils_label(
                     cmd_buf,
                     &vk::DebugUtilsLabelEXT {
@@ -279,8 +267,7 @@ pub trait DebugCommands: CommandRecorder {
     fn end_debug_label(&mut self) {
         if self
             .device()
-            .instance()
-            .get_extension::<ext::DebugUtils>()
+            .get_extension::<ext::debug_utils::Device>()
             .is_err()
         {
             return;
@@ -288,16 +275,14 @@ pub trait DebugCommands: CommandRecorder {
         unsafe {
             let cmd_buf = self.cmd_buf();
             self.device()
-                .instance()
-                .extension::<ext::DebugUtils>()
+                .extension::<ext::debug_utils::Device>()
                 .cmd_end_debug_utils_label(cmd_buf)
         }
     }
     fn insert_debug_label(&mut self, label: &CStr, color: [f32; 4]) {
         if self
             .device()
-            .instance()
-            .get_extension::<ext::DebugUtils>()
+            .get_extension::<ext::debug_utils::Device>()
             .is_err()
         {
             return;
@@ -305,8 +290,7 @@ pub trait DebugCommands: CommandRecorder {
         unsafe {
             let cmd_buf = self.cmd_buf();
             self.device()
-                .instance()
-                .extension::<ext::DebugUtils>()
+                .extension::<ext::debug_utils::Device>()
                 .cmd_insert_debug_utils_label(
                     cmd_buf,
                     &vk::DebugUtilsLabelEXT {

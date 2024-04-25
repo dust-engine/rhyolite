@@ -70,60 +70,10 @@ impl SpecializedShader {
         self.specialization_info.push(constant_id, item);
         self
     }
-    pub fn raw_pipeline_stage(
-        &self,
-        assets: &bevy::asset::Assets<ShaderModule>,
-        specialization_info: &vk::SpecializationInfo,
-    ) -> Option<vk::PipelineShaderStageCreateInfo> {
-        let module = assets.get(&self.shader)?;
-        Some(vk::PipelineShaderStageCreateInfo {
-            stage: self.stage,
-            module: module.raw(),
-            p_name: self.entry_point.as_ptr(),
-            p_specialization_info: specialization_info,
-            flags: self.flags,
-            ..Default::default()
-        })
-    }
-    pub fn raw_specialization_info(&self) -> vk::SpecializationInfo {
-        vk::SpecializationInfo {
-            map_entry_count: self.specialization_info.entries.len() as u32,
-            p_map_entries: if self.specialization_info.entries.is_empty() {
-                std::ptr::null()
-            } else {
-                self.specialization_info.entries.as_ptr()
-            },
-            data_size: self.specialization_info.data.len(),
-            p_data: if self.specialization_info.data.is_empty() {
-                std::ptr::null()
-            } else {
-                self.specialization_info.data.as_ptr() as *const _
-            },
-        }
-    }
-
-    pub fn as_raw_many(
-        stages: &[Self],
-        assets: &bevy::asset::Assets<ShaderModule>,
-    ) -> Option<(
-        Box<[vk::SpecializationInfo]>,
-        Box<[vk::PipelineShaderStageCreateInfo]>,
-    )> {
-        let specialization_info = stages
-            .iter()
-            .map(SpecializedShader::raw_specialization_info)
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let stages = stages
-            .iter()
-            .zip(specialization_info.iter())
-            .map(|(shader, specialization_info)| {
-                let module = assets.get(&shader.shader)?;
-                shader.raw_pipeline_stage(assets, specialization_info)
-            })
-            .collect::<Option<Vec<_>>>()?
-            .into_boxed_slice();
-        Some((specialization_info, stages))
+    pub fn raw_specialization_info<'a>(&'a self) -> vk::SpecializationInfo<'a> {
+        vk::SpecializationInfo::default()
+            .map_entries(&self.specialization_info.entries)
+            .data(&self.specialization_info.data)
     }
 }
 #[derive(Clone, Default, Debug)]
@@ -132,21 +82,10 @@ pub struct SpecializationInfo {
     pub(super) entries: Vec<vk::SpecializationMapEntry>,
 }
 impl SpecializationInfo {
-    pub unsafe fn raw_info(&self) -> vk::SpecializationInfo {
-        vk::SpecializationInfo {
-            map_entry_count: self.entries.len() as u32,
-            p_map_entries: if self.entries.is_empty() {
-                std::ptr::null()
-            } else {
-                self.entries.as_ptr()
-            },
-            data_size: self.data.len(),
-            p_data: if self.data.is_empty() {
-                std::ptr::null()
-            } else {
-                self.data.as_ptr() as *const _
-            },
-        }
+    pub unsafe fn raw_info<'a>(&'a self) -> vk::SpecializationInfo<'a> {
+        vk::SpecializationInfo::default()
+            .map_entries(&self.entries)
+            .data(&self.data)
     }
     pub const fn new() -> Self {
         Self {

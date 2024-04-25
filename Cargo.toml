@@ -18,7 +18,7 @@ glsl = ["shaderc"]
 crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
 bevy = { version = "0.13", default-features = false, features=["multi-threaded","wayland", "x11", "bevy_asset", "asset_processor", "file_watcher"] }
-ash = "0.37"
+ash = "0.38"
 tracing = "0.1"
 cstr = "0.2"
 thread_local = "1"
@@ -26,7 +26,7 @@ winit = { version = "0.29", default-features = false, features = ["rwh_06"] }
 raw-window-handle = "0.6"
 arrayvec = "0.7"
 itertools = "0.12"
-vk-mem = "0.3"
+vk-mem = { git = "https://github.com/gwihlidal/vk-mem-rs", branch = "ash-0.38" }
 thiserror = "1.0"
 playout = { path = "../playout", optional = true }
 once_cell = "1.19"
@@ -40,6 +40,7 @@ raw-window-metal = "0.4"
 
 [patch.crates-io]
 bevy = { path = "../bevy" }
+ash = { git = "https://github.com/Neo-Zhixing/ash.git" }
 
 [dev-dependencies]
 playout_macro = { path = "../playout/macro" }

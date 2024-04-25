@@ -6,7 +6,6 @@ use bevy::asset::Assets;
 use crate::{
     device::HasDevice,
     shader::{ShaderModule, SpecializedShader},
-    utils::SendBox,
     Device,
 };
 
@@ -44,16 +43,20 @@ impl super::PipelineBuildInfo for ComputePipelineCreateInfo {
         assets: &Assets<ShaderModule>,
         cache: vk::PipelineCache,
     ) -> Option<crate::Task<Self::Pipeline>> {
-        let specialization_info = self.shader.raw_specialization_info();
-        let stage = self
-            .shader
-            .raw_pipeline_stage(assets, &specialization_info)?;
-        let send_box = SendBox((specialization_info, stage));
+        let shader = self.shader.clone();
         let layout = self.layout.clone();
         let flags = self.flags;
+        let module = assets.get(&shader.shader)?.raw();
         Some(pool.schedule(move || {
-            let (specialization_info, mut stage) = send_box.into_inner();
-            stage.p_specialization_info = &specialization_info; // fix up specialization info ptr after move.
+            let specialization_info = vk::SpecializationInfo::default()
+                .data(&shader.specialization_info.data)
+                .map_entries(&shader.specialization_info.entries);
+            let stage = vk::PipelineShaderStageCreateInfo::default()
+                .flags(shader.flags)
+                .stage(shader.stage)
+                .module(module) // This will remain valid as long as we still have Handle<ShaderModule>
+                .name(&shader.entry_point)
+                .specialization_info(&specialization_info);
             let info = vk::ComputePipelineCreateInfo {
                 flags,
                 stage,
@@ -72,6 +75,7 @@ impl super::PipelineBuildInfo for ComputePipelineCreateInfo {
                 );
                 (result, pipeline)
             };
+            drop(shader);
             result.result_with_success(PipelineInner {
                 device: layout.device().clone(),
                 pipeline,

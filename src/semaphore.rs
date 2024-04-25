@@ -24,12 +24,11 @@ impl Debug for TimelineSemaphore {
 impl TimelineSemaphore {
     pub fn new(device: Device) -> VkResult<Self> {
         let semaphore = unsafe {
-            let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
-                .semaphore_type(vk::SemaphoreType::TIMELINE)
-                .build();
-            let info = vk::SemaphoreCreateInfo::builder()
-                .push_next(&mut type_info)
-                .build();
+            let mut type_info = vk::SemaphoreTypeCreateInfo {
+                semaphore_type: vk::SemaphoreType::TIMELINE,
+                ..Default::default()
+            };
+            let info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
             device.create_semaphore(&info, None)
         }?;
         Ok(Self {

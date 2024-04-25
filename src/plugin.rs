@@ -1,8 +1,5 @@
-use ash::{
-    extensions::khr,
-    prelude::VkResult,
-    vk::{self},
-};
+use ash::vk::{DeviceExtension, InstanceExtension, PromotionStatus};
+use ash::{khr, prelude::VkResult, vk};
 use bevy::ecs::prelude::*;
 use bevy::{app::prelude::*, asset::AssetApp, utils::hashbrown::HashMap};
 use std::{
@@ -14,9 +11,8 @@ use std::{
 };
 
 use crate::{
-    ecs::RenderSystemPass,
-    extensions::{DeviceExtension, InstanceExtension},
-    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeaturesSetup, Version,
+    ecs::RenderSystemPass, Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeaturesSetup,
+    Version,
 };
 use cstr::cstr;
 
@@ -118,8 +114,7 @@ impl FromWorld for InstanceExtensions {
             panic!("Instance extensions may only be added before the instance was created");
         }
         let entry = world.get_resource_or_insert_with::<VulkanEntry>(VulkanEntry::default);
-        let available_extensions = entry
-            .enumerate_instance_extension_properties(None)
+        let available_extensions = unsafe { entry.enumerate_instance_extension_properties(None) }
             .unwrap()
             .into_iter()
             .map(|ext| {
@@ -153,8 +148,7 @@ impl FromWorld for InstanceLayers {
             panic!("Instance layers may only be added before the instance was created");
         }
         let entry = world.get_resource_or_insert_with::<VulkanEntry>(VulkanEntry::default);
-        let available_layers = entry
-            .enumerate_instance_layer_properties()
+        let available_layers = unsafe { entry.enumerate_instance_layer_properties() }
             .unwrap()
             .into_iter()
             .map(|layer| {
@@ -260,17 +254,18 @@ impl Plugin for RhyolitePlugin {
             &mut f.timeline_semaphore
         })
         .unwrap();
-        app.add_device_extension::<khr::Synchronization2>().unwrap();
+        app.add_device_extension::<khr::synchronization2::Device>()
+            .unwrap();
         app.enable_feature::<vk::PhysicalDeviceSynchronization2Features>(|f| {
             &mut f.synchronization2
         })
         .unwrap();
 
         // Optional extensions
-        app.add_device_extension::<khr::DeferredHostOperations>();
+        app.add_device_extension::<khr::deferred_host_operations::Device>();
 
         // IF supported, must be enabled.
-        app.add_device_extension_named(vk::KhrPortabilitySubsetFn::name());
+        app.add_device_extension_named(vk::KHR_PORTABILITY_SUBSET_NAME);
 
         #[cfg(feature = "glsl")]
         app.add_plugins(crate::shader::loader::GlslPlugin);
@@ -337,7 +332,8 @@ pub trait RhyoliteApp {
 
 impl RhyoliteApp for App {
     fn add_device_extension<T: DeviceExtension>(&mut self) -> Option<Version> {
-        if let Some(promoted_extension) = T::PROMOTED_VK_VERSION {
+        if let PromotionStatus::PromotedToCore(promoted_extension) = T::PROMOTION_STATUS {
+            let promoted_extension = Version(promoted_extension);
             let instance = self.world.resource::<Instance>();
             if instance.api_version() >= promoted_extension {
                 return Some(instance.api_version());
@@ -346,10 +342,10 @@ impl RhyoliteApp for App {
         let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
             panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
         };
-        if let Some(v) = extension_settings.available_extensions.get(T::name()) {
+        if let Some(v) = extension_settings.available_extensions.get(T::NAME) {
             let v = *v;
             extension_settings.extension_builders.insert(
-                T::name(),
+                T::NAME,
                 Some(Box::new(|instance, device| {
                     if let Some(t) = T::new(instance, device) {
                         Some(Box::new(t))
@@ -374,10 +370,10 @@ impl RhyoliteApp for App {
                 self.world.resource_mut::<InstanceExtensions>()
             }
         };
-        if let Some(v) = extension_settings.available_extensions.get(T::name()) {
+        if let Some(v) = extension_settings.available_extensions.get(T::NAME) {
             let v = *v;
             extension_settings.enabled_extensions.insert(
-                T::name(),
+                T::NAME,
                 Some(Box::new(|entry, instance| {
                     Box::new(T::new(entry, instance))
                 })),
@@ -436,9 +432,11 @@ impl RhyoliteApp for App {
             layers.enabled_layers.push(layer.as_ptr());
 
             let vulkan_entry = self.world.resource::<VulkanEntry>();
-            let additional_instance_extensions = vulkan_entry
-                .enumerate_instance_extension_properties(Some(layer))
-                .unwrap();
+            let additional_instance_extensions = unsafe {
+                vulkan_entry
+                    .enumerate_instance_extension_properties(Some(layer))
+                    .unwrap()
+            };
 
             let instance_extensions = self.world.get_resource_mut::<InstanceExtensions>();
             let mut instance_extensions = match instance_extensions {

@@ -1,6 +1,6 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
-use ash::vk;
+use ash::{khr, vk};
 use bevy::utils::smallvec::SmallVec;
 
 use crate::{
@@ -45,7 +45,7 @@ pub trait CommonCommands: CommandRecorder {
         unsafe {
             let cmd_buf = self.cmd_buf();
             self.device()
-                .extension::<ash::extensions::khr::PushDescriptor>()
+                .extension::<khr::push_descriptor::Device>()
                 .cmd_push_descriptor_set(
                     cmd_buf,
                     pipeline_bind_point,
@@ -91,9 +91,9 @@ impl<T> CommonCommands for T where T: CommandRecorder {}
 pub struct ImmediateTransitions<'w> {
     pub(crate) device: &'w Device,
     pub(crate) cmd_buf: vk::CommandBuffer,
-    pub(crate) global_barriers: vk::MemoryBarrier2,
-    pub(crate) image_barriers: SmallVec<[vk::ImageMemoryBarrier2; 4]>,
-    pub(crate) buffer_barriers: SmallVec<[vk::BufferMemoryBarrier2; 4]>,
+    pub(crate) global_barriers: vk::MemoryBarrier2<'w>,
+    pub(crate) image_barriers: SmallVec<[vk::ImageMemoryBarrier2<'w>; 4]>,
+    pub(crate) buffer_barriers: SmallVec<[vk::BufferMemoryBarrier2<'w>; 4]>,
     pub(crate) dependency_flags: vk::DependencyFlags,
     pub(crate) queue: QueueRef,
 }

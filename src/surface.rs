@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use ash::{extensions::khr, prelude::VkResult, vk};
+use ash::khr;
+use ash::{khr::surface::Instance as KhrSurface, prelude::VkResult, vk};
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::ecs::prelude::*;
 use bevy::window::{RawHandleWrapper, Window};
@@ -20,8 +21,7 @@ impl Default for SurfacePlugin {
 
 impl Plugin for SurfacePlugin {
     fn build(&self, app: &mut App) {
-        app.add_instance_extension::<ash::extensions::khr::Surface>()
-            .unwrap();
+        app.add_instance_extension::<KhrSurface>().unwrap();
 
         if let Some(event_loop) = app
             .world
@@ -30,32 +30,32 @@ impl Plugin for SurfacePlugin {
             match event_loop.display_handle().unwrap().as_raw() {
                 #[cfg(target_os = "windows")]
                 RawDisplayHandle::Windows(_) => {
-                    app.add_instance_extension::<ash::extensions::khr::Win32Surface>()
+                    app.add_instance_extension::<ash::khr::win32_surface::Instance>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Xlib(_) => {
-                    app.add_instance_extension::<ash::extensions::khr::XlibSurface>()
+                    app.add_instance_extension::<ash::khr::xlib_surface::Instance>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Xcb(_) => {
-                    app.add_instance_extension::<ash::extensions::khr::XcbSurface>()
+                    app.add_instance_extension::<ash::khr::xcb_surface::Instance>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Wayland(_) => {
-                    app.add_instance_extension::<ash::extensions::khr::WaylandSurface>()
+                    app.add_instance_extension::<ash::khr::wayland_surface::Instance>()
                         .unwrap();
                 }
                 #[cfg(target_os = "android")]
                 RawDisplayHandle::Android(_) => {
-                    app.add_instance_extension::<ash::extensions::khr::AndroidSurface>()
+                    app.add_instance_extension::<ash::khr::android_surface::Instance>()
                         .unwrap();
                 }
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 RawDisplayHandle::UiKit(_) | RawDisplayHandle::AppKit(_) => {
-                    app.add_instance_extension::<ash::extensions::ext::MetalSurface>()
+                    app.add_instance_extension::<ash::ext::metal_surface::Instance>()
                         .unwrap();
                 }
                 _ => tracing::warn!("Your display is not supported."),
@@ -81,7 +81,7 @@ impl Drop for SurfaceInner {
     fn drop(&mut self) {
         unsafe {
             self.instance
-                .extension::<khr::Surface>()
+                .extension::<KhrSurface>()
                 .destroy_surface(self.inner, None);
         }
     }
@@ -118,7 +118,7 @@ impl PhysicalDevice {
             surface
                 .0
                 .instance
-                .extension::<khr::Surface>()
+                .extension::<KhrSurface>()
                 .get_physical_device_surface_capabilities(self.raw(), surface.0.inner)
         }
     }
@@ -127,7 +127,7 @@ impl PhysicalDevice {
             surface
                 .0
                 .instance
-                .extension::<khr::Surface>()
+                .extension::<KhrSurface>()
                 .get_physical_device_surface_formats(self.raw(), surface.0.inner)
         }
     }
@@ -139,7 +139,7 @@ impl PhysicalDevice {
             surface
                 .0
                 .instance
-                .extension::<khr::Surface>()
+                .extension::<KhrSurface>()
                 .get_physical_device_surface_present_modes(self.raw(), surface.0.inner)
         }
     }
@@ -148,7 +148,7 @@ impl PhysicalDevice {
             surface
                 .0
                 .instance
-                .extension::<khr::Surface>()
+                .extension::<KhrSurface>()
                 .get_physical_device_surface_support(
                     self.raw(),
                     queue_family_index,
@@ -183,7 +183,7 @@ unsafe fn create_surface(
 ) -> VkResult<vk::SurfaceKHR> {
     match (display_handle.as_raw(), window_handle.as_raw()) {
         (RawDisplayHandle::Windows(_), RawWindowHandle::Win32(window)) => instance
-            .extension::<khr::Win32Surface>()
+            .extension::<khr::win32_surface::Instance>()
             .create_win32_surface(
                 &vk::Win32SurfaceCreateInfoKHR {
                     hinstance: window.hinstance.unwrap().get() as ash::vk::HINSTANCE,
@@ -194,7 +194,7 @@ unsafe fn create_surface(
             ),
 
         (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(window)) => instance
-            .extension::<khr::WaylandSurface>()
+            .extension::<khr::wayland_surface::Instance>()
             .create_wayland_surface(
                 &vk::WaylandSurfaceCreateInfoKHR {
                     display: display.display.as_ptr(),
@@ -205,7 +205,7 @@ unsafe fn create_surface(
             ),
 
         (RawDisplayHandle::Xlib(display), RawWindowHandle::Xlib(window)) => instance
-            .extension::<khr::XlibSurface>()
+            .extension::<khr::xlib_surface::Instance>()
             .create_xlib_surface(
                 &vk::XlibSurfaceCreateInfoKHR {
                     dpy: display.display.unwrap().as_ptr() as *mut _,
@@ -215,19 +215,19 @@ unsafe fn create_surface(
                 None,
             ),
 
-        (RawDisplayHandle::Xcb(display), RawWindowHandle::Xcb(window)) => {
-            instance.extension::<khr::XcbSurface>().create_xcb_surface(
+        (RawDisplayHandle::Xcb(display), RawWindowHandle::Xcb(window)) => instance
+            .extension::<khr::xcb_surface::Instance>()
+            .create_xcb_surface(
                 &vk::XcbSurfaceCreateInfoKHR {
                     connection: display.connection.unwrap().as_ptr(),
                     window: window.window.get(),
                     ..Default::default()
                 },
                 None,
-            )
-        }
+            ),
 
         (RawDisplayHandle::Android(_), RawWindowHandle::AndroidNdk(window)) => instance
-            .extension::<khr::AndroidSurface>()
+            .extension::<khr::android_surface::Instance>()
             .create_android_surface(
                 &vk::AndroidSurfaceCreateInfoKHR {
                     window: window.a_native_window.as_ptr(),
@@ -246,7 +246,7 @@ unsafe fn create_surface(
 
             let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
             instance
-                .extension::<ash::extensions::ext::MetalSurface>()
+                .extension::<ash::ext::MetalSurface>()
                 .create_metal_surface(&surface_desc, None)
         }
 
@@ -260,7 +260,7 @@ unsafe fn create_surface(
 
             let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
             instance
-                .extension::<ash::extensions::ext::MetalSurface>()
+                .extension::<ash::ext::MetalSurface>()
                 .create_metal_surface(&surface_desc, None)
         }
 

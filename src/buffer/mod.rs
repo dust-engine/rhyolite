@@ -364,7 +364,9 @@ impl<T> BufferArray<T> {
                 std::ops::Bound::Excluded(&end) => end * item_size - start,
                 std::ops::Bound::Unbounded => vk::WHOLE_SIZE as usize,
             };
-            return self.allocator.flush_allocation(allocation, start, len);
+            return self
+                .allocator
+                .flush_allocation(allocation, start as u64, len as u64);
         } else {
             return Ok(());
         }
