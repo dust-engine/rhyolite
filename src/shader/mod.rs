@@ -82,7 +82,7 @@ pub struct SpecializationInfo {
     pub(super) entries: Vec<vk::SpecializationMapEntry>,
 }
 impl SpecializationInfo {
-    pub unsafe fn raw_info<'a>(&'a self) -> vk::SpecializationInfo<'a> {
+    pub fn raw_info<'a>(&'a self) -> vk::SpecializationInfo<'a> {
         vk::SpecializationInfo::default()
             .map_entries(&self.entries)
             .data(&self.data)

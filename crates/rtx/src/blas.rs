@@ -18,7 +18,7 @@ use bevy::{
     utils::tracing,
 };
 use rhyolite::{
-    ash::{extensions::khr, vk},
+    ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk},
     commands::{ComputeCommands, TransferCommands},
     cstr,
     debug::DebugObject,
@@ -399,14 +399,14 @@ fn staging_builder_extract_changes<T: BLASStagingBuilder>(
 }
 
 struct BLASPendingBuild {
-    info: vk::AccelerationStructureBuildGeometryInfoKHR,
-    build_sizes: vk::AccelerationStructureBuildSizesInfoKHR,
+    info: vk::AccelerationStructureBuildGeometryInfoKHR<'static>,
+    build_sizes: vk::AccelerationStructureBuildSizesInfoKHR<'static>,
     geometry_array_index_start: usize,
 }
 
 struct PendingBuilds {
     pending_builds: BTreeMap<Entity, BLASPendingBuild>,
-    geometries: Vec<vk::AccelerationStructureGeometryKHR>,
+    geometries: Vec<vk::AccelerationStructureGeometryKHR<'static>>,
     build_ranges: Vec<vk::AccelerationStructureBuildRangeInfoKHR>,
 }
 impl Default for PendingBuilds {
@@ -566,14 +566,17 @@ fn extract_blas_inner<T: BLASBuildMarker, F>(
             ..Default::default()
         };
         let build_sizes = unsafe {
+            let mut build_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
             allocator
                 .device()
-                .extension::<khr::AccelerationStructure>()
+                .extension::<AccelerationStructureExt>()
                 .get_acceleration_structure_build_sizes(
                     vk::AccelerationStructureBuildTypeKHR::DEVICE,
                     &info,
                     &primitive_counts,
-                )
+                    &mut build_sizes,
+                );
+            build_sizes
         };
         store.pending_builds.pending_builds.insert(
             *entity,

@@ -10,7 +10,7 @@ use bevy::{
 };
 
 use rhyolite::{
-    ash::{extensions::khr, prelude::VkResult, vk},
+    ash::{khr::ray_tracing_pipeline::Meta as RayTracingPipelineExt, prelude::VkResult, vk},
     commands::ComputeCommands,
     deferred::{DeferredOperationTaskPool, Task},
     dispose::RenderObject,
@@ -18,7 +18,6 @@ use rhyolite::{
         CachedPipeline, Pipeline, PipelineBuildInfo, PipelineCache, PipelineInner, PipelineLayout,
     },
     shader::{ShaderModule, SpecializedShader},
-    utils::SendBox,
     Device, HasDevice,
 };
 
@@ -104,7 +103,7 @@ unsafe impl Sync for RayTracingPipelineBuildInfoCommon {}
 pub struct RayTracingPipelineBuildInfo {
     pub common: RayTracingPipelineBuildInfoCommon,
     stages: Vec<SpecializedShader>,
-    groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR>,
+    groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>>,
     libraries: Vec<RayTracingPipelineLibrary>,
     hitgroup_mapping: Vec<u32>,
     num_raygen: u8,
@@ -124,19 +123,40 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
         assets: &Assets<ShaderModule>,
         cache: vk::PipelineCache,
     ) -> Option<Task<Self::Pipeline>> {
-        let stages = SendBox(SpecializedShader::as_raw_many(&self.stages, assets)?);
-        let groups = SendBox(self.groups.clone());
+        let modules = self
+            .stages
+            .iter()
+            .map(|shader| assets.get(&shader.shader).map(ShaderModule::raw))
+            .collect::<Option<Vec<_>>>()?;
+        let stages = self.stages.clone();
+        let groups = self.groups.clone();
         let common = self.common.clone();
         let libraries = self.libraries.clone();
 
         Some(pool.schedule_dho(move |dho| {
-            let (specialization_info, stages) = stages.into_inner();
-            let mut info = vk::RayTracingPipelineCreateInfoKHR::default();
-            info.stage_count = stages.len() as u32;
-            info.p_stages = stages.as_ptr();
+            let specialization_info = stages
+                .iter()
+                .map(|shader| shader.specialization_info.raw_info())
+                .collect::<Vec<_>>();
+            let stages = stages
+                .iter()
+                .zip(modules)
+                .zip(specialization_info.iter())
+                .map(|((shader, module), specialization_info)| {
+                    vk::PipelineShaderStageCreateInfo {
+                        stage: shader.stage,
+                        module,
+                        flags: shader.flags,
+                        ..Default::default()
+                    }
+                    .specialization_info(specialization_info)
+                    .name(&shader.entry_point)
+                })
+                .collect::<Vec<_>>();
 
-            info.group_count = groups.len() as u32;
-            info.p_groups = groups.as_ptr();
+            let mut info = vk::RayTracingPipelineCreateInfoKHR::default()
+                .groups(&groups)
+                .stages(&stages);
             info.max_pipeline_ray_recursion_depth = common.max_pipeline_ray_recursion_depth;
             let library_interface = vk::RayTracingPipelineInterfaceCreateInfoKHR {
                 max_pipeline_ray_payload_size: common.max_pipeline_ray_payload_size,
@@ -170,7 +190,7 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
                 let result = (common
                     .layout
                     .device()
-                    .extension::<khr::RayTracingPipeline>()
+                    .extension::<RayTracingPipelineExt>()
                     .fp()
                     .create_ray_tracing_pipelines_khr)(
                     common.layout.device().handle(),
@@ -610,7 +630,7 @@ impl SbtHandles {
             .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
         let sbt_handles_host_vec = unsafe {
             device
-                .extension::<khr::RayTracingPipeline>()
+                .extension::<RayTracingPipelineExt>()
                 .get_ray_tracing_shader_group_handles(
                     pipeline,
                     0,
@@ -755,7 +775,10 @@ impl HitGroup {
         self.groups.push((closest_hit, anyhit, intersection));
     }
 
-    fn to_vk_groups(&self, base_shader_index: u32) -> Vec<vk::RayTracingShaderGroupCreateInfoKHR> {
+    fn to_vk_groups(
+        &self,
+        base_shader_index: u32,
+    ) -> Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> {
         self.groups
             .iter()
             .map(

@@ -229,7 +229,7 @@ fn blit_image_to_swapchain_barrier(
             access: vk::AccessFlags2::TRANSFER_WRITE,
         },
         false,
-        vk::ImageLayout::GENERAL,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
     );
     barriers.transition(
         &mut game_of_life_pipeline.game,
@@ -238,7 +238,7 @@ fn blit_image_to_swapchain_barrier(
             access: vk::AccessFlags2::TRANSFER_READ,
         },
         true,
-        vk::ImageLayout::GENERAL,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
     );
 }
 fn blit_image_to_swapchain(

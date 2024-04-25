@@ -20,7 +20,7 @@ use bevy::{
     utils::tracing,
 };
 use rhyolite::{
-    ash::{extensions::khr, vk},
+    ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk},
     commands::{CommonCommands, ComputeCommands, ResourceTransitionCommands, TransferCommands},
     cstr,
     debug::DebugObject,
@@ -562,14 +562,17 @@ fn prepare_tlas<B: Send + Sync + 'static>(
         ..Default::default()
     };
     let build_size = unsafe {
+        let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
         allocator
             .device()
-            .extension::<khr::AccelerationStructure>()
+            .extension::<AccelerationStructureExt>()
             .get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &build_info,
                 &[store.entity_map.len() as u32],
-            )
+                &mut sizes,
+            );
+        sizes
     };
     if let Some(accel_struct) = store.accel_struct.as_mut() {
         if accel_struct.size() < build_size.acceleration_structure_size {

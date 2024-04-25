@@ -20,7 +20,7 @@ use bevy::{
 use bytemuck::{NoUninit, Pod};
 use itertools::Itertools;
 use rhyolite::{
-    ash::{extensions::khr, vk},
+    ash::{khr::ray_tracing_pipeline::Meta as RayTracingPipelineExt, vk},
     commands::ComputeCommands,
     staging::{StagingBeltBatchJob, UniformBelt},
     Allocator, HasDevice,
@@ -505,7 +505,7 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         unsafe {
             self.pipeline
                 .device()
-                .extension::<khr::RayTracingPipeline>()
+                .extension::<RayTracingPipelineExt>()
                 .cmd_trace_rays(
                     self.commands.cmd_buf(),
                     &self.raygen_shader_binding_tables[raygen_index],
@@ -523,13 +523,13 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         unsafe {
             self.pipeline
                 .device()
-                .extension::<khr::RayTracingPipeline>()
+                .extension::<RayTracingPipelineExt>()
                 .cmd_trace_rays_indirect(
                     self.commands.cmd_buf(),
-                    &[self.raygen_shader_binding_tables[raygen_index]],
-                    &[self.miss_shader_binding_tables],
-                    &[vk::StridedDeviceAddressRegionKHR::default()],
-                    &[self.callable_shader_binding_tables],
+                    &self.raygen_shader_binding_tables[raygen_index],
+                    &self.miss_shader_binding_tables,
+                    &vk::StridedDeviceAddressRegionKHR::default(),
+                    &self.callable_shader_binding_tables,
                     indirect_device_address,
                 );
         }

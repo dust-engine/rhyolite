@@ -19,11 +19,12 @@ use bevy::{
 };
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
+use rhyolite::ash::khr::{dynamic_rendering, push_descriptor};
 use rhyolite::commands::CommonCommands;
 use rhyolite::dispose::RenderObject;
 use rhyolite::{
     acquire_swapchain_image,
-    ash::{extensions::khr, vk},
+    ash::{vk},
     buffer::staging::StagingBelt,
     commands::{
         GraphicsCommands, RenderPassCommands, ResourceTransitionCommands, TransferCommands,
@@ -77,12 +78,12 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
         );
         app.init_resource::<PerFrame<EguiHostBuffer<Filter>>>();
         app.add_systems(Startup, initialize_pipelines);
-        app.add_device_extension::<khr::DynamicRendering>().unwrap();
+        app.add_device_extension::<dynamic_rendering::Meta>().unwrap();
         app.enable_feature::<vk::PhysicalDeviceDynamicRenderingFeatures>(|x| {
             &mut x.dynamic_rendering
         })
         .unwrap();
-        app.add_device_extension::<khr::PushDescriptor>().unwrap();
+        app.add_device_extension::<push_descriptor::Meta>().unwrap();
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();

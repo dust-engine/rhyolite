@@ -1,5 +1,5 @@
 use rhyolite::{
-    ash::{extensions::khr, prelude::VkResult, vk},
+    ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, prelude::VkResult, vk},
     cstr,
     debug::DebugObject,
     Allocator, Buffer, BufferLike, Device, HasDevice,
@@ -16,7 +16,7 @@ impl Drop for AccelStruct {
         unsafe {
             self.buffer
                 .device()
-                .extension::<khr::AccelerationStructure>()
+                .extension::<AccelerationStructureExt>()
                 .destroy_acceleration_structure(self.raw, None);
         }
     }
@@ -71,7 +71,7 @@ impl AccelStruct {
         unsafe {
             let raw = buffer
                 .device()
-                .extension::<khr::AccelerationStructure>()
+                .extension::<AccelerationStructureExt>()
                 .create_acceleration_structure(
                     &vk::AccelerationStructureCreateInfoKHR {
                         ty,
@@ -84,7 +84,7 @@ impl AccelStruct {
                 .unwrap();
             let device_address = buffer
                 .device()
-                .extension::<khr::AccelerationStructure>()
+                .extension::<AccelerationStructureExt>()
                 .get_acceleration_structure_device_address(
                     &vk::AccelerationStructureDeviceAddressInfoKHR {
                         acceleration_structure: raw,
