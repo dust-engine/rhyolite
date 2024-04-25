@@ -212,7 +212,7 @@ dependencies = [
 [[package]]
 name = "ash"
 version = "0.38.0+1.3.281"
-source = "git+https://github.com/Neo-Zhixing/ash.git#59b58a98fadd044d6a42df2c527942048ff3404c"
+source = "git+https://github.com/Neo-Zhixing/ash.git?branch=meta#216b142fddd6f545335bb50bc950c4812440f161"
 dependencies = [
  "libloading 0.8.2",
 ]

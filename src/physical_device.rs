@@ -4,7 +4,7 @@ use super::Instance;
 use ash::{
     khr, nv,
     prelude::VkResult,
-    vk::{self, ExtendsPhysicalDeviceProperties2, PromotionStatus, TaggedStructure},
+    vk::{self, ExtendsPhysicalDeviceProperties2, ExtensionMeta, PromotionStatus, TaggedStructure},
 };
 use bevy::ecs::system::Resource;
 use core::ffi::c_void;
@@ -296,7 +296,7 @@ pub struct PhysicalDeviceFeaturesSetup {
 unsafe impl Send for PhysicalDeviceFeaturesSetup {}
 unsafe impl Sync for PhysicalDeviceFeaturesSetup {}
 
-pub unsafe trait Feature: TaggedStructure + 'static {
+pub unsafe trait Feature: TaggedStructure {
     const REQUIRED_DEVICE_EXT: &'static CStr;
     const PROMOTION_STATUS: PromotionStatus = PromotionStatus::None;
 }
@@ -365,42 +365,42 @@ impl PhysicalDeviceFeaturesSetup {
 }
 
 macro_rules! impl_feature_for_ext {
-    ($feature:ty, $ext:path) => {
+    ($feature:ty, $ext:ty) => {
         unsafe impl Feature for $feature {
-            const REQUIRED_DEVICE_EXT: &'static CStr = $ext::NAME;
-            const PROMOTION_STATUS: PromotionStatus = $ext::PROMOTED_VK_VERSION;
+            const REQUIRED_DEVICE_EXT: &'static CStr = <$ext>::NAME;
+            const PROMOTION_STATUS: PromotionStatus = <$ext>::PROMOTION_STATUS;
         }
     };
 }
 impl_feature_for_ext!(
     vk::PhysicalDeviceSynchronization2FeaturesKHR<'_>,
-    khr::synchronization2
+    khr::synchronization2::Meta
 );
 impl_feature_for_ext!(
     vk::PhysicalDeviceTimelineSemaphoreFeatures<'_>,
-    khr::timeline_semaphore
+    khr::timeline_semaphore::Meta
 );
 impl_feature_for_ext!(
     vk::PhysicalDeviceDynamicRenderingFeatures<'_>,
-    khr::dynamic_rendering
+    khr::dynamic_rendering::Meta
 );
 impl_feature_for_ext!(
     vk::PhysicalDeviceRayTracingPipelineFeaturesKHR<'_>,
-    khr::ray_tracing_pipeline
+    khr::ray_tracing_pipeline::Meta
 );
 impl_feature_for_ext!(
     vk::PhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT<'_>,
-    khr::ray_tracing_pipeline
+    khr::ray_tracing_pipeline::Meta
 );
 impl_feature_for_ext!(
     vk::PhysicalDeviceAccelerationStructureFeaturesKHR<'_>,
-    khr::acceleration_structure
+    khr::acceleration_structure::Meta
 );
 impl_feature_for_ext!(
     vk::PhysicalDeviceBufferDeviceAddressFeatures<'_>,
-    khr::buffer_device_address
+    khr::buffer_device_address::Meta
 );
 impl_feature_for_ext!(
     vk::PhysicalDeviceRayTracingMotionBlurFeaturesNV<'_>,
-    nv::ray_tracing_motion_blur
+    nv::ray_tracing_motion_blur::Meta
 );

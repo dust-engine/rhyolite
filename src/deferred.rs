@@ -1,8 +1,8 @@
 use crate::{utils::unwrap_future, Device};
-use ash::khr::deferred_host_operations::Device as DeferredHostOperations;
+use ash::khr::deferred_host_operations::Meta as DeferredHostOperations;
 use ash::{
     prelude::VkResult,
-    vk::{self, DeviceExtension},
+    vk::{self},
 };
 use bevy::ecs::{system::Resource, world::FromWorld};
 use crossbeam_channel::Sender;

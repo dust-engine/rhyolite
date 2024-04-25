@@ -111,8 +111,8 @@ impl PerFrameResource for DefaultCommandPool {
 pub struct QueueSubmissionInfo {
     pub(crate) cmd_bufs: SmallVec<[vk::CommandBuffer; 4]>,
     pub(crate) last_buf_open: bool,
-    pub(crate) trailing_buffer_barriers: Vec<vk::BufferMemoryBarrier2>,
-    pub(crate) trailing_image_barriers: Vec<vk::ImageMemoryBarrier2>,
+    pub(crate) trailing_buffer_barriers: Vec<vk::BufferMemoryBarrier2<'static>>,
+    pub(crate) trailing_image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
 
     pub(crate) signal_semaphore: Option<Arc<TimelineSemaphore>>,
     pub(crate) signal_semaphore_value: u64,

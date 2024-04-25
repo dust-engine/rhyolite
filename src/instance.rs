@@ -1,7 +1,7 @@
 use crate::{cstr, extensions::ExtensionNotFoundError, plugin::InstanceMetaBuilder};
 use ash::{
     prelude::VkResult,
-    vk::{self, InstanceExtension},
+    vk::{self, ExtensionMeta},
 };
 use bevy::ecs::system::Resource;
 use bevy::utils::hashbrown::HashMap;
@@ -169,19 +169,25 @@ impl Instance {
     pub fn entry(&self) -> &Arc<ash::Entry> {
         &self.0.entry
     }
-    pub fn get_extension<T: InstanceExtension>(&self) -> Result<&T, ExtensionNotFoundError> {
+    pub fn get_extension<T: ExtensionMeta>(&self) -> Result<&T::Instance, ExtensionNotFoundError>
+    where
+        T::Instance: 'static,
+    {
         self.0
             .extensions
             .get(&T::NAME)
             .map(|item| {
                 item.as_ref()
                     .expect("Instance extension does not have a function table.")
-                    .downcast_ref::<T>()
+                    .downcast_ref::<T::Instance>()
                     .unwrap()
             })
             .ok_or(ExtensionNotFoundError)
     }
-    pub fn extension<T: InstanceExtension>(&self) -> &T {
+    pub fn extension<T: ExtensionMeta>(&self) -> &T::Instance
+    where
+        T::Instance: 'static,
+    {
         self.get_extension::<T>().unwrap()
     }
     /// Returns the version of the Vulkan API used when creating the instance.

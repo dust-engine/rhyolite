@@ -45,7 +45,7 @@ pub trait CommonCommands: CommandRecorder {
         unsafe {
             let cmd_buf = self.cmd_buf();
             self.device()
-                .extension::<khr::push_descriptor::Device>()
+                .extension::<khr::push_descriptor::Meta>()
                 .cmd_push_descriptor_set(
                     cmd_buf,
                     pipeline_bind_point,
@@ -91,9 +91,9 @@ impl<T> CommonCommands for T where T: CommandRecorder {}
 pub struct ImmediateTransitions<'w> {
     pub(crate) device: &'w Device,
     pub(crate) cmd_buf: vk::CommandBuffer,
-    pub(crate) global_barriers: vk::MemoryBarrier2<'w>,
-    pub(crate) image_barriers: SmallVec<[vk::ImageMemoryBarrier2<'w>; 4]>,
-    pub(crate) buffer_barriers: SmallVec<[vk::BufferMemoryBarrier2<'w>; 4]>,
+    pub(crate) global_barriers: vk::MemoryBarrier2<'static>,
+    pub(crate) image_barriers: SmallVec<[vk::ImageMemoryBarrier2<'static>; 4]>,
+    pub(crate) buffer_barriers: SmallVec<[vk::BufferMemoryBarrier2<'static>; 4]>,
     pub(crate) dependency_flags: vk::DependencyFlags,
     pub(crate) queue: QueueRef,
 }
@@ -410,18 +410,18 @@ pub trait SemaphoreSignalCommands: Sized {
 pub trait ResourceTransitionCommands: SemaphoreSignalCommands {
     fn add_image_barrier_prev_stage(
         &mut self,
-        barrier: vk::ImageMemoryBarrier2,
+        barrier: vk::ImageMemoryBarrier2<'static>,
         prev_queue: QueueRef,
     ) -> &mut Self;
     fn add_buffer_barrier_prev_stage(
         &mut self,
-        barrier: vk::BufferMemoryBarrier2,
+        barrier: vk::BufferMemoryBarrier2<'static>,
         prev_queue: QueueRef,
     ) -> &mut Self;
 
-    fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2) -> &mut Self;
-    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self;
-    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self;
+    fn add_global_barrier(&mut self, barrier: vk::MemoryBarrier2<'static>) -> &mut Self;
+    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2<'static>) -> &mut Self;
+    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2<'static>) -> &mut Self;
     fn set_dependency_flags(&mut self, flags: vk::DependencyFlags) -> &mut Self;
 
     fn current_queue(&self) -> QueueRef;
@@ -499,11 +499,11 @@ impl ResourceTransitionCommands for ImmediateTransitions<'_> {
         self.global_barriers.dst_access_mask |= barrier.dst_access_mask;
         self
     }
-    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self {
+    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2<'static>) -> &mut Self {
         self.image_barriers.push(barrier);
         self
     }
-    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self {
+    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2<'static>) -> &mut Self {
         self.buffer_barriers.push(barrier);
         self
     }

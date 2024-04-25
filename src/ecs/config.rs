@@ -50,11 +50,11 @@ impl Default for RenderSystemConfig {
 
 pub(crate) enum BarriersPrevStage {
     Image {
-        barrier: vk::ImageMemoryBarrier2,
+        barrier: vk::ImageMemoryBarrier2<'static>,
         prev_queue: QueueRef,
     },
     Buffer {
-        barrier: vk::BufferMemoryBarrier2,
+        barrier: vk::BufferMemoryBarrier2<'static>,
         prev_queue: QueueRef,
     },
     SignalBinarySemaphore {
@@ -81,9 +81,9 @@ impl BarriersPrevStage {
 /// GAT limitation. All references contained herein are valid for the duration of the system call.
 pub struct Barriers {
     pub(crate) dependency_flags: *mut vk::DependencyFlags,
-    pub(crate) image_barriers: *mut SmallVec<[vk::ImageMemoryBarrier2; 4]>,
-    pub(crate) buffer_barriers: *mut SmallVec<[vk::BufferMemoryBarrier2; 4]>,
-    pub(crate) global_barriers: *mut vk::MemoryBarrier2,
+    pub(crate) image_barriers: *mut SmallVec<[vk::ImageMemoryBarrier2<'static>; 4]>,
+    pub(crate) buffer_barriers: *mut SmallVec<[vk::BufferMemoryBarrier2<'static>; 4]>,
+    pub(crate) global_barriers: *mut vk::MemoryBarrier2<'static>,
     pub(crate) dropped: *mut bool,
 
     /// Barriers to be added to the end of the previous stage.
@@ -155,7 +155,7 @@ impl ResourceTransitionCommands for Barriers {
     }
     fn add_image_barrier_prev_stage(
         &mut self,
-        barrier: vk::ImageMemoryBarrier2,
+        barrier: vk::ImageMemoryBarrier2<'static>,
         prev_queue: QueueRef,
     ) -> &mut Self {
         let current = unsafe { &mut *self.prev_barriers };
@@ -168,7 +168,7 @@ impl ResourceTransitionCommands for Barriers {
 
     fn add_buffer_barrier_prev_stage(
         &mut self,
-        barrier: vk::BufferMemoryBarrier2,
+        barrier: vk::BufferMemoryBarrier2<'static>,
         prev_queue: QueueRef,
     ) -> &mut Self {
         let current = unsafe { &mut *self.prev_barriers };
@@ -188,13 +188,13 @@ impl ResourceTransitionCommands for Barriers {
         self
     }
 
-    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2) -> &mut Self {
+    fn add_image_barrier(&mut self, barrier: vk::ImageMemoryBarrier2<'static>) -> &mut Self {
         let current = unsafe { &mut *self.image_barriers };
         current.push(barrier);
         self
     }
 
-    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2) -> &mut Self {
+    fn add_buffer_barrier(&mut self, barrier: vk::BufferMemoryBarrier2<'static>) -> &mut Self {
         let current = unsafe { &mut *self.buffer_barriers };
         current.push(barrier);
         self

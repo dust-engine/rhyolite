@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ash::khr;
-use ash::{khr::surface::Instance as KhrSurface, prelude::VkResult, vk};
+use ash::{khr::surface::Meta as KhrSurface, prelude::VkResult, vk};
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::ecs::prelude::*;
 use bevy::window::{RawHandleWrapper, Window};
@@ -30,32 +30,32 @@ impl Plugin for SurfacePlugin {
             match event_loop.display_handle().unwrap().as_raw() {
                 #[cfg(target_os = "windows")]
                 RawDisplayHandle::Windows(_) => {
-                    app.add_instance_extension::<ash::khr::win32_surface::Instance>()
+                    app.add_instance_extension::<ash::khr::win32_surface::Meta>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Xlib(_) => {
-                    app.add_instance_extension::<ash::khr::xlib_surface::Instance>()
+                    app.add_instance_extension::<ash::khr::xlib_surface::Meta>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Xcb(_) => {
-                    app.add_instance_extension::<ash::khr::xcb_surface::Instance>()
+                    app.add_instance_extension::<ash::khr::xcb_surface::Meta>()
                         .unwrap();
                 }
                 #[cfg(target_os = "linux")]
                 RawDisplayHandle::Wayland(_) => {
-                    app.add_instance_extension::<ash::khr::wayland_surface::Instance>()
+                    app.add_instance_extension::<ash::khr::wayland_surface::Meta>()
                         .unwrap();
                 }
                 #[cfg(target_os = "android")]
                 RawDisplayHandle::Android(_) => {
-                    app.add_instance_extension::<ash::khr::android_surface::Instance>()
+                    app.add_instance_extension::<ash::khr::android_surface::Meta>()
                         .unwrap();
                 }
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 RawDisplayHandle::UiKit(_) | RawDisplayHandle::AppKit(_) => {
-                    app.add_instance_extension::<ash::ext::metal_surface::Instance>()
+                    app.add_instance_extension::<ash::ext::metal_surface::Meta>()
                         .unwrap();
                 }
                 _ => tracing::warn!("Your display is not supported."),
@@ -183,7 +183,7 @@ unsafe fn create_surface(
 ) -> VkResult<vk::SurfaceKHR> {
     match (display_handle.as_raw(), window_handle.as_raw()) {
         (RawDisplayHandle::Windows(_), RawWindowHandle::Win32(window)) => instance
-            .extension::<khr::win32_surface::Instance>()
+            .extension::<khr::win32_surface::Meta>()
             .create_win32_surface(
                 &vk::Win32SurfaceCreateInfoKHR {
                     hinstance: window.hinstance.unwrap().get() as ash::vk::HINSTANCE,
@@ -194,7 +194,7 @@ unsafe fn create_surface(
             ),
 
         (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(window)) => instance
-            .extension::<khr::wayland_surface::Instance>()
+            .extension::<khr::wayland_surface::Meta>()
             .create_wayland_surface(
                 &vk::WaylandSurfaceCreateInfoKHR {
                     display: display.display.as_ptr(),
@@ -205,7 +205,7 @@ unsafe fn create_surface(
             ),
 
         (RawDisplayHandle::Xlib(display), RawWindowHandle::Xlib(window)) => instance
-            .extension::<khr::xlib_surface::Instance>()
+            .extension::<khr::xlib_surface::Meta>()
             .create_xlib_surface(
                 &vk::XlibSurfaceCreateInfoKHR {
                     dpy: display.display.unwrap().as_ptr() as *mut _,
@@ -216,7 +216,7 @@ unsafe fn create_surface(
             ),
 
         (RawDisplayHandle::Xcb(display), RawWindowHandle::Xcb(window)) => instance
-            .extension::<khr::xcb_surface::Instance>()
+            .extension::<khr::xcb_surface::Meta>()
             .create_xcb_surface(
                 &vk::XcbSurfaceCreateInfoKHR {
                     connection: display.connection.unwrap().as_ptr(),
@@ -227,7 +227,7 @@ unsafe fn create_surface(
             ),
 
         (RawDisplayHandle::Android(_), RawWindowHandle::AndroidNdk(window)) => instance
-            .extension::<khr::android_surface::Instance>()
+            .extension::<khr::android_surface::Meta>()
             .create_android_surface(
                 &vk::AndroidSurfaceCreateInfoKHR {
                     window: window.a_native_window.as_ptr(),
@@ -246,7 +246,7 @@ unsafe fn create_surface(
 
             let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
             instance
-                .extension::<ash::ext::MetalSurface>()
+                .extension::<ash::ext::metal_surface::Meta>()
                 .create_metal_surface(&surface_desc, None)
         }
 

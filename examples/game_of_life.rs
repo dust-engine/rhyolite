@@ -39,7 +39,8 @@ fn main() {
     .add_plugins(RhyolitePlugin::default())
     .add_plugins(SwapchainPlugin::default());
 
-    app.add_device_extension::<ash::khr::PushDescriptor>();
+    app.add_device_extension::<ash::khr::push_descriptor::Meta>()
+        .unwrap();
 
     app.add_systems(
         PostUpdate,

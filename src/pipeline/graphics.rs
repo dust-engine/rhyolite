@@ -97,17 +97,31 @@ impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
     ) -> Option<Task<Self::Pipeline>> {
         let device = self.device.clone();
         let builder = self.builder.clone();
-        let modules = self.stages.iter().map(|shader| assets.get(&shader.shader).map(|s| s.raw())).collect::<Option<Vec<_>>>()?;
+        let modules = self
+            .stages
+            .iter()
+            .map(|shader| assets.get(&shader.shader).map(|s| s.raw()))
+            .collect::<Option<Vec<_>>>()?;
         let stages = self.stages.clone();
         Some(pool.schedule(move || {
             let raw_specialization_info = stages
                 .iter()
                 .map(SpecializedShader::raw_specialization_info)
                 .collect::<Vec<_>>();
-            let stages = stages.iter().zip(raw_specialization_info.iter()).zip(modules.into_iter()).map(|((shader, specialization_info), module)| {
-                vk::PipelineShaderStageCreateInfo::default().flags(shader.flags).stage(shader.stage).module(module).name(&shader.entry_point).specialization_info(specialization_info)
-            }).collect::<Vec<_>>();
-            let mut info = vk::GraphicsPipelineCreateInfo::default().stages(&stages);
+            let stages = stages
+                .iter()
+                .zip(raw_specialization_info.iter())
+                .zip(modules.into_iter())
+                .map(|((shader, specialization_info), module)| {
+                    vk::PipelineShaderStageCreateInfo::default()
+                        .flags(shader.flags)
+                        .stage(shader.stage)
+                        .module(module)
+                        .name(&shader.entry_point)
+                        .specialization_info(specialization_info)
+                })
+                .collect::<Vec<_>>();
+            let info = vk::GraphicsPipelineCreateInfo::default().stages(&stages);
             let result = builder(Builder {
                 device: &device,
                 cache,

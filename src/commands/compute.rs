@@ -1,4 +1,4 @@
-use ash::vk::{self, DeviceExtension};
+use ash::vk::{self};
 use bevy::math::UVec3;
 
 use crate::{ecs::queue_cap::IsComputeQueueCap, BufferLike};
@@ -55,7 +55,7 @@ pub trait ComputeCommands: Sized + CommandRecorder {
             assert_eq!(infos.len(), ptrs.len());
             (self
                 .device()
-                .extension::<ash::khr::acceleration_structure::Device>()
+                .extension::<ash::khr::acceleration_structure::Meta>()
                 .fp()
                 .cmd_build_acceleration_structures_khr)(
                 cmd_buf,
@@ -76,7 +76,7 @@ pub trait ComputeCommands: Sized + CommandRecorder {
         unsafe {
             let cmd_buf = self.cmd_buf();
             self.device()
-                .extension::<ash::khr::acceleration_structure::Device>()
+                .extension::<ash::khr::acceleration_structure::Meta>()
                 .cmd_build_acceleration_structures_indirect(
                     cmd_buf,
                     infos,

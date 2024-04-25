@@ -7,7 +7,7 @@ use crate::PhysicalDevice;
 use crate::Queues;
 use ash::prelude::VkResult;
 use ash::vk;
-use ash::vk::DeviceExtension;
+use ash::vk::ExtensionMeta;
 use bevy::ecs::system::Resource;
 use bevy::utils::hashbrown::HashMap;
 
@@ -96,11 +96,14 @@ impl Device {
     /// Only applicable to extensions not promoted to Vulkan core.
     /// For extensions promoted to Vulkan core, you may directly call the corresponding
     /// function on [`Device`].
-    pub fn get_extension<T: DeviceExtension>(&self) -> Result<&T, ExtensionNotFoundError> {
+    pub fn get_extension<T: ExtensionMeta>(&self) -> Result<&T::Device, ExtensionNotFoundError>
+    where
+        T::Device: 'static,
+    {
         self.0
             .extensions
             .get(T::NAME)
-            .map(|item| item.as_ref().expect("Extension did not add any additional commands; use `has_extension_named` to test if the extension was enabled.").downcast_ref::<T>().unwrap())
+            .map(|item| item.as_ref().expect("Extension did not add any additional commands; use `has_extension_named` to test if the extension was enabled.").downcast_ref::<T::Device>().unwrap())
             .ok_or(ExtensionNotFoundError)
     }
     pub fn has_extension_named(&self, name: &CStr) -> bool {
@@ -111,7 +114,10 @@ impl Device {
     /// For extensions promoted to Vulkan core, you may directly call the corresponding
     /// function on [`Device`].
     #[track_caller]
-    pub fn extension<T: DeviceExtension>(&self) -> &T {
+    pub fn extension<T: ExtensionMeta>(&self) -> &T::Device
+    where
+        T::Device: 'static,
+    {
         self.get_extension::<T>().unwrap()
     }
 

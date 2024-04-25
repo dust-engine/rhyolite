@@ -1,14 +1,17 @@
 use ash::{
-    vk::{self, DeviceExtension},
-    Device, Entry, Instance,
+    vk::{self},
+    Device,
 };
 
-use crate::Version;
-
-pub trait PromotedDeviceExtension: ash::vk::DeviceExtension {
-    fn promote(&self, device: &mut Device);
+pub trait Extension: ash::vk::ExtensionMeta {
+    fn promote_device(device: &mut ash::Device, ext: &Self::Device);
 }
-
+impl<T> Extension for T
+where
+    T: ash::vk::ExtensionMeta,
+{
+    default fn promote_device(device: &mut ash::Device, ext: &Self::Device) {}
+}
 #[derive(Debug)]
 pub struct ExtensionNotFoundError;
 impl From<ExtensionNotFoundError> for ash::vk::Result {
@@ -17,23 +20,23 @@ impl From<ExtensionNotFoundError> for ash::vk::Result {
     }
 }
 
-impl PromotedDeviceExtension for ash::khr::dynamic_rendering::Device {
-    fn promote(&self, device: &mut Device) {
+impl Extension for ash::khr::dynamic_rendering::Meta {
+    fn promote_device(device: &mut ash::Device, ext: &Self::Device) {
         let device = ExposedDevice::new(device);
-        device.device_fn_1_3.cmd_begin_rendering = self.fp().cmd_begin_rendering_khr;
-        device.device_fn_1_3.cmd_end_rendering = self.fp().cmd_end_rendering_khr;
+        device.device_fn_1_3.cmd_begin_rendering = ext.fp().cmd_begin_rendering_khr;
+        device.device_fn_1_3.cmd_end_rendering = ext.fp().cmd_end_rendering_khr;
     }
 }
 
-impl PromotedDeviceExtension for ash::khr::synchronization2::Device {
-    fn promote(&self, device: &mut Device) {
+impl Extension for ash::khr::synchronization2::Meta {
+    fn promote_device(device: &mut ash::Device, ext: &Self::Device) {
         let device = ExposedDevice::new(device);
-        device.device_fn_1_3.cmd_pipeline_barrier2 = self.fp().cmd_pipeline_barrier2_khr;
-        device.device_fn_1_3.cmd_reset_event2 = self.fp().cmd_reset_event2_khr;
-        device.device_fn_1_3.cmd_set_event2 = self.fp().cmd_set_event2_khr;
-        device.device_fn_1_3.cmd_wait_events2 = self.fp().cmd_wait_events2_khr;
-        device.device_fn_1_3.cmd_write_timestamp2 = self.fp().cmd_write_timestamp2_khr;
-        device.device_fn_1_3.queue_submit2 = self.fp().queue_submit2_khr;
+        device.device_fn_1_3.cmd_pipeline_barrier2 = ext.fp().cmd_pipeline_barrier2_khr;
+        device.device_fn_1_3.cmd_reset_event2 = ext.fp().cmd_reset_event2_khr;
+        device.device_fn_1_3.cmd_set_event2 = ext.fp().cmd_set_event2_khr;
+        device.device_fn_1_3.cmd_wait_events2 = ext.fp().cmd_wait_events2_khr;
+        device.device_fn_1_3.cmd_write_timestamp2 = ext.fp().cmd_write_timestamp2_khr;
+        device.device_fn_1_3.queue_submit2 = ext.fp().queue_submit2_khr;
     }
 }
 pub struct ExposedDevice {

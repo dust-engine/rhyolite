@@ -40,7 +40,7 @@ raw-window-metal = "0.4"
 
 [patch.crates-io]
 bevy = { path = "../bevy" }
-ash = { git = "https://github.com/Neo-Zhixing/ash.git" }
+ash = { git = "https://github.com/Neo-Zhixing/ash.git", branch = "meta" }
 
 [dev-dependencies]
 playout_macro = { path = "../playout/macro" }
