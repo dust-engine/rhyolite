@@ -6,6 +6,7 @@ use ash::{
 };
 use bevy::ecs::{system::Resource, world::FromWorld};
 use crossbeam_channel::Sender;
+use std::ops::Deref;
 use std::{
     mem::ManuallyDrop,
     sync::{
@@ -73,7 +74,7 @@ struct DHOTask {
 pub struct DeferredOperationTaskPool(Option<DeferredOperationTaskPoolInner>);
 struct DeferredOperationTaskPoolInner {
     device: Device,
-    sender: ManuallyDrop<Arc<Sender<Arc<DHOTask>>>>,
+    sender: ManuallyDrop<Arc<Sender<(Arc<DHOTask>, Arc<dyn Send + Sync + 'static>)>>>,
     threads: Vec<JoinHandle<()>>,
     available_parallelism: u32,
 }
@@ -100,7 +101,7 @@ impl DeferredOperationTaskPool {
             return Self(None);
         }
         // At most one Task may be in the channel at any given time
-        let (sender, receiver) = crossbeam_channel::unbounded::<Arc<DHOTask>>();
+        let (sender, receiver) = crossbeam_channel::unbounded::<(Arc<DHOTask>, Arc<dyn Send + Sync + 'static>)>();
         let sender = Arc::new(sender);
         let available_parallelism = std::thread::available_parallelism().unwrap().get() as u32;
         let threads: Vec<_> = (0..available_parallelism)
@@ -110,7 +111,7 @@ impl DeferredOperationTaskPool {
                 let device = device.clone();
                 std::thread::spawn(move || {
                     loop {
-                        let task = if let Ok(task) = receiver.recv() {
+                        let (task, args) = if let Ok(task) = receiver.recv() {
                             task
                         } else {
                             // Disconnected.
@@ -126,7 +127,7 @@ impl DeferredOperationTaskPool {
                         if current_concurrency > 1 {
                             // The task can be handled by someone else concurrently
                             if let Some(sender) = sender.upgrade() {
-                                sender.send(task.clone()).unwrap();
+                                sender.send((task.clone(), args.clone())).unwrap();
                             }
                         }
                         if current_concurrency == 0 {
@@ -161,13 +162,15 @@ impl DeferredOperationTaskPool {
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 if current_concurrency == 0 {
                                     if let Some(sender) = sender.upgrade() {
-                                        sender.send(task.clone()).unwrap();
+                                        sender.send((task.clone(), args)).unwrap();
                                     }
                                 }
                             }
-                            _result => {
+                            vk::Result::SUCCESS => {
                                 task.done.store(true, std::sync::atomic::Ordering::Relaxed);
+                                drop(args);
                             }
+                            _ => panic!()
                         }
                     }
                 })
@@ -181,9 +184,9 @@ impl DeferredOperationTaskPool {
         };
         Self(Some(inner))
     }
-    pub fn schedule_dho<T: Send + 'static>(
+    pub fn schedule_dho<T: Send + 'static, D: Send + Sync + 'static>(
         &self,
-        op: impl FnOnce(vk::DeferredOperationKHR) -> (vk::Result, T) + Send + 'static,
+        op: impl FnOnce(vk::DeferredOperationKHR) -> (vk::Result, T, D) + Send + 'static,
     ) -> Task<T> {
         let mut raw_dho = vk::DeferredOperationKHR::null();
         let mut sender = None;
@@ -195,7 +198,7 @@ impl DeferredOperationTaskPool {
                 concurrency: AtomicU32::new(0),
             };
             raw_dho = dho_task.op.raw();
-            sender = Some(inner.sender.clone());
+            sender = Some(inner.sender.deref().clone());
             available_parallelism = inner.available_parallelism;
             Some(Arc::new(dho_task))
         } else {
@@ -206,7 +209,7 @@ impl DeferredOperationTaskPool {
         let task = bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
             // We always spawn the operation on a task pool.
             // Some bad implementation will block the thread even with DeferredHostOperation extension enabled.
-            let (result, item) = op(raw_dho);
+            let (result, item, args) = op(raw_dho);
             match result {
                 vk::Result::SUCCESS => return Ok(item),
                 vk::Result::OPERATION_DEFERRED_KHR => {
@@ -214,7 +217,7 @@ impl DeferredOperationTaskPool {
                     let concurrency = dho.op.get_max_concurrency().max(available_parallelism);
                     dho.concurrency
                         .store(concurrency, std::sync::atomic::Ordering::Relaxed);
-                    sender.unwrap().send(dho.clone()).unwrap();
+                    sender.unwrap().send((dho.clone(), Arc::new(args))).unwrap();
                     return Ok(item);
                 }
                 vk::Result::OPERATION_NOT_DEFERRED_KHR => {
@@ -257,7 +260,7 @@ impl<T> Task<T> {
         let out = unwrap_future(self.task)?;
         if let Some(task) = self.dho {
             let status = task.op.status();
-            if let Some(status) = status {
+            if let Some(status) = status && status != vk::Result::SUCCESS {
                 return Err(status);
             }
         }

@@ -123,95 +123,101 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
         assets: &Assets<ShaderModule>,
         cache: vk::PipelineCache,
     ) -> Option<Task<Self::Pipeline>> {
-        let modules = self
-            .stages
-            .iter()
-            .map(|shader| assets.get(&shader.shader).map(ShaderModule::raw))
-            .collect::<Option<Vec<_>>>()?;
+        let modules = self.stages.iter().map(|shader| assets.get(&shader.shader).map(ShaderModule::raw)).collect::<Option<Vec<_>>>()?;
         let stages = self.stages.clone();
         let groups = self.groups.clone();
         let common = self.common.clone();
         let libraries = self.libraries.clone();
 
         Some(pool.schedule_dho(move |dho| {
-            let specialization_info = stages
-                .iter()
-                .map(|shader| shader.specialization_info.raw_info())
-                .collect::<Vec<_>>();
-            let stages = stages
-                .iter()
-                .zip(modules)
-                .zip(specialization_info.iter())
-                .map(|((shader, module), specialization_info)| {
-                    vk::PipelineShaderStageCreateInfo {
-                        stage: shader.stage,
-                        module,
-                        flags: shader.flags,
-                        ..Default::default()
-                    }
-                    .specialization_info(specialization_info)
-                    .name(&shader.entry_point)
-                })
-                .collect::<Vec<_>>();
-
-            let mut info = vk::RayTracingPipelineCreateInfoKHR::default()
-                .groups(&groups)
-                .stages(&stages);
-            info.max_pipeline_ray_recursion_depth = common.max_pipeline_ray_recursion_depth;
-            let library_interface = vk::RayTracingPipelineInterfaceCreateInfoKHR {
-                max_pipeline_ray_payload_size: common.max_pipeline_ray_payload_size,
-                max_pipeline_ray_hit_attribute_size: common.max_pipeline_ray_hit_attribute_size,
-                ..Default::default()
-            };
-            info.p_library_interface = &library_interface;
-
-            let dynamic_state = vk::PipelineDynamicStateCreateInfo {
-                dynamic_state_count: common.dynamic_states.len() as u32,
-                p_dynamic_states: common.dynamic_states.as_ptr(),
-                ..Default::default()
-            };
-            info.p_dynamic_state = &dynamic_state;
-            info.layout = common.layout.raw();
-            info.flags = common.flags;
-
-            let raw_libraries = libraries
+            let device = common.layout.device().clone();
+            let specialization_info: Vec<vk::SpecializationInfo<'static>> = stages.iter().map(|shader|vk::SpecializationInfo {
+                map_entry_count: shader.specialization_info.entries().len() as u32,
+                p_map_entries: if shader.specialization_info.entries().is_empty() {
+                    std::ptr::null()
+                } else {
+                    shader.specialization_info.entries().as_ptr()
+                },
+                p_data: if shader.specialization_info.data().is_empty() {
+                    std::ptr::null()
+                } else {
+                    shader.specialization_info.data().as_ptr() as *const std::ffi::c_void
+                },
+                data_size: shader.specialization_info.data().len(),
+                _marker: std::marker::PhantomData
+            }).collect::<Vec<_>>();
+            let raw_stages: Vec<vk::PipelineShaderStageCreateInfo<'static>> = stages.iter().zip(modules).zip(specialization_info.iter()).map(|((shader, module), specialization_info)| {
+                vk::PipelineShaderStageCreateInfo {
+                    stage: shader.stage,
+                    module,
+                    flags: shader.flags,
+                    p_specialization_info: specialization_info,
+                    p_name: shader.entry_point.as_ptr(),
+                    ..Default::default()
+                }
+            }).collect::<Vec<_>>();
+            // Create self-referencing pipeline create args
+            let mut args = Box::new((
+                vk::RayTracingPipelineCreateInfoKHR {
+                    max_pipeline_ray_recursion_depth: common.max_pipeline_ray_recursion_depth,
+                    layout: common.layout.raw(),
+                    ..Default::default()
+                },
+                vk::RayTracingPipelineInterfaceCreateInfoKHR {
+                    max_pipeline_ray_payload_size: common.max_pipeline_ray_payload_size,
+                    max_pipeline_ray_hit_attribute_size: common.max_pipeline_ray_hit_attribute_size,
+                    ..Default::default()
+                },
+                common.dynamic_states,
+                vk::PipelineDynamicStateCreateInfo::default(),
+                libraries
                 .iter()
                 .map(|library| library.pipeline.raw())
-                .collect::<Vec<_>>();
-            let library_info = vk::PipelineLibraryCreateInfoKHR {
-                library_count: raw_libraries.len() as u32,
-                p_libraries: raw_libraries.as_ptr(),
-                ..Default::default()
-            };
-            info.p_library_info = &library_info;
+                .collect::<Vec<_>>(),
+                vk::PipelineLibraryCreateInfoKHR::default(),
+                groups,
+                stages,
+                specialization_info,
+                raw_stages,
+                common.layout,
+            ));
+            args.0.p_library_interface = &args.1;
+            args.3.dynamic_state_count = args.2.len() as u32;
+            if args.3.dynamic_state_count > 0 {
+                args.0.p_dynamic_state = &args.3;
+            }
+
+            args.5.library_count = args.4.len() as u32;
+            if args.5.library_count > 0 {
+                args.5.p_libraries = args.4.as_ptr();
+            }
+            args.0.p_library_info = &args.5;
+            args.0.group_count = args.6.len() as u32;
+            if args.0.group_count > 0 {
+                args.0.p_groups = args.6.as_ptr();
+            }
+            args.0.stage_count = args.9.len() as u32;
+            if args.0.stage_count > 0 {
+                args.0.p_stages = args.9.as_ptr();
+            }
 
             let (result, pipeline) = unsafe {
                 let mut pipeline = vk::Pipeline::null();
-                let result = (common
-                    .layout
-                    .device()
+                let result = (device
                     .extension::<RayTracingPipelineExt>()
                     .fp()
                     .create_ray_tracing_pipelines_khr)(
-                    common.layout.device().handle(),
+                    device.handle(),
                     dho,
                     cache,
                     1,
-                    &info,
+                    &args.0,
                     std::ptr::null(),
                     &mut pipeline,
                 );
                 (result, pipeline)
             };
-            let device = common.layout.device().clone();
-
-            drop(stages);
-            drop(common);
-            drop(specialization_info);
-            drop(groups);
-            drop(libraries);
-            drop(raw_libraries);
-            (result, PipelineInner::from_raw(device, pipeline))
+            (result, PipelineInner::from_raw(device, pipeline), args)
         }))
     }
     fn all_shaders(&self) -> impl Iterator<Item = AssetId<ShaderModule>> {
@@ -240,6 +246,7 @@ impl Pipeline for RayTracingPipelineLibrary {
         info: &mut RayTracingPipelineBuildInfo,
         item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
+        assert!(info.common.flags.contains(vk::PipelineCreateFlags::LIBRARY_KHR));
         RayTracingPipelineLibrary {
             pipeline: Arc::new(item),
             shaders: info
@@ -250,9 +257,10 @@ impl Pipeline for RayTracingPipelineLibrary {
         }
     }
     fn from_built_with_owned_info(
-        _info: Self::BuildInfo,
+        info: Self::BuildInfo,
         item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
+        assert!(info.common.flags.contains(vk::PipelineCreateFlags::LIBRARY_KHR));
         RayTracingPipelineLibrary {
             pipeline: Arc::new(item),
             // if we're building with owned info, that means the library would never be rebuilt.
@@ -397,7 +405,7 @@ impl RayTracingPipelineManagerNative {
         pipeline_cache: &PipelineCache,
     ) -> Option<CachedPipeline<RenderObject<RayTracingPipeline>>> {
         let mut stages = Vec::new();
-        let mut groups = Vec::new();
+        let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> = Vec::new();
         for (i, shader) in self.base_stages.iter().enumerate() {
             stages.push(shader.clone());
             groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
@@ -488,7 +496,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
                 ..Default::default()
             })
             .collect();
-        let info = RayTracingPipelineBuildInfo {
+        let mut info = RayTracingPipelineBuildInfo {
             common: common.clone(),
             stages,
             groups,
@@ -499,6 +507,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
             num_hitgroup: 0,
             hitgroup_mapping: Vec::new(),
         };
+        info.common.flags |= vk::PipelineCreateFlags::LIBRARY_KHR;
         let base_library: CachedPipeline<RayTracingPipelineLibrary> = pipeline_cache.create(info);
         Self {
             common,
@@ -527,7 +536,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
         hitgroup: HitGroup,
         pipeline_cache: &PipelineCache,
     ) {
-        let info = RayTracingPipelineBuildInfo {
+        let mut info = RayTracingPipelineBuildInfo {
             common: self.common.clone(),
             groups: hitgroup.to_vk_groups(0),
             stages: hitgroup.shaders,
@@ -538,6 +547,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
             num_hitgroup: 1,
             hitgroup_mapping: Vec::new(),
         };
+        info.common.flags |= vk::PipelineCreateFlags::LIBRARY_KHR;
         let library: CachedPipeline<RayTracingPipelineLibrary> = pipeline_cache.create(info);
 
         assert!(self.hitgroup_libraries[handle.0.get() as usize].is_none());
@@ -775,10 +785,7 @@ impl HitGroup {
         self.groups.push((closest_hit, anyhit, intersection));
     }
 
-    fn to_vk_groups(
-        &self,
-        base_shader_index: u32,
-    ) -> Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> {
+    fn to_vk_groups(&self, base_shader_index: u32) -> Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> {
         self.groups
             .iter()
             .map(

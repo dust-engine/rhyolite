@@ -27,6 +27,7 @@ impl Plugin for RtxPlugin {
             .unwrap();
         app.add_device_extension::<khr::ray_tracing_pipeline::Meta>()
             .unwrap();
+        app.add_device_extension::<khr::pipeline_library::Meta>().ok();
         app.enable_feature::<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>(|f| {
             &mut f.acceleration_structure
         })
