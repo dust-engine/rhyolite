@@ -2567,6 +2567,7 @@ dependencies = [
  "crossbeam-queue",
  "cstr",
  "itertools",
+ "log",
  "once_cell",
  "playout",
  "playout_macro",

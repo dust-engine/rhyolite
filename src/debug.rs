@@ -163,42 +163,34 @@ unsafe extern "system" fn debug_utils_callback(
 
 fn default_callback(
     severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-    _types: vk::DebugUtilsMessageTypeFlagsEXT,
+    types: vk::DebugUtilsMessageTypeFlagsEXT,
     callback_data: &DebugUtilsMessengerCallbackData,
 ) {
-    use tracing::Level;
+    use log::Level;
     let level = match severity {
-        vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => Level::DEBUG,
-        vk::DebugUtilsMessageSeverityFlagsEXT::INFO => Level::INFO,
-        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => Level::WARN,
-        vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => Level::ERROR,
-        _ => Level::TRACE,
+        vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => Level::Debug,
+        vk::DebugUtilsMessageSeverityFlagsEXT::INFO => Level::Info,
+        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => Level::Warn,
+        vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => Level::Error,
+        _ => Level::Trace,
     };
 
-    if level == Level::ERROR {
+    if level == Level::Error {
         let bt = std::backtrace::Backtrace::capture();
         if bt.status() == std::backtrace::BacktraceStatus::Captured {
             println!("{}", bt);
         }
     }
 
-    match level {
-        Level::ERROR => {
-            tracing::error!(message=?callback_data.message_id_name, id=callback_data.message_id_number, detail=?callback_data.message)
-        }
-        Level::WARN => {
-            tracing::warn!(message=?callback_data.message_id_name, id=callback_data.message_id_number, detail=?callback_data.message)
-        }
-        Level::DEBUG => {
-            tracing::debug!(message=?callback_data.message_id_name, id=callback_data.message_id_number, detail=?callback_data.message)
-        }
-        Level::TRACE => {
-            tracing::trace!(message=?callback_data.message_id_name, id=callback_data.message_id_number, detail=?callback_data.message)
-        }
-        Level::INFO => {
-            tracing::info!(message=?callback_data.message_id_name, id=callback_data.message_id_number, detail=?callback_data.message)
-        }
-    };
+    log::log!(
+        target: "vulkan debug",
+        level,
+        message_type:? = types,
+        message_id_number = callback_data.message_id_number,
+        message_id_name = callback_data.message_id_name.and_then(|x| x.to_str().ok()).unwrap_or("Unknown Message Type");
+        "{}",
+        callback_data.message.and_then(|x| x.to_str().ok()).unwrap_or_default(),
+    );
 }
 
 /// Vulkan Object that can be associated with a name and/or a tag.

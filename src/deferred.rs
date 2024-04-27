@@ -38,6 +38,16 @@ impl DeferredHostOperation {
         };
         Ok(Self { device, raw })
     }
+    fn join(&self) -> vk::Result {
+        unsafe {
+            (self.device
+                .extension::<DeferredHostOperations>()
+                .fp()
+                .deferred_operation_join_khr)(
+                self.device.handle(), self.raw
+            )
+        }
+    }
     fn get_max_concurrency(&self) -> u32 {
         unsafe {
             self.device
@@ -106,10 +116,9 @@ impl DeferredOperationTaskPool {
         let sender = Arc::new(sender);
         let available_parallelism = std::thread::available_parallelism().unwrap().get() as u32;
         let threads: Vec<_> = (0..available_parallelism)
-            .map(|_| {
+            .map(|thread_id| {
                 let sender = Arc::downgrade(&sender);
                 let receiver = receiver.clone();
-                let device = device.clone();
                 std::thread::spawn(move || {
                     loop {
                         let (task, args) = if let Ok(task) = receiver.recv() {
@@ -119,12 +128,14 @@ impl DeferredOperationTaskPool {
                             return;
                         };
                         if task.done.load(std::sync::atomic::Ordering::Relaxed) {
+                            tracing::debug!("Thread {} received outdated job {:?}", thread_id, task.op.raw());
                             // Other threads have signaled that this task is done
                             continue;
                         }
                         let current_concurrency = task
                             .concurrency
                             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::debug!("Thread {} received job {:?} with remaining concurrency {}", thread_id, task.op.raw(), current_concurrency);
                         if current_concurrency > 1 {
                             // The task can be handled by someone else concurrently
                             if let Some(sender) = sender.upgrade() {
@@ -134,15 +145,9 @@ impl DeferredOperationTaskPool {
                         if current_concurrency == 0 {
                             continue;
                         }
-                        match unsafe {
-                            (device
-                                .extension::<DeferredHostOperations>()
-                                .fp()
-                                .deferred_operation_join_khr)(
-                                device.handle(), task.op.raw()
-                            )
-                        } {
+                        match task.op.join() {
                             vk::Result::THREAD_DONE_KHR => {
+                                tracing::debug!("Thread {} done", thread_id);
                                 // A return value of VK_THREAD_DONE_KHR indicates that the deferred operation is not complete,
                                 // but there is no work remaining to assign to threads. Future calls to vkDeferredOperationJoinKHR
                                 // are not necessary and will simply harm performance. This situation may occur when other threads
@@ -151,6 +156,7 @@ impl DeferredOperationTaskPool {
                                 task.done.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
                             vk::Result::THREAD_IDLE_KHR => {
+                                tracing::debug!("Thread {} idle", thread_id);
                                 // A return value of VK_THREAD_IDLE_KHR indicates that the deferred operation is not complete,
                                 // and there is no work for the thread to do at the time of the call. This situation may occur
                                 // if the operation encounters a temporary reduction in parallelism.
@@ -168,6 +174,7 @@ impl DeferredOperationTaskPool {
                                 }
                             }
                             vk::Result::SUCCESS => {
+                                tracing::debug!("Thread {} success", thread_id);
                                 task.done.store(true, std::sync::atomic::Ordering::Relaxed);
                                 drop(args);
                             }
@@ -215,13 +222,21 @@ impl DeferredOperationTaskPool {
                 vk::Result::SUCCESS => return Ok(item),
                 vk::Result::OPERATION_DEFERRED_KHR => {
                     let dho = dho2.unwrap();
-                    let concurrency = dho.op.get_max_concurrency().max(available_parallelism);
+                    let concurrency = dho.op.get_max_concurrency();
+                    if concurrency == 0 {
+                        let status = dho.op.join();
+                        assert_eq!(status, vk::Result::SUCCESS);
+                        tracing::debug!("Operation deferred, but immediately joined");
+                        return Ok(item);
+                    }
+                    tracing::debug!("Operation deferred, initial parallism {}", concurrency);
                     dho.concurrency
-                        .store(concurrency, std::sync::atomic::Ordering::Relaxed);
+                        .store(concurrency.min(available_parallelism), std::sync::atomic::Ordering::Relaxed);
                     sender.unwrap().send((dho.clone(), Arc::new(args))).unwrap();
                     return Ok(item);
                 }
                 vk::Result::OPERATION_NOT_DEFERRED_KHR => {
+                    tracing::debug!("Operation not deferred");
                     return Ok(item);
                 }
                 other => return Err(other),

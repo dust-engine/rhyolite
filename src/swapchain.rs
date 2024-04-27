@@ -472,6 +472,26 @@ fn get_create_info<'a>(
             }
         }
     });
+    let mut image_extent = UVec2::new(
+        surface_capabilities.current_extent.width,
+        surface_capabilities.current_extent.height,
+    );
+    if image_extent == UVec2::splat(u32::MAX) {
+        // currentExtent is the current width and height of the surface, or the special value (0xFFFFFFFF, 0xFFFFFFFF)
+        // indicating that the surface size will be determined by the extent of a swapchain targeting the surface.
+        image_extent = UVec2::new(
+            window.resolution.physical_width(),
+            window.resolution.physical_height(),
+        );
+    }
+    image_extent = image_extent.min(UVec2::new(
+        surface_capabilities.max_image_extent.width,
+        surface_capabilities.max_image_extent.height,
+    ));
+    image_extent = image_extent.max(UVec2::new(
+        surface_capabilities.min_image_extent.width,
+        surface_capabilities.min_image_extent.height,
+    ));
     SwapchainCreateInfo {
         flags: config.flags,
         min_image_count: config
@@ -486,10 +506,7 @@ fn get_create_info<'a>(
             }),
         image_format: image_format.format,
         image_color_space: image_format.color_space,
-        image_extent: UVec2::new(
-            surface_capabilities.current_extent.width,
-            surface_capabilities.current_extent.height,
-        ),
+        image_extent,
         image_array_layers: config.image_array_layers,
         image_usage: config.image_usage,
         image_sharing_mode: match &config.sharing_mode {
