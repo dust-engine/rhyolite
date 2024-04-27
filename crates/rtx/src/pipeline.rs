@@ -173,6 +173,7 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
                 vk::RayTracingPipelineCreateInfoKHR {
                     max_pipeline_ray_recursion_depth: common.max_pipeline_ray_recursion_depth,
                     layout: common.layout.raw(),
+                    flags: common.flags,
                     ..Default::default()
                 },
                 vk::RayTracingPipelineInterfaceCreateInfoKHR {

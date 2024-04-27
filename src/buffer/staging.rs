@@ -253,6 +253,14 @@ impl StagingBeltBatchJob<'_> {
                     None,
                 )
                 .unwrap();
+            let mut memory_allocate_flags = vk::MemoryAllocateFlags::default();
+            if self
+                .belt
+                .usage
+                .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+            {
+                memory_allocate_flags |= vk::MemoryAllocateFlags::DEVICE_ADDRESS;
+            }
             let memory = self
                 .belt
                 .device
@@ -261,7 +269,11 @@ impl StagingBeltBatchJob<'_> {
                         allocation_size: self.belt.chunk_size,
                         memory_type_index: self.belt.memory_type_index,
                         ..Default::default()
-                    },
+                    }
+                    .push_next(&mut vk::MemoryAllocateFlagsInfo {
+                        flags: memory_allocate_flags,
+                        ..Default::default()
+                    }),
                     None,
                 )
                 .unwrap();

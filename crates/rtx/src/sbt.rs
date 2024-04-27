@@ -501,11 +501,17 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
     }
     pub fn trace(self, raygen_index: usize, extent: UVec3) {
         unsafe {
+            let cmd_buf = self.commands.cmd_buf();
+            self.pipeline.device().cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                self.pipeline.raw(),
+            );
             self.pipeline
                 .device()
                 .extension::<RayTracingPipelineExt>()
                 .cmd_trace_rays(
-                    self.commands.cmd_buf(),
+                    cmd_buf,
                     &self.raygen_shader_binding_tables[raygen_index],
                     &self.miss_shader_binding_tables,
                     &vk::StridedDeviceAddressRegionKHR::default(),
