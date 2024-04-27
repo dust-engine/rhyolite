@@ -193,6 +193,7 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
                 specialization_info,
                 raw_stages,
                 common.layout,
+                libraries,
             ));
             args.0.p_library_interface = &args.1;
             args.3.dynamic_state_count = args.2.len() as u32;
@@ -203,8 +204,8 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
             args.5.library_count = args.4.len() as u32;
             if args.5.library_count > 0 {
                 args.5.p_libraries = args.4.as_ptr();
+                args.0.p_library_info = &args.5;
             }
-            args.0.p_library_info = &args.5;
             args.0.group_count = args.6.len() as u32;
             if args.0.group_count > 0 {
                 args.0.p_groups = args.6.as_ptr();
