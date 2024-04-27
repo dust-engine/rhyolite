@@ -406,7 +406,6 @@ pub struct TraceRayBuilder<'a, T: ComputeCommands> {
     raygen_shader_binding_tables: SmallVec<[vk::StridedDeviceAddressRegionKHR; 1]>,
     miss_shader_binding_tables: vk::StridedDeviceAddressRegionKHR,
     callable_shader_binding_tables: vk::StridedDeviceAddressRegionKHR,
-    extent: UVec3,
 }
 impl RayTracingPipeline {
     pub fn trace_rays<'a, T: ComputeCommands>(
@@ -423,7 +422,6 @@ impl RayTracingPipeline {
             ),
             miss_shader_binding_tables: vk::StridedDeviceAddressRegionKHR::default(),
             callable_shader_binding_tables: vk::StridedDeviceAddressRegionKHR::default(),
-            extent: UVec3::default(),
             commands,
         }
     }
@@ -501,7 +499,7 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         self.callable_shader_binding_tables = self.bind_inner(args);
         self
     }
-    pub fn trace(self, raygen_index: usize) {
+    pub fn trace(self, raygen_index: usize, extent: UVec3) {
         unsafe {
             self.pipeline
                 .device()
@@ -512,9 +510,9 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
                     &self.miss_shader_binding_tables,
                     &vk::StridedDeviceAddressRegionKHR::default(),
                     &self.callable_shader_binding_tables,
-                    self.extent.x,
-                    self.extent.y,
-                    self.extent.z,
+                    extent.x,
+                    extent.y,
+                    extent.z,
                 );
         }
     }

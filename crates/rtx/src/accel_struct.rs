@@ -67,7 +67,7 @@ impl AccelStruct {
         } else {
             cstr!("TLAS backing buffer")
         };
-        buffer.set_name(name).unwrap();
+        buffer.set_name(name).ok();
         unsafe {
             let raw = buffer
                 .device()

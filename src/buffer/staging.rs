@@ -70,7 +70,12 @@ impl FromWorld for StagingBelt {
         };
 
         // 64MB page size
-        StagingBelt::new_with_memory_type_index(device, 64 * 1024 * 1024, memory_type_index as u32)
+        StagingBelt::new_with_memory_type_index(
+            device,
+            64 * 1024 * 1024,
+            memory_type_index as u32,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+        )
     }
 }
 
@@ -82,6 +87,7 @@ pub struct StagingBelt {
     tail: u64,
     used_chunks: VecDeque<StagingBeltChunk>,
     memory_type_index: u32,
+    usage: vk::BufferUsageFlags,
 
     lifetime_marker: Vec<(Arc<TimelineSemaphore>, u64)>,
 }
@@ -93,6 +99,7 @@ impl StagingBelt {
         device: Device,
         chunk_size: vk::DeviceSize,
         memory_type_index: u32,
+        usage: vk::BufferUsageFlags,
     ) -> Self {
         StagingBelt {
             device,
@@ -102,6 +109,7 @@ impl StagingBelt {
             used_chunks: VecDeque::new(),
             memory_type_index: memory_type_index as u32,
             lifetime_marker: Vec::new(),
+            usage,
         }
     }
     fn cleanup(&mut self, jobs: &mut VecDeque<StagingBufferCleanupJob>) {
@@ -149,6 +157,7 @@ struct StagingBeltChunk {
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     ptr: NonNull<u8>,
+    device_address: vk::DeviceAddress,
     start_index: u64,
     end_index: u64,
 }
@@ -195,6 +204,11 @@ impl StagingBeltBatchJob<'_> {
                     start,
                     offset,
                     size,
+                    device_address: if current_chunk.device_address == 0 {
+                        0
+                    } else {
+                        current_chunk.device_address + offset
+                    },
                     ptr: unsafe { current_chunk.ptr.add(offset as usize) },
                     _marker: PhantomData,
                 };
@@ -211,6 +225,7 @@ impl StagingBeltBatchJob<'_> {
                 chunk.start_index = current_chunk_end_index;
                 let ptr = chunk.ptr;
                 let buffer = chunk.buffer;
+                let device_address = chunk.device_address;
                 self.belt.used_chunks.push_back(chunk);
                 self.belt.tail = current_chunk_end_index + size;
                 return StagingBeltSuballocation {
@@ -219,6 +234,7 @@ impl StagingBeltBatchJob<'_> {
                     offset: 0,
                     size,
                     ptr,
+                    device_address,
                     _marker: PhantomData,
                 };
             }
@@ -230,7 +246,7 @@ impl StagingBeltBatchJob<'_> {
                 .device
                 .create_buffer(
                     &vk::BufferCreateInfo {
-                        usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                        usage: self.belt.usage,
                         size: self.belt.chunk_size,
                         ..Default::default()
                     },
@@ -259,12 +275,27 @@ impl StagingBeltBatchJob<'_> {
                 .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
                 .unwrap() as *mut u8;
             let ptr = NonNull::new(ptr).unwrap();
+            let device_address = if self
+                .belt
+                .usage
+                .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+            {
+                self.belt
+                    .device
+                    .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                        buffer,
+                        ..Default::default()
+                    })
+            } else {
+                0
+            };
             let chunk = StagingBeltChunk {
                 buffer,
                 memory,
                 ptr,
                 end_index: self.belt.chunk_size + current_chunk_end_index,
                 start_index: current_chunk_end_index,
+                device_address,
             };
             self.belt.used_chunks.push_back(chunk);
             self.belt.tail = current_chunk_end_index + size;
@@ -274,6 +305,7 @@ impl StagingBeltBatchJob<'_> {
                 offset: 0,
                 size,
                 ptr,
+                device_address,
                 _marker: PhantomData,
             };
         }
@@ -294,6 +326,7 @@ pub struct StagingBeltSuballocation<T: ?Sized> {
     pub offset: vk::DeviceSize,
     pub size: vk::DeviceSize,
     ptr: NonNull<u8>,
+    device_address: vk::DeviceAddress,
     _marker: std::marker::PhantomData<T>,
 }
 impl<T: ?Sized> BufferLike for StagingBeltSuballocation<T> {
@@ -305,6 +338,12 @@ impl<T: ?Sized> BufferLike for StagingBeltSuballocation<T> {
     }
     fn size(&self) -> vk::DeviceSize {
         self.size
+    }
+    fn device_address(&self) -> vk::DeviceAddress {
+        if self.device_address == 0 {
+            panic!("Device address not available for staging buffer");
+        }
+        self.device_address
     }
 }
 impl<T: ?Sized> StagingBeltSuballocation<T> {
@@ -426,10 +465,27 @@ impl FromWorld for UniformBelt {
         {
             tracing::warn!("Uniform buffers will be created on non-device-local memory");
         }
+
+        let mut usages = vk::BufferUsageFlags::UNIFORM_BUFFER;
+        if device
+            .feature::<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
+            .map(|f| f.buffer_device_address == vk::TRUE)
+            .unwrap_or(false)
+        {
+            usages |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+        }
+        if device
+            .feature::<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>()
+            .map(|f| f.ray_tracing_pipeline == vk::TRUE)
+            .unwrap_or(false)
+        {
+            usages |= vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR;
+        }
         Self(StagingBelt::new_with_memory_type_index(
             device,
             64 * 1024 * 1024,
             memory_type_index as u32,
+            usages,
         ))
     }
 }

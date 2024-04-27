@@ -302,7 +302,7 @@ fn staging_builder_realloc_buffer(
                     | vk::BufferUsageFlags::TRANSFER_DST,
             )
             .unwrap();
-            input_buffer.set_name(cstr!("BLAS input buffer")).unwrap();
+            input_buffer.set_name(cstr!("BLAS input buffer")).ok();
             store.input_buffer = Some(input_buffer);
 
             let mut staging_buffer = Buffer::new_staging(
@@ -312,9 +312,7 @@ fn staging_builder_realloc_buffer(
                 vk::BufferUsageFlags::TRANSFER_SRC,
             )
             .unwrap();
-            staging_buffer
-                .set_name(cstr!("BLAS staging buffer"))
-                .unwrap();
+            staging_buffer.set_name(cstr!("BLAS staging buffer")).ok();
             store.staging_buffer = Some(staging_buffer);
             tracing::info!("BLAS Build allocated new input and staging buffer");
         } else {
@@ -328,7 +326,7 @@ fn staging_builder_realloc_buffer(
             .unwrap();
             input_buffer
                 .set_name(cstr!("BLAS input buffer (direct write)"))
-                .unwrap();
+                .ok();
             store.input_buffer = Some(input_buffer);
             tracing::info!("BLAS Build allocated new input buffer");
         }
@@ -642,7 +640,7 @@ fn device_build_blas_system(
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .unwrap();
-        buffer.set_name(cstr!("BLAS scratch buffer")).unwrap();
+        buffer.set_name(cstr!("BLAS scratch buffer")).ok();
         buffer
     };
     let mut scratch_device_address = scratch_buffer.device_address();

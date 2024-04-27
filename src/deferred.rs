@@ -101,7 +101,8 @@ impl DeferredOperationTaskPool {
             return Self(None);
         }
         // At most one Task may be in the channel at any given time
-        let (sender, receiver) = crossbeam_channel::unbounded::<(Arc<DHOTask>, Arc<dyn Send + Sync + 'static>)>();
+        let (sender, receiver) =
+            crossbeam_channel::unbounded::<(Arc<DHOTask>, Arc<dyn Send + Sync + 'static>)>();
         let sender = Arc::new(sender);
         let available_parallelism = std::thread::available_parallelism().unwrap().get() as u32;
         let threads: Vec<_> = (0..available_parallelism)
@@ -170,7 +171,7 @@ impl DeferredOperationTaskPool {
                                 task.done.store(true, std::sync::atomic::Ordering::Relaxed);
                                 drop(args);
                             }
-                            _ => panic!()
+                            _ => panic!(),
                         }
                     }
                 })
@@ -260,7 +261,9 @@ impl<T> Task<T> {
         let out = unwrap_future(self.task)?;
         if let Some(task) = self.dho {
             let status = task.op.status();
-            if let Some(status) = status && status != vk::Result::SUCCESS {
+            if let Some(status) = status
+                && status != vk::Result::SUCCESS
+            {
                 return Err(status);
             }
         }

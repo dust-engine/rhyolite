@@ -24,7 +24,7 @@ use rhyolite::commands::CommonCommands;
 use rhyolite::dispose::RenderObject;
 use rhyolite::{
     acquire_swapchain_image,
-    ash::{vk},
+    ash::vk,
     buffer::staging::StagingBelt,
     commands::{
         GraphicsCommands, RenderPassCommands, ResourceTransitionCommands, TransferCommands,
@@ -78,7 +78,8 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
         );
         app.init_resource::<PerFrame<EguiHostBuffer<Filter>>>();
         app.add_systems(Startup, initialize_pipelines);
-        app.add_device_extension::<dynamic_rendering::Meta>().unwrap();
+        app.add_device_extension::<dynamic_rendering::Meta>()
+            .unwrap();
         app.enable_feature::<vk::PhysicalDeviceDynamicRenderingFeatures>(|x| {
             &mut x.dynamic_rendering
         })

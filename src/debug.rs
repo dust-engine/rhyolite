@@ -218,12 +218,12 @@ pub trait DebugObject: crate::HasDevice {
                 })
         }
     }
-    fn with_name(mut self, name: &CStr) -> VkResult<Self>
+    fn with_name(mut self, name: &CStr) -> Self
     where
         Self: Sized,
     {
-        self.set_name(name)?;
-        Ok(self)
+        self.set_name(name).ok();
+        self
     }
     fn remove_name(&mut self) -> VkResult<()> {
         unsafe {

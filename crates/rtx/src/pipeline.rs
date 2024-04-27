@@ -123,7 +123,11 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
         assets: &Assets<ShaderModule>,
         cache: vk::PipelineCache,
     ) -> Option<Task<Self::Pipeline>> {
-        let modules = self.stages.iter().map(|shader| assets.get(&shader.shader).map(ShaderModule::raw)).collect::<Option<Vec<_>>>()?;
+        let modules = self
+            .stages
+            .iter()
+            .map(|shader| assets.get(&shader.shader).map(ShaderModule::raw))
+            .collect::<Option<Vec<_>>>()?;
         let stages = self.stages.clone();
         let groups = self.groups.clone();
         let common = self.common.clone();
@@ -131,31 +135,39 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
 
         Some(pool.schedule_dho(move |dho| {
             let device = common.layout.device().clone();
-            let specialization_info: Vec<vk::SpecializationInfo<'static>> = stages.iter().map(|shader|vk::SpecializationInfo {
-                map_entry_count: shader.specialization_info.entries().len() as u32,
-                p_map_entries: if shader.specialization_info.entries().is_empty() {
-                    std::ptr::null()
-                } else {
-                    shader.specialization_info.entries().as_ptr()
-                },
-                p_data: if shader.specialization_info.data().is_empty() {
-                    std::ptr::null()
-                } else {
-                    shader.specialization_info.data().as_ptr() as *const std::ffi::c_void
-                },
-                data_size: shader.specialization_info.data().len(),
-                _marker: std::marker::PhantomData
-            }).collect::<Vec<_>>();
-            let raw_stages: Vec<vk::PipelineShaderStageCreateInfo<'static>> = stages.iter().zip(modules).zip(specialization_info.iter()).map(|((shader, module), specialization_info)| {
-                vk::PipelineShaderStageCreateInfo {
-                    stage: shader.stage,
-                    module,
-                    flags: shader.flags,
-                    p_specialization_info: specialization_info,
-                    p_name: shader.entry_point.as_ptr(),
-                    ..Default::default()
-                }
-            }).collect::<Vec<_>>();
+            let specialization_info: Vec<vk::SpecializationInfo<'static>> = stages
+                .iter()
+                .map(|shader| vk::SpecializationInfo {
+                    map_entry_count: shader.specialization_info.entries().len() as u32,
+                    p_map_entries: if shader.specialization_info.entries().is_empty() {
+                        std::ptr::null()
+                    } else {
+                        shader.specialization_info.entries().as_ptr()
+                    },
+                    p_data: if shader.specialization_info.data().is_empty() {
+                        std::ptr::null()
+                    } else {
+                        shader.specialization_info.data().as_ptr() as *const std::ffi::c_void
+                    },
+                    data_size: shader.specialization_info.data().len(),
+                    _marker: std::marker::PhantomData,
+                })
+                .collect::<Vec<_>>();
+            let raw_stages: Vec<vk::PipelineShaderStageCreateInfo<'static>> = stages
+                .iter()
+                .zip(modules)
+                .zip(specialization_info.iter())
+                .map(
+                    |((shader, module), specialization_info)| vk::PipelineShaderStageCreateInfo {
+                        stage: shader.stage,
+                        module,
+                        flags: shader.flags,
+                        p_specialization_info: specialization_info,
+                        p_name: shader.entry_point.as_ptr(),
+                        ..Default::default()
+                    },
+                )
+                .collect::<Vec<_>>();
             // Create self-referencing pipeline create args
             let mut args = Box::new((
                 vk::RayTracingPipelineCreateInfoKHR {
@@ -171,9 +183,9 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
                 common.dynamic_states,
                 vk::PipelineDynamicStateCreateInfo::default(),
                 libraries
-                .iter()
-                .map(|library| library.pipeline.raw())
-                .collect::<Vec<_>>(),
+                    .iter()
+                    .map(|library| library.pipeline.raw())
+                    .collect::<Vec<_>>(),
                 vk::PipelineLibraryCreateInfoKHR::default(),
                 groups,
                 stages,
@@ -246,7 +258,10 @@ impl Pipeline for RayTracingPipelineLibrary {
         info: &mut RayTracingPipelineBuildInfo,
         item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
-        assert!(info.common.flags.contains(vk::PipelineCreateFlags::LIBRARY_KHR));
+        assert!(info
+            .common
+            .flags
+            .contains(vk::PipelineCreateFlags::LIBRARY_KHR));
         RayTracingPipelineLibrary {
             pipeline: Arc::new(item),
             shaders: info
@@ -260,7 +275,10 @@ impl Pipeline for RayTracingPipelineLibrary {
         info: Self::BuildInfo,
         item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
-        assert!(info.common.flags.contains(vk::PipelineCreateFlags::LIBRARY_KHR));
+        assert!(info
+            .common
+            .flags
+            .contains(vk::PipelineCreateFlags::LIBRARY_KHR));
         RayTracingPipelineLibrary {
             pipeline: Arc::new(item),
             // if we're building with owned info, that means the library would never be rebuilt.
@@ -785,7 +803,10 @@ impl HitGroup {
         self.groups.push((closest_hit, anyhit, intersection));
     }
 
-    fn to_vk_groups(&self, base_shader_index: u32) -> Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> {
+    fn to_vk_groups(
+        &self,
+        base_shader_index: u32,
+    ) -> Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> {
         self.groups
             .iter()
             .map(

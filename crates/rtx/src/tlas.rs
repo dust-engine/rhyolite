@@ -579,16 +579,14 @@ fn prepare_tlas<B: Send + Sync + 'static>(
             *accel_struct = RenderRes::new(
                 AccelStruct::new_tlas(allocator.clone(), build_size.acceleration_structure_size)
                     .unwrap()
-                    .with_name(CString::new(std::any::type_name::<B>()).unwrap().as_c_str())
-                    .unwrap(),
+                    .with_name(CString::new(std::any::type_name::<B>()).unwrap().as_c_str()),
             );
         }
     } else {
         store.accel_struct = Some(RenderRes::new(
             AccelStruct::new_tlas(allocator.clone(), build_size.acceleration_structure_size)
                 .unwrap()
-                .with_name(CString::new(std::any::type_name::<B>()).unwrap().as_c_str())
-                .unwrap(),
+                .with_name(CString::new(std::any::type_name::<B>()).unwrap().as_c_str()),
         ));
     };
     let scratch_offset_alignment: u32 = allocator
@@ -609,8 +607,7 @@ fn prepare_tlas<B: Send + Sync + 'static>(
                         | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 )
                 .unwrap()
-                .with_name(cstr!("TLAS scratch buffer"))
-                .unwrap(),
+                .with_name(cstr!("TLAS scratch buffer")),
             );
         }
     } else {
@@ -622,8 +619,7 @@ fn prepare_tlas<B: Send + Sync + 'static>(
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             )
             .unwrap()
-            .with_name(cstr!("TLAS scratch buffer"))
-            .unwrap(),
+            .with_name(cstr!("TLAS scratch buffer")),
         ));
     };
 }
@@ -696,10 +692,6 @@ fn build_tlas<B: Send + Sync + 'static>(
         },
         ..Default::default()
     };
-    println!(
-        "Scratch buffer size: {}",
-        store.scratch_buffer.as_ref().unwrap().size()
-    );
     let build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
         ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
         flags: vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE,
