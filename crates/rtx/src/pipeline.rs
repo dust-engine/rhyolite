@@ -1,4 +1,4 @@
-use std::{alloc::Layout, collections::BTreeSet, sync::Arc};
+use std::{alloc::Layout, collections::BTreeSet, ffi::CStr, sync::Arc};
 
 use bevy::{
     asset::{AssetId, Assets},
@@ -133,7 +133,16 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
         let common = self.common.clone();
         let libraries = self.libraries.clone();
 
-        Some(pool.schedule_dho(move |dho| {
+        let driver_properties = common
+            .layout
+            .device()
+            .physical_device()
+            .properties()
+            .get::<vk::PhysicalDeviceDriverProperties>();
+        // White listing drivers correctly implementing dho for rtx pipeline
+        let should_use_dho = [vk::DriverId::MESA_RADV].contains(&driver_properties.driver_id);
+
+        Some(pool.schedule_dho(should_use_dho, move |dho| {
             let device = common.layout.device().clone();
             let specialization_info: Vec<vk::SpecializationInfo<'static>> = stages
                 .iter()

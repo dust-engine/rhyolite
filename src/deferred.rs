@@ -40,12 +40,11 @@ impl DeferredHostOperation {
     }
     fn join(&self) -> vk::Result {
         unsafe {
-            (self.device
+            (self
+                .device
                 .extension::<DeferredHostOperations>()
                 .fp()
-                .deferred_operation_join_khr)(
-                self.device.handle(), self.raw
-            )
+                .deferred_operation_join_khr)(self.device.handle(), self.raw)
         }
     }
     fn get_max_concurrency(&self) -> u32 {
@@ -128,14 +127,23 @@ impl DeferredOperationTaskPool {
                             return;
                         };
                         if task.done.load(std::sync::atomic::Ordering::Relaxed) {
-                            tracing::debug!("Thread {} received outdated job {:?}", thread_id, task.op.raw());
+                            tracing::debug!(
+                                "Thread {} received outdated job {:?}",
+                                thread_id,
+                                task.op.raw()
+                            );
                             // Other threads have signaled that this task is done
                             continue;
                         }
                         let current_concurrency = task
                             .concurrency
                             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                        tracing::debug!("Thread {} received job {:?} with remaining concurrency {}", thread_id, task.op.raw(), current_concurrency);
+                        tracing::debug!(
+                            "Thread {} received job {:?} with remaining concurrency {}",
+                            thread_id,
+                            task.op.raw(),
+                            current_concurrency
+                        );
                         if current_concurrency > 1 {
                             // The task can be handled by someone else concurrently
                             if let Some(sender) = sender.upgrade() {
@@ -194,12 +202,15 @@ impl DeferredOperationTaskPool {
     }
     pub fn schedule_dho<T: Send + 'static, D: Send + Sync + 'static>(
         &self,
+        dho_enabled: bool,
         op: impl FnOnce(vk::DeferredOperationKHR) -> (vk::Result, T, D) + Send + 'static,
     ) -> Task<T> {
         let mut raw_dho = vk::DeferredOperationKHR::null();
         let mut sender = None;
         let mut available_parallelism = 0;
-        let dho = if let Some(inner) = &self.0 {
+        let dho = if let Some(inner) = &self.0
+            && dho_enabled
+        {
             let dho_task = DHOTask {
                 done: AtomicBool::new(false),
                 op: DeferredHostOperation::new(inner.device.clone()).unwrap(),
@@ -219,7 +230,6 @@ impl DeferredOperationTaskPool {
             // Some bad implementation will block the thread even with DeferredHostOperation extension enabled.
             let (result, item, args) = op(raw_dho);
             match result {
-                vk::Result::SUCCESS => return Ok(item),
                 vk::Result::OPERATION_DEFERRED_KHR => {
                     let dho = dho2.unwrap();
                     let concurrency = dho.op.get_max_concurrency();
@@ -230,13 +240,16 @@ impl DeferredOperationTaskPool {
                         return Ok(item);
                     }
                     tracing::debug!("Operation deferred, initial parallism {}", concurrency);
-                    dho.concurrency
-                        .store(concurrency.min(available_parallelism), std::sync::atomic::Ordering::Relaxed);
+                    dho.concurrency.store(
+                        concurrency.min(available_parallelism),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
                     sender.unwrap().send((dho.clone(), Arc::new(args))).unwrap();
                     return Ok(item);
                 }
-                vk::Result::OPERATION_NOT_DEFERRED_KHR => {
+                vk::Result::OPERATION_NOT_DEFERRED_KHR | vk::Result::SUCCESS => {
                     tracing::debug!("Operation not deferred");
+                    drop(args);
                     return Ok(item);
                 }
                 other => return Err(other),

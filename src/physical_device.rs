@@ -212,13 +212,7 @@ impl PhysicalDeviceProperties {
         }
     }
     pub fn device_name(&self) -> &CStr {
-        unsafe {
-            CStr::from_bytes_until_nul(std::slice::from_raw_parts(
-                self.inner.device_name.as_ptr() as *const _,
-                self.inner.device_name.len(),
-            ))
-            .unwrap()
-        }
+        self.inner.device_name_as_c_str().unwrap()
     }
     /// Returns the maximum supported API version for this physical device.
     pub fn api_version(&self) -> Version {

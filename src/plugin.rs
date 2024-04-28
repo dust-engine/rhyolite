@@ -85,13 +85,7 @@ impl DeviceExtensions {
         let extension_names = extension_names
             .into_iter()
             .map(|ext| {
-                let str = CStr::from_bytes_until_nul(unsafe {
-                    std::slice::from_raw_parts(
-                        ext.extension_name.as_ptr() as *const u8,
-                        ext.extension_name.len(),
-                    )
-                })
-                .unwrap();
+                let str = ext.extension_name_as_c_str().unwrap();
                 (str.to_owned(), Version(ext.spec_version))
             })
             .collect::<BTreeMap<CString, Version>>();
@@ -119,13 +113,7 @@ impl FromWorld for InstanceExtensions {
             .unwrap()
             .into_iter()
             .map(|ext| {
-                let str = CStr::from_bytes_until_nul(unsafe {
-                    std::slice::from_raw_parts(
-                        ext.extension_name.as_ptr() as *const u8,
-                        ext.extension_name.len(),
-                    )
-                })
-                .unwrap();
+                let str = ext.extension_name_as_c_str().unwrap();
                 (str.to_owned(), Version(ext.spec_version))
             })
             .collect::<BTreeMap<CString, Version>>();
@@ -153,28 +141,18 @@ impl FromWorld for InstanceLayers {
             .unwrap()
             .into_iter()
             .map(|layer| {
-                let str = CStr::from_bytes_until_nul(unsafe {
-                    std::slice::from_raw_parts(
-                        layer.layer_name.as_ptr() as *const u8,
-                        layer.layer_name.len(),
-                    )
-                })
-                .unwrap();
+                let str = layer.layer_name_as_c_str().unwrap();
                 (
                     str.to_owned(),
                     LayerProperties {
                         implementation_version: Version(layer.implementation_version),
                         spec_version: Version(layer.spec_version),
-                        description: CStr::from_bytes_until_nul(unsafe {
-                            std::slice::from_raw_parts(
-                                layer.description.as_ptr() as *const u8,
-                                layer.description.len(),
-                            )
-                        })
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .to_string(),
+                        description: layer
+                            .description_as_c_str()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string(),
                     },
                 )
             })
@@ -481,15 +459,10 @@ impl RhyoliteApp for App {
             };
             instance_extensions.available_extensions.extend(
                 additional_instance_extensions.into_iter().map(|a| {
-                    let name = unsafe {
-                        CStr::from_bytes_until_nul(std::slice::from_raw_parts(
-                            a.extension_name.as_ptr() as *const u8,
-                            a.extension_name.len(),
-                        ))
-                    }
-                    .unwrap();
-                    let name = name.to_owned();
-                    (name, Version(a.spec_version))
+                    (
+                        a.extension_name_as_c_str().unwrap().to_owned(),
+                        Version(a.spec_version),
+                    )
                 }),
             );
 
