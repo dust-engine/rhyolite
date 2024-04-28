@@ -253,6 +253,7 @@ impl Plugin for RhyolitePlugin {
 
         app.add_plugins(crate::staging::StagingBeltPlugin);
         app.add_plugins(crate::dispose::DisposerPlugin);
+        app.add_plugins(crate::pipeline::PipelineCachePlugin::default());
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions =
@@ -274,7 +275,6 @@ impl Plugin for RhyolitePlugin {
 
         // Add allocator
         app.world.init_resource::<crate::Allocator>();
-        app.world.init_resource::<crate::pipeline::PipelineCache>();
         app.world.init_resource::<crate::task::AsyncTaskPool>();
         app.world
             .init_resource::<crate::DeferredOperationTaskPool>();
