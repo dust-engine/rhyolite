@@ -1,3 +1,4 @@
+use cstr::cstr;
 use std::{collections::BTreeSet, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
@@ -203,6 +204,12 @@ impl Swapchain {
                         let acquire_semaphore = device
                             .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
                             .unwrap();
+                        device
+                            .set_debug_name(present_semaphore, cstr!("Present Semaphore"))
+                            .ok();
+                        device
+                            .set_debug_name(acquire_semaphore, cstr!("Acquire Semaphore"))
+                            .ok();
                         let mut img = RenderImage::new(SwapchainImageInner {
                             image,
                             indice: i as u32,
@@ -218,10 +225,16 @@ impl Swapchain {
                     .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?
                     .into(),
                 inner,
-                // Create one extra semaphore for the first acquire
-                acquire_semaphore: device
-                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                    .unwrap(),
+                acquire_semaphore: {
+                    // Create one extra semaphore for the first acquire
+                    let semaphore = device
+                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                        .unwrap();
+                    device
+                        .set_debug_name(semaphore, cstr!("Extra Acquire Semaphore"))
+                        .ok();
+                    semaphore
+                },
             })
         }
     }

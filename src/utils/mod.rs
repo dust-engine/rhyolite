@@ -32,6 +32,8 @@ impl<T: Deref<Target = [u32]>> SharingMode<T> {
     }
 }
 
+/// Type-erased object representing a tagged Vulkan structure.
+/// It is basically a [`Box<dyn Any>`], but for types implementing [`ash::vk::TaggedStructure`].
 #[repr(C)]
 pub struct VkTaggedObject {
     pub s_type: vk::StructureType,
@@ -71,4 +73,9 @@ impl VkTaggedObject {
             None
         }
     }
+}
+
+pub trait AsVkHandle {
+    type Handle: ash::vk::Handle + Copy;
+    fn vk_handle(&self) -> Self::Handle;
 }

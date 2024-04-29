@@ -194,21 +194,10 @@ fn default_callback(
 }
 
 /// Vulkan Object that can be associated with a name and/or a tag.
-pub trait DebugObject: crate::HasDevice {
-    fn object_handle(&mut self) -> u64;
-    const OBJECT_TYPE: vk::ObjectType;
+pub trait DebugObject: crate::HasDevice + crate::utils::AsVkHandle {
     fn set_name(&mut self, cstr: &CStr) -> VkResult<()> {
-        unsafe {
-            let object_handle = self.object_handle();
-            self.device()
-                .get_extension::<DebugUtilsExt>()?
-                .set_debug_utils_object_name(&vk::DebugUtilsObjectNameInfoEXT {
-                    object_type: Self::OBJECT_TYPE,
-                    object_handle,
-                    p_object_name: cstr.as_ptr(),
-                    ..Default::default()
-                })
-        }
+        let handle = self.vk_handle();
+        self.device().set_debug_name(handle, cstr)
     }
     fn with_name(mut self, name: &CStr) -> Self
     where
@@ -218,19 +207,11 @@ pub trait DebugObject: crate::HasDevice {
         self
     }
     fn remove_name(&mut self) -> VkResult<()> {
-        unsafe {
-            let object_handle = self.object_handle();
-            self.device()
-                .get_extension::<DebugUtilsExt>()?
-                .set_debug_utils_object_name(&vk::DebugUtilsObjectNameInfoEXT {
-                    object_type: Self::OBJECT_TYPE,
-                    object_handle,
-                    p_object_name: std::ptr::null(),
-                    ..Default::default()
-                })
-        }
+        let handle = self.vk_handle();
+        self.device().remove_debug_name(handle)
     }
 }
+impl<T> DebugObject for T where T: crate::HasDevice + crate::utils::AsVkHandle {}
 
 pub trait DebugCommands: CommandRecorder {
     fn begin_debug_label(&mut self, label: &CStr, color: [f32; 4]) {
@@ -282,3 +263,34 @@ pub trait DebugCommands: CommandRecorder {
     }
 }
 impl<T> DebugCommands for T where T: CommandRecorder {}
+
+impl crate::Device {
+    pub fn set_debug_name<T: ash::vk::Handle + Copy>(
+        &self,
+        handle: T,
+        name: &CStr,
+    ) -> VkResult<()> {
+        unsafe {
+            let object_handle = handle.as_raw();
+            self.get_extension::<DebugUtilsExt>()?
+                .set_debug_utils_object_name(&vk::DebugUtilsObjectNameInfoEXT {
+                    object_type: T::TYPE,
+                    object_handle,
+                    p_object_name: name.as_ptr(),
+                    ..Default::default()
+                })
+        }
+    }
+
+    pub fn remove_debug_name<T: ash::vk::Handle + Copy>(&self, handle: T) -> VkResult<()> {
+        unsafe {
+            let object_handle = handle.as_raw();
+            self.get_extension::<DebugUtilsExt>()?
+                .set_debug_utils_object_name(&vk::DebugUtilsObjectNameInfoEXT {
+                    object_type: T::TYPE,
+                    object_handle,
+                    ..Default::default()
+                })
+        }
+    }
+}

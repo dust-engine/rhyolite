@@ -8,13 +8,22 @@ use std::{
 
 use ash::vk;
 use bevy::ecs::system::Resource;
+use std::fmt::Debug;
 
 /// Index of a created queue
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QueueRef {
     pub(crate) index: u32,
     pub(crate) family: u32,
     pub(crate) caps: vk::QueueFlags,
+}
+impl Debug for QueueRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "Queue(#{} on family {}, {:?})",
+            self.index, self.family, self.caps
+        ))
+    }
 }
 impl QueueRef {
     pub fn null() -> Self {

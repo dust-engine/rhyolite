@@ -11,9 +11,7 @@ use ash::{
     vk::{self, Handle},
 };
 
-use crate::{
-    debug::DebugObject, utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel,
-};
+use crate::{utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel};
 use vk_mem::Alloc;
 
 pub trait BufferLike {
@@ -37,12 +35,11 @@ pub struct Buffer {
 }
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
-impl DebugObject for Buffer {
-    fn object_handle(&mut self) -> u64 {
-        self.buffer.as_raw()
+impl crate::utils::AsVkHandle for Buffer {
+    fn vk_handle(&self) -> Self::Handle {
+        self.buffer
     }
-
-    const OBJECT_TYPE: vk::ObjectType = vk::ObjectType::BUFFER;
+    type Handle = vk::Buffer;
 }
 impl Drop for Buffer {
     fn drop(&mut self) {

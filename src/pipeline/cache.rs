@@ -128,6 +128,7 @@ impl PipelineCache {
                     let build_info = cached_pipeline.build_info.take().unwrap();
                     T::from_built_with_owned_info(build_info, new_pipeline)
                 };
+                println!("Pipeline built");
                 cached_pipeline.pipeline.replace(built);
             } else if !allow_stale {
                 // A build task is pending, and we don't want to return a stale pipeline.

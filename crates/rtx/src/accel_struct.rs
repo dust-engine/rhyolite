@@ -2,6 +2,7 @@ use rhyolite::{
     ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, prelude::VkResult, vk},
     cstr,
     debug::DebugObject,
+    utils::AsVkHandle,
     Allocator, Buffer, BufferLike, Device, HasDevice,
 };
 
@@ -26,13 +27,11 @@ impl HasDevice for AccelStruct {
         self.buffer.device()
     }
 }
-impl DebugObject for AccelStruct {
-    fn object_handle(&mut self) -> u64 {
-        use rhyolite::ash::vk::Handle;
-        self.raw.as_raw()
+impl AsVkHandle for AccelStruct {
+    fn vk_handle(&self) -> vk::AccelerationStructureKHR {
+        self.raw
     }
-
-    const OBJECT_TYPE: vk::ObjectType = vk::ObjectType::ACCELERATION_STRUCTURE_KHR;
+    type Handle = vk::AccelerationStructureKHR;
 }
 impl AccelStruct {
     pub fn device_address(&self) -> vk::DeviceAddress {
@@ -98,5 +97,8 @@ impl AccelStruct {
                 device_address,
             })
         }
+    }
+    pub fn raw(&self) -> vk::AccelerationStructureKHR {
+        self.raw
     }
 }

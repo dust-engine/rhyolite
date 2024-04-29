@@ -1,8 +1,11 @@
 use std::{fmt::Debug, sync::atomic::AtomicU64};
 
-use ash::{prelude::VkResult, vk};
+use ash::{
+    prelude::VkResult,
+    vk::{self},
+};
 
-use crate::Device;
+use crate::{utils::AsVkHandle, Device, HasDevice};
 
 pub struct TimelineSemaphore {
     device: Device,
@@ -101,6 +104,17 @@ impl TimelineSemaphore {
                 .fetch_max(value, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
+    }
+}
+impl HasDevice for TimelineSemaphore {
+    fn device(&self) -> &Device {
+        &self.device
+    }
+}
+impl AsVkHandle for TimelineSemaphore {
+    type Handle = vk::Semaphore;
+    fn vk_handle(&self) -> vk::Semaphore {
+        self.semaphore
     }
 }
 

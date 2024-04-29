@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, ffi::CString, mem::MaybeUninit, ops::DerefMut};
+use std::{
+    collections::BTreeMap,
+    ffi::CString,
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut},
+};
 
 use bevy::{
     app::{App, Plugin, PostUpdate},
@@ -341,7 +346,7 @@ pub trait TLASBuilder: Send + Sync + 'static {
 }
 
 #[derive(Resource)]
-struct TLASDeviceBuildStore<T> {
+pub struct TLASDeviceBuildStore<T> {
     static_buffer: RenderRes<BufferArray<vk::AccelerationStructureInstanceKHR>>,
 
     /// We maintain both buffers at the same time because the scene may not be in motion at all times.
@@ -353,6 +358,17 @@ struct TLASDeviceBuildStore<T> {
     scratch_buffer: Option<RenderRes<Buffer>>,
     accel_struct: Option<RenderRes<AccelStruct>>,
     _marker: std::marker::PhantomData<T>,
+}
+impl<T> Deref for TLASDeviceBuildStore<T> {
+    type Target = Option<RenderRes<AccelStruct>>;
+    fn deref(&self) -> &Self::Target {
+        &self.accel_struct
+    }
+}
+impl<T> DerefMut for TLASDeviceBuildStore<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.accel_struct
+    }
 }
 impl<T> FromWorld for TLASDeviceBuildStore<T> {
     fn from_world(world: &mut bevy::prelude::World) -> Self {
@@ -673,7 +689,7 @@ fn build_tlas_barrier<B: Send + Sync + 'static>(
     );
 }
 
-fn build_tlas<B: Send + Sync + 'static>(
+pub fn build_tlas<B: Send + Sync + 'static>(
     mut commands: RenderCommands<'c'>,
     store: Res<TLASDeviceBuildStore<B>>,
 ) {

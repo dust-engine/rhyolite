@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeSet,
+    ffi::CString,
     sync::{Arc, Mutex},
 };
 
@@ -26,6 +27,7 @@ use bevy::{
 };
 
 use crate::{
+    debug::DebugObject,
     ecs::{
         BarrierProducerOutConfig, DefaultCommandPool, PerFrame, QueueSubmissionInfo,
         RenderSystemInitialState, ResInstanceConfig,
@@ -334,7 +336,14 @@ impl ScheduleBuildPass for RenderSystemPass {
                     } else {
                         QueueSubmissionInfo {
                             signal_semaphore: Some(Arc::new(
-                                TimelineSemaphore::new(device.clone()).unwrap(),
+                                TimelineSemaphore::new(device.clone()).unwrap().with_name(
+                                    CString::new(format!(
+                                        "TimelineSemaphore for QueueOp {:?} Stage {}",
+                                        meta.selected_queue, meta.stage_index
+                                    ))
+                                    .unwrap()
+                                    .as_c_str(),
+                                ),
                             )),
                             signal_semaphore_value: 1,
                             ..Default::default()
@@ -381,7 +390,15 @@ impl ScheduleBuildPass for RenderSystemPass {
                         selected_queue: queue_graph_node_info.queue,
                         submission_info: Arc::new(Mutex::new(QueueSubmissionInfo {
                             signal_semaphore: Some(Arc::new(
-                                TimelineSemaphore::new(device.clone()).unwrap(),
+                                TimelineSemaphore::new(device.clone()).unwrap().with_name(
+                                    CString::new(format!(
+                                        "TimelineSemaphore for QueueOp {:?} Stage {}",
+                                        queue_graph_node_info.queue,
+                                        queue_graph_node_info.stage_index
+                                    ))
+                                    .unwrap()
+                                    .as_c_str(),
+                                ),
                             )),
                             signal_semaphore_value: 1,
                             ..Default::default()
