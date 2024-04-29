@@ -1,13 +1,13 @@
 use ash::{prelude::VkResult, vk};
-use bevy::app::Plugin;
-use bevy::ecs::system::Resource;
+use bevy::app::{Plugin, Startup};
+use bevy::ecs::system::{Res, ResMut, Resource};
 use std::ffi::CStr;
 
 use std::sync::RwLock;
 
 use crate::commands::CommandRecorder;
 use crate::plugin::RhyoliteApp;
-use crate::Instance;
+use crate::{Device, Instance};
 use ash::ext::debug_utils::Meta as DebugUtilsExt;
 
 #[derive(Default)]
@@ -16,11 +16,16 @@ pub struct DebugUtilsPlugin;
 impl Plugin for DebugUtilsPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         app.add_instance_extension::<DebugUtilsExt>().unwrap();
+        app.add_systems(Startup, set_device);
     }
     fn finish(&self, app: &mut bevy::app::App) {
         let instance: Instance = app.world.resource::<Instance>().clone();
         app.insert_resource(DebugUtilsMessenger::new(instance).unwrap());
     }
+}
+
+fn set_device(device: Res<Device>, mut messenger: ResMut<DebugUtilsMessenger>) {
+    messenger.0.device = Some(device.clone());
 }
 
 pub type DebugUtilsMessengerCallback = fn(
@@ -30,6 +35,8 @@ pub type DebugUtilsMessengerCallback = fn(
 );
 
 pub struct DebugUtilsMessengerCallbackData<'a> {
+    pub instance: &'a Instance,
+    pub device: Option<&'a Device>,
     /// Identifies the particular message ID that is associated with the provided message.
     /// If the message corresponds to a validation layer message, then this string may contain
     /// the portion of the Vulkan specification that is believed to have been violated.
@@ -50,6 +57,7 @@ pub struct DebugUtilsMessenger(Box<DebugUtilsMessengerInner>);
 
 struct DebugUtilsMessengerInner {
     instance: Instance,
+    device: Option<Device>,
     messenger: vk::DebugUtilsMessengerEXT,
     callbacks: RwLock<Vec<DebugUtilsMessengerCallback>>,
 }
@@ -68,6 +76,7 @@ impl DebugUtilsMessenger {
     pub fn new(instance: Instance) -> VkResult<Self> {
         let mut this = Box::new(DebugUtilsMessengerInner {
             instance,
+            device: None,
             messenger: vk::DebugUtilsMessengerEXT::default(),
             callbacks: RwLock::new(vec![default_callback]),
         });
@@ -117,6 +126,8 @@ unsafe extern "system" fn debug_utils_callback(
         &*(user_data as *mut DebugUtilsMessengerInner as *const DebugUtilsMessengerInner);
     let callback_data_raw = &*callback_data;
     let callback_data = DebugUtilsMessengerCallbackData {
+        instance: &this.instance,
+        device: this.device.as_ref(),
         message_id_number: callback_data_raw.message_id_number,
         message_id_name: if callback_data_raw.p_message_id_name.is_null() {
             None
@@ -182,8 +193,15 @@ fn default_callback(
         }
     }
 
+    let target = match types {
+        vk::DebugUtilsMessageTypeFlagsEXT::GENERAL => "vulkan_message",
+        vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION => "vulkan_validation",
+        vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE => "vulkan_performance",
+        _ => "vulkan",
+    };
+
     log::log!(
-        target: "vulkan debug",
+        target: target,
         level,
         message_type:? = types,
         message_id_number = callback_data.message_id_number,
