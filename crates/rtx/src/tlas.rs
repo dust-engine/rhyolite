@@ -14,7 +14,7 @@ use bevy::{
             Added, ArchetypeFilter, Or, QueryFilter, QueryItem, ReadOnlyQueryData, With, Without,
         },
         removal_detection::RemovedComponents,
-        schedule::IntoSystemConfigs,
+        schedule::{IntoSystemConfigs, SystemSet},
         system::{
             Commands, In, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
             SystemParamItem,
@@ -746,6 +746,10 @@ impl<T: TLASBuilder> Default for TLASBuilderPlugin<T> {
         }
     }
 }
+
+#[derive(SystemSet, Hash, PartialEq, Eq, Clone, Copy, Debug)]
+pub struct TLASBuilderSet;
+
 impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
     fn build(&self, _app: &mut App) {}
     fn finish(&self, app: &mut App) {
@@ -763,7 +767,7 @@ impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
                     (build_tlas::<T::TLASType>)
                         .with_barriers(build_tlas_barrier::<T::TLASType>)
                         .after(prepare_tlas::<T::TLASType>),
-                ),
+                ).in_set(TLASBuilderSet),
             );
         }
 
@@ -775,7 +779,7 @@ impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
                     .after(resize_buffer::<T::TLASType>)
                     .before(prepare_tlas::<T::TLASType>),
                 assign_index::<T>.before(resize_buffer::<T::TLASType>),
-            ),
+            ).in_set(TLASBuilderSet),
         );
 
         // TODO: If supports host build, do those things.
