@@ -66,6 +66,12 @@ impl<T: Pipeline> CachedPipeline<T> {
         }
         return false;
     }
+    pub fn get(&self) -> Option<&T> {
+        self.pipeline.as_ref()
+    }
+    pub fn get_mut(&mut self) -> Option<&mut T> {
+        self.pipeline.as_mut()
+    }
 }
 
 impl PipelineCache {

@@ -3,6 +3,7 @@
 #![feature(impl_trait_in_assoc_type)]
 #![feature(type_alias_impl_trait)]
 #![feature(associated_type_defaults)]
+#![feature(generic_const_exprs)]
 
 mod accel_struct;
 mod blas;

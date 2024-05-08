@@ -767,7 +767,8 @@ impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
                     (build_tlas::<T::TLASType>)
                         .with_barriers(build_tlas_barrier::<T::TLASType>)
                         .after(prepare_tlas::<T::TLASType>),
-                ).in_set(TLASBuilderSet),
+                )
+                    .in_set(TLASBuilderSet),
             );
         }
 
@@ -779,7 +780,8 @@ impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
                     .after(resize_buffer::<T::TLASType>)
                     .before(prepare_tlas::<T::TLASType>),
                 assign_index::<T>.before(resize_buffer::<T::TLASType>),
-            ).in_set(TLASBuilderSet),
+            )
+                .in_set(TLASBuilderSet),
         );
 
         // TODO: If supports host build, do those things.
