@@ -313,21 +313,23 @@ impl TLASInstanceData<'_> {
 
 pub struct DefaultTLAS;
 
+
+/// The index in the TLAS input buffer.
+#[derive(Component)]
+pub struct TLASIndex<T: Send + Sync + 'static> {
+    pub index: u32,
+    _marker: std::marker::PhantomData<T>,
+}
+
 /// Trait for building top-level acceleration structures.
 pub trait TLASBuilder: Send + Sync + 'static {
     type TLASType: Send + Sync + 'static = DefaultTLAS;
-
-    /// The marker trait for removal detection.
-    type Marker: Component;
 
     /// Associated components to be passed.
     type QueryData: ReadOnlyQueryData;
 
     /// Additional filter for instances.
     type QueryFilter: ArchetypeFilter;
-
-    /// Entities with this filter will be added to the TLAS input buffer.
-    type AddFilter: QueryFilter;
 
     /// Entities with this filter will have their entry in the TLAS input buffer updated.
     type ChangeFilter: QueryFilter;
@@ -410,9 +412,10 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
 }
 
 fn assign_index<B: TLASBuilder>(
-    new_instances: Query<(Entity, B::QueryData), (B::QueryFilter, B::AddFilter)>,
+    mut commands: Commands,
+    new_instances: Query<(Entity, B::QueryData), (B::QueryFilter, Without<TLASIndex<B::TLASType>>)>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
-    mut removed: RemovedComponents<B::Marker>,
+    mut removed: RemovedComponents<TLASIndex<B::TLASType>>,
 ) {
     for removed_entity in removed.read() {
         let index = store.entity_map.remove(&removed_entity).unwrap();
@@ -427,6 +430,7 @@ fn assign_index<B: TLASBuilder>(
             .pop()
             .unwrap_or_else(|| store.entity_map.len() as u32);
         store.entity_map.insert(entity, index);
+        commands.entity(entity).insert(TLASIndex::<B::TLASType> { index, _marker: Default::default() });
     }
 }
 
@@ -490,7 +494,7 @@ fn extract_input<B: TLASBuilder>(
     mut commands: RenderCommands<'c'>,
     updated_instances: Query<
         (Entity, B::QueryData),
-        (B::QueryFilter, Or<(B::ChangeFilter, B::AddFilter)>),
+        (B::QueryFilter, Or<(B::ChangeFilter, Added<TLASIndex<B::TLASType>>)>),
     >,
     mut staging_belt: ResMut<StagingBelt>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,

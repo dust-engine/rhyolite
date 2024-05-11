@@ -11,7 +11,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData},
+        query::{Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, Without},
         removal_detection::RemovedComponents,
         schedule::IntoSystemConfigs,
         system::{
@@ -20,8 +20,7 @@ use bevy::{
         },
     },
     math::UVec3,
-    utils::smallvec::SmallVec,
-    utils::tracing,
+    utils::{smallvec::SmallVec, tracing},
 };
 use bytemuck::{NoUninit, Pod};
 use itertools::Itertools;
@@ -91,12 +90,9 @@ impl HitgroupSbtLayout {
 }
 
 pub trait SBTBuilder: Send + Sync + 'static {
-    /// The marker component. Any additions of this component will trigger an update of the SBT.
-    type Marker: Component;
     type QueryData: ReadOnlyQueryData;
     type QueryFilter: QueryFilter + ArchetypeFilter;
 
-    type AddFilter: QueryFilter;
     type ChangeFilter: QueryFilter;
     type Params: SystemParam;
 
@@ -134,7 +130,6 @@ where
 
     allocator: Allocator,
     allocation: Option<RenderRes<Buffer>>,
-    capacity: u32,
 
     /// Number of entries in the SBT.
     free_entries: Vec<u32>,
@@ -193,7 +188,6 @@ where
             hitgroup_layout,
             allocator,
             allocation: None,
-            capacity: 0,
             full_update_required: false,
             free_entries: Vec::new(),
             entity_map: BTreeMap::new(),
@@ -205,22 +199,18 @@ where
     pub fn assign_index<B: SBTBuilder>(
         mut commands: Commands,
         mut this: ResMut<Self>,
-        new_instances: Query<Entity, (B::QueryFilter, B::AddFilter)>,
-        mut removed: RemovedComponents<B::Marker>,
+        new_instances: Query<Entity, (B::QueryFilter, Without<SbtHandle<T>>)>,
+        mut removed: RemovedComponents<SbtHandle<T>>,
     ) {
         for removed_entity in removed.read() {
             let index = this.entity_map.remove(&removed_entity).unwrap();
-            if index != this.capacity as u32 {
+            if index != this.entity_map.len() as u32 {
                 this.free_entries.push(index);
             }
         }
         for entity in new_instances.iter() {
             assert!(!this.entity_map.contains_key(&entity));
-            let index = this.free_entries.pop().unwrap_or_else(|| {
-                let id = this.capacity;
-                this.capacity += 1;
-                id
-            });
+            let index = this.free_entries.pop().unwrap_or(this.entity_map.len() as u32);
             this.entity_map.insert(entity, index);
             commands.entity(entity).insert(SbtHandle::<T> {
                 index,
@@ -232,7 +222,7 @@ where
         let total_size = this
             .hitgroup_layout
             .one_entry
-            .repeat(this.capacity as usize)
+            .repeat(this.entity_map.len())
             .unwrap()
             .0
             .size() as u64;
@@ -281,7 +271,7 @@ where
         mut staging_belt: ResMut<StagingBelt>,
         changed_entries: Query<
             (Entity, &SbtHandle<T>),
-            (B::QueryFilter, Or<(B::AddFilter, B::ChangeFilter)>),
+            (B::QueryFilter, Or<(B::ChangeFilter, Added<SbtHandle<T>>, Changed<SbtHandle<T>>)>),
         >,
         all_entries: Query<(Entity, B::QueryData, &SbtHandle<T>), B::QueryFilter>,
         mut params: StaticSystemParam<B::Params>,
