@@ -1,3 +1,9 @@
+use crate::{
+    ecs::{queue_cap::IsQueueCap, RenderCommands},
+    task::AsyncCommandRecorder,
+    HasDevice,
+};
+
 use super::CommandRecorder;
 use ash::vk;
 
@@ -21,21 +27,10 @@ pub trait TransferCommands: CommandRecorder {
                 .cmd_copy_buffer_to_image(cmd_buf, src, dst, layout, regions);
         }
     }
-    /// Copying multiple regions of the same buffer
-    fn batch_copy(&mut self) -> BatchCopy<'_, Self>
-    where
-        Self: Sized,
-    {
-        BatchCopy {
-            recorder: self,
-            src: vk::Buffer::null(),
-            dst: vk::Buffer::null(),
-            copies: Vec::new(),
-        }
-    }
 }
 
-impl<T: CommandRecorder> TransferCommands for T {}
+impl<'w, 's, const Q: char> TransferCommands for RenderCommands<'w, 's, Q> where (): IsQueueCap<Q> {}
+impl<const Q: char> TransferCommands for AsyncCommandRecorder<'_, Q> where (): IsQueueCap<Q> {}
 
 pub struct BatchCopy<'a, T: TransferCommands> {
     recorder: &'a mut T,
@@ -43,14 +38,44 @@ pub struct BatchCopy<'a, T: TransferCommands> {
     dst: vk::Buffer,
     copies: Vec<vk::BufferCopy>,
 }
-impl<T: TransferCommands> BatchCopy<'_, T> {
+impl<'a, T: TransferCommands> BatchCopy<'a, T> {
+    pub fn new(recorder: &'a mut T) -> Self {
+        Self {
+            recorder,
+            src: vk::Buffer::null(),
+            dst: vk::Buffer::null(),
+            copies: Vec::new(),
+        }
+    }
     fn flush(&mut self) {
         if !self.copies.is_empty() {
             self.recorder.copy_buffer(self.src, self.dst, &self.copies);
             self.copies.clear();
         }
     }
-    pub fn copy_buffer(&mut self, src: vk::Buffer, dst: vk::Buffer, regions: &[vk::BufferCopy]) {
+}
+impl<T: TransferCommands> HasDevice for BatchCopy<'_, T> {
+    fn device(&self) -> &crate::Device {
+        self.recorder.device()
+    }
+}
+impl<T: TransferCommands> CommandRecorder for BatchCopy<'_, T> {
+    const QUEUE_CAP: char = 't';
+
+    fn cmd_buf(&mut self) -> vk::CommandBuffer {
+        self.recorder.cmd_buf()
+    }
+
+    fn current_queue(&self) -> crate::QueueRef {
+        self.recorder.current_queue()
+    }
+
+    fn semaphore_signal(&mut self) -> &mut impl super::SemaphoreSignalCommands {
+        self.recorder.semaphore_signal()
+    }
+}
+impl<T: TransferCommands> TransferCommands for BatchCopy<'_, T> {
+    fn copy_buffer(&mut self, src: vk::Buffer, dst: vk::Buffer, regions: &[vk::BufferCopy]) {
         if self.src != src || self.dst != dst {
             self.flush();
             self.src = src;

@@ -11,8 +11,12 @@ use ash::{
     vk::{self, Handle},
 };
 
-use crate::{utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel};
+use crate::{
+    commands::TransferCommands, utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel,
+};
 use vk_mem::Alloc;
+
+use self::staging::StagingBelt;
 
 pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
@@ -151,6 +155,86 @@ impl Buffer {
                 allocation,
                 size,
             })
+        }
+    }
+    pub fn new_resource_init(
+        allocator: Allocator,
+        staging_belt: &mut StagingBelt,
+        data: &[u8],
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        commands: &mut impl TransferCommands,
+    ) -> VkResult<Self> {
+        let memory_model = allocator
+            .device()
+            .physical_device()
+            .properties()
+            .memory_model;
+        match memory_model {
+            PhysicalDeviceMemoryModel::ReBar | PhysicalDeviceMemoryModel::Discrete => {
+                let mut batch = staging_belt.start(commands.semaphore_signal());
+                let staging = batch.allocate_buffer(data.len() as vk::DeviceSize, 1);
+                unsafe {
+                    let (buffer, allocation) = allocator.create_buffer_with_alignment(
+                        &vk::BufferCreateInfo {
+                            size: data.len() as vk::DeviceSize,
+                            usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
+                            ..Default::default()
+                        },
+                        &vk_mem::AllocationCreateInfo {
+                            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                            preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                            ..Default::default()
+                        },
+                        alignment,
+                    )?;
+                    commands.copy_buffer(
+                        staging.buffer,
+                        buffer,
+                        &[vk::BufferCopy {
+                            src_offset: staging.offset(),
+                            dst_offset: 0,
+                            size: data.len() as vk::DeviceSize,
+                        }],
+                    );
+                    Ok(Self {
+                        allocator,
+                        buffer,
+                        allocation,
+                        size: data.len() as vk::DeviceSize,
+                    })
+                }
+            }
+            _ => {
+                // Direct write
+                unsafe {
+                    let (buffer, mut allocation) = allocator.create_buffer_with_alignment(
+                        &vk::BufferCreateInfo {
+                            size: data.len() as vk::DeviceSize,
+                            usage,
+                            ..Default::default()
+                        },
+                        &vk_mem::AllocationCreateInfo {
+                            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                            preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                            ..Default::default()
+                        },
+                        alignment,
+                    )?;
+                    let ptr = allocator.map_memory(&mut allocation)?;
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+                    allocator.unmap_memory(&mut allocation);
+                    Ok(Self {
+                        allocator,
+                        buffer,
+                        allocation,
+                        size: data.len() as vk::DeviceSize,
+                    })
+                }
+            }
         }
     }
 

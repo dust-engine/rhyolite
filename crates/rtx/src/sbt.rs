@@ -21,6 +21,7 @@ use bevy::{
     },
     math::UVec3,
     utils::smallvec::SmallVec,
+    utils::tracing,
 };
 use bytemuck::{NoUninit, Pod};
 use itertools::Itertools;
@@ -95,8 +96,8 @@ pub trait SBTBuilder: Send + Sync + 'static {
     type QueryData: ReadOnlyQueryData;
     type QueryFilter: QueryFilter + ArchetypeFilter;
 
-    type AddFilter: QueryFilter + ArchetypeFilter;
-    type ChangeFilter: QueryFilter + ArchetypeFilter;
+    type AddFilter: QueryFilter;
+    type ChangeFilter: QueryFilter;
     type Params: SystemParam;
 
     type InlineParam;
@@ -235,6 +236,9 @@ where
             .unwrap()
             .0
             .size() as u64;
+        if total_size == 0 {
+            return;
+        }
         if let Some(allocation) = this.allocation.as_mut() {
             if allocation.size() <= total_size {
                 return;
@@ -245,6 +249,7 @@ where
             .physical_device()
             .properties()
             .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+        println!("Total size needed: {}", total_size);
         this.allocation = Some(RenderRes::new(
             Buffer::new_resource(
                 this.allocator.clone(),
@@ -291,6 +296,7 @@ where
         let mut changes;
 
         if this.full_update_required {
+            tracing::info!("{} SBT Full update", std::any::type_name::<T>());
             changes = all_entries
                 .iter()
                 .map(|(entity, _, handle)| (entity, handle.index))
@@ -301,6 +307,14 @@ where
                 .map(|(entity, handle)| (entity, handle.index))
                 .collect::<Vec<_>>();
         }
+        if changes.is_empty() {
+            return;
+        }
+        tracing::info!(
+            "Updating {} SBT for {} entries",
+            std::any::type_name::<T>(),
+            changes.len()
+        );
 
         changes.sort_unstable_by_key(|n| n.1);
 
@@ -344,6 +358,7 @@ where
             })
             .enumerate()
             .map(|(i, (start, len))| vk::BufferCopy {
+                // Note: this might be problematic. Add StagingBelt base offset.
                 src_offset: i as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
                 dst_offset: start as u64
                     * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,

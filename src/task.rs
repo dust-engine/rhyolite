@@ -15,6 +15,12 @@ use crate::{
     Device, HasDevice, QueueRef, Queues, QUEUE_FLAGS_ASYNC,
 };
 
+/// Task pool for async tasks to be performed on the GPU.
+/// Supports compute or transfer workloads.
+///
+/// If the compute or transfer queue families support more than one [`vk::Queue`],
+/// queue submits will be made to a dedicated [`vk::Queue`]. If only one [`vk::Queue`]
+/// was supported, queue submits will be syncronized with a mutex.
 #[derive(Resource)]
 pub struct AsyncTaskPool {
     device: Device,
@@ -186,7 +192,7 @@ pub struct AsyncCommandRecorder<'a, const Q: char> {
     drop_marker: AsyncComputeDropMarker,
 }
 impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
-    pub fn commit<T, const NEXT_Q: char>(
+    pub fn commit<const NEXT_Q: char>(
         mut self,
         wait_stages: vk::PipelineStageFlags2,
         signal_stages: vk::PipelineStageFlags2,

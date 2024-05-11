@@ -26,7 +26,9 @@ use bevy::{
 };
 use rhyolite::{
     ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk},
-    commands::{CommonCommands, ComputeCommands, ResourceTransitionCommands, TransferCommands},
+    commands::{
+        BatchCopy, CommonCommands, ComputeCommands, ResourceTransitionCommands, TransferCommands,
+    },
     cstr,
     debug::DebugObject,
     ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands, RenderRes},
@@ -495,7 +497,7 @@ fn extract_input<B: TLASBuilder>(
     mut params: StaticSystemParam<B::Params>,
 ) {
     let mut staging: rhyolite::staging::StagingBeltBatchJob<'_> = staging_belt.start(&mut commands);
-    let mut job = commands.batch_copy();
+    let mut job = BatchCopy::new(&mut commands);
     let mut has_motion = false;
 
     for (entity, data) in updated_instances.iter() {

@@ -3,6 +3,8 @@ mod future;
 use ash::vk::{self, TaggedStructure};
 pub use format::*;
 pub use future::*;
+mod asset;
+pub use asset::*;
 use std::{ops::Deref, ptr::NonNull};
 
 #[derive(Debug, Clone)]
