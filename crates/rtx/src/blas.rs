@@ -169,6 +169,9 @@ fn build_blas_system<T: BLASBuilder>(
             commands.entity(entity).insert(BLAS { accel_struct: blas });
         }
     }
+    if entities.is_empty() {
+        return;
+    }
     let mut infos: Vec<vk::AccelerationStructureBuildGeometryInfoKHR> = Vec::new();
     let mut geometries: Vec<vk::AccelerationStructureGeometryKHR> = Vec::new();
     let mut buffers: Vec<T::BufferType> = Vec::new();
@@ -178,10 +181,17 @@ fn build_blas_system<T: BLASBuilder>(
     let mut commands = task_pool.spawn_transfer();
 
     for (_, data, blas) in entities.iter() {
+        if blas.is_some() && !T::should_update(&mut params, &data) {
+            continue;
+        }
         let mut info = vk::AccelerationStructureBuildGeometryInfoKHR {
             ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
             flags: T::build_flags(&mut params, &data),
-            mode: if blas.is_some() {
+            mode: if let Some(blas) = blas
+                && blas
+                    .flags
+                    .contains(vk::BuildAccelerationStructureFlagsKHR::ALLOW_UPDATE)
+            {
                 vk::BuildAccelerationStructureModeKHR::UPDATE
             } else {
                 vk::BuildAccelerationStructureModeKHR::BUILD
@@ -267,6 +277,9 @@ fn build_blas_system<T: BLASBuilder>(
         }
         infos.push(info);
     }
+    if infos.is_empty() {
+        return;
+    }
 
     let mut cur_geometry_index = 0;
     let mut max_primitive_counts: Vec<u32> = Vec::new();
@@ -303,7 +316,7 @@ fn build_blas_system<T: BLASBuilder>(
                 size_info.build_scratch_size
             },
             1,
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .unwrap();
         info.scratch_data = vk::DeviceOrHostAddressKHR {
@@ -316,13 +329,14 @@ fn build_blas_system<T: BLASBuilder>(
             vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
         )
         .unwrap();
+        info.dst_acceleration_structure = accel_struct.raw;
         scratch_buffers.push(scratch_buffer);
         built_accel_structs.push((entity, accel_struct));
     }
 
     let mut cmd_recorder = commands.commit::<'c'>(
+        vk::PipelineStageFlags2::empty(),
         vk::PipelineStageFlags2::TRANSFER,
-        vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
     );
 
     cur_geometry_index = 0;
@@ -350,10 +364,18 @@ struct BuildTask<T> {
     built_accel_structs: Vec<(Entity, AccelStruct)>,
 }
 
-pub struct BLASPlugin<T: BLASBuilder> {
+pub struct BLASBuilderPlugin<T: BLASBuilder> {
     _marker: std::marker::PhantomData<T>,
 }
-impl<T: BLASBuilder> Plugin for BLASPlugin<T> {
+impl<T: BLASBuilder> Default for BLASBuilderPlugin<T> {
+    fn default() -> Self {
+        Self {
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T: BLASBuilder> Plugin for BLASBuilderPlugin<T> {
     fn build(&self, app: &mut App) {
         app.add_systems(PostUpdate, build_blas_system::<T>);
     }

@@ -11,7 +11,9 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, Without},
+        query::{
+            Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, Without,
+        },
         removal_detection::RemovedComponents,
         schedule::IntoSystemConfigs,
         system::{
@@ -144,13 +146,13 @@ unsafe impl<T: PipelineMarker> Send for SbtManager<T> where [(); T::NUM_RAYTYPES
 unsafe impl<T: PipelineMarker> Sync for SbtManager<T> where [(); T::NUM_RAYTYPES]: Sized {}
 
 #[derive(Component)]
-pub struct SbtHandle<T> {
+pub struct SbtIndex<T> {
     index: u32,
     _marker: PhantomData<*mut T>,
 }
-unsafe impl<T> Send for SbtHandle<T> {}
-unsafe impl<T> Sync for SbtHandle<T> {}
-impl<T> Default for SbtHandle<T> {
+unsafe impl<T> Send for SbtIndex<T> {}
+unsafe impl<T> Sync for SbtIndex<T> {}
+impl<T> Default for SbtIndex<T> {
     fn default() -> Self {
         Self {
             index: u32::MAX,
@@ -199,8 +201,8 @@ where
     pub fn assign_index<B: SBTBuilder>(
         mut commands: Commands,
         mut this: ResMut<Self>,
-        new_instances: Query<Entity, (B::QueryFilter, Without<SbtHandle<T>>)>,
-        mut removed: RemovedComponents<SbtHandle<T>>,
+        new_instances: Query<Entity, (B::QueryFilter, Without<SbtIndex<T>>)>,
+        mut removed: RemovedComponents<SbtIndex<T>>,
     ) {
         for removed_entity in removed.read() {
             let index = this.entity_map.remove(&removed_entity).unwrap();
@@ -210,9 +212,12 @@ where
         }
         for entity in new_instances.iter() {
             assert!(!this.entity_map.contains_key(&entity));
-            let index = this.free_entries.pop().unwrap_or(this.entity_map.len() as u32);
+            let index = this
+                .free_entries
+                .pop()
+                .unwrap_or(this.entity_map.len() as u32);
             this.entity_map.insert(entity, index);
-            commands.entity(entity).insert(SbtHandle::<T> {
+            commands.entity(entity).insert(SbtIndex::<T> {
                 index,
                 _marker: PhantomData::default(),
             });
@@ -270,10 +275,13 @@ where
         mut this: ResMut<Self>,
         mut staging_belt: ResMut<StagingBelt>,
         changed_entries: Query<
-            (Entity, &SbtHandle<T>),
-            (B::QueryFilter, Or<(B::ChangeFilter, Added<SbtHandle<T>>, Changed<SbtHandle<T>>)>),
+            (Entity, B::QueryData, &SbtIndex<T>),
+            (
+                B::QueryFilter,
+                Or<(B::ChangeFilter, Added<SbtIndex<T>>, Changed<SbtIndex<T>>)>,
+            ),
         >,
-        all_entries: Query<(Entity, B::QueryData, &SbtHandle<T>), B::QueryFilter>,
+        all_entries: Query<(Entity, B::QueryData, &SbtIndex<T>), B::QueryFilter>,
         mut params: StaticSystemParam<B::Params>,
         pipelines: Res<T>,
     ) {
@@ -283,7 +291,7 @@ where
             return;
         };
 
-        let mut changes;
+        let mut changes: Vec<(Entity, u32)>;
 
         if this.full_update_required {
             tracing::info!("{} SBT Full update", std::any::type_name::<T>());
@@ -294,7 +302,7 @@ where
         } else {
             changes = changed_entries
                 .iter()
-                .map(|(entity, handle)| (entity, handle.index))
+                .map(|(entity, _, handle)| (entity, handle.index))
                 .collect::<Vec<_>>();
         }
         if changes.is_empty() {

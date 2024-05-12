@@ -36,7 +36,7 @@ use rhyolite::{
     Access, Allocator, Buffer, BufferArray, BufferLike, Device, HasDevice, Instance,
 };
 
-use crate::{AccelStruct, SbtHandle};
+use crate::{AccelStruct, SbtIndex};
 
 pub struct TLASInstanceData<'a> {
     ty: vk::AccelerationStructureMotionInstanceTypeNV,
@@ -267,6 +267,41 @@ impl TLASInstanceData<'_> {
         }
         self.dirty = true;
     }
+    pub fn disable(&mut self) {
+        unsafe {
+            self.data.assume_init_mut().acceleration_structure_reference =
+                vk::AccelerationStructureReferenceKHR { device_handle: 0 };
+            if let Some(motion) = &mut self.motion_data {
+                match self.ty {
+                    vk::AccelerationStructureMotionInstanceTypeNV::STATIC => {
+                        motion
+                            .assume_init_mut()
+                            .data
+                            .static_instance
+                            .acceleration_structure_reference
+                            .device_handle = 0;
+                    }
+                    vk::AccelerationStructureMotionInstanceTypeNV::MATRIX_MOTION => {
+                        motion
+                            .assume_init_mut()
+                            .data
+                            .matrix_motion_instance
+                            .acceleration_structure_reference
+                            .device_handle = 0;
+                    }
+                    vk::AccelerationStructureMotionInstanceTypeNV::SRT_MOTION => {
+                        motion
+                            .assume_init_mut()
+                            .data
+                            .srt_motion_instance
+                            .acceleration_structure_reference
+                            .device_handle = 0;
+                    }
+                    _ => panic!(),
+                }
+            }
+        }
+    }
     pub fn set_blas(&mut self, accel_struct: &AccelStruct) {
         let reference = if self.host_build {
             vk::AccelerationStructureReferenceKHR {
@@ -312,7 +347,6 @@ impl TLASInstanceData<'_> {
 }
 
 pub struct DefaultTLAS;
-
 
 /// The index in the TLAS input buffer.
 #[derive(Component)]
@@ -430,7 +464,10 @@ fn assign_index<B: TLASBuilder>(
             .pop()
             .unwrap_or_else(|| store.entity_map.len() as u32);
         store.entity_map.insert(entity, index);
-        commands.entity(entity).insert(TLASIndex::<B::TLASType> { index, _marker: Default::default() });
+        commands.entity(entity).insert(TLASIndex::<B::TLASType> {
+            index,
+            _marker: Default::default(),
+        });
     }
 }
 
@@ -494,7 +531,10 @@ fn extract_input<B: TLASBuilder>(
     mut commands: RenderCommands<'c'>,
     updated_instances: Query<
         (Entity, B::QueryData),
-        (B::QueryFilter, Or<(B::ChangeFilter, Added<TLASIndex<B::TLASType>>)>),
+        (
+            B::QueryFilter,
+            Or<(B::ChangeFilter, Added<TLASIndex<B::TLASType>>)>,
+        ),
     >,
     mut staging_belt: ResMut<StagingBelt>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,

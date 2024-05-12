@@ -165,19 +165,40 @@ impl Buffer {
         usage: vk::BufferUsageFlags,
         commands: &mut impl TransferCommands,
     ) -> VkResult<Self> {
+        Self::new_resource_init_with(
+            allocator,
+            staging_belt,
+            data.len() as vk::DeviceSize,
+            alignment,
+            usage,
+            commands,
+            |slice| {
+                slice.copy_from_slice(data);
+            },
+        )
+    }
+    pub fn new_resource_init_with(
+        allocator: Allocator,
+        staging_belt: &mut StagingBelt,
+        size: vk::DeviceSize,
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        commands: &mut impl TransferCommands,
+        initializer: impl FnOnce(&mut [u8]),
+    ) -> VkResult<Self> {
         let memory_model = allocator
             .device()
             .physical_device()
             .properties()
             .memory_model;
         match memory_model {
-            PhysicalDeviceMemoryModel::ReBar | PhysicalDeviceMemoryModel::Discrete => {
+            PhysicalDeviceMemoryModel::Bar | PhysicalDeviceMemoryModel::Discrete => {
                 let mut batch = staging_belt.start(commands.semaphore_signal());
-                let staging = batch.allocate_buffer(data.len() as vk::DeviceSize, 1);
+                let staging = batch.allocate_buffer(size, 1);
                 unsafe {
                     let (buffer, allocation) = allocator.create_buffer_with_alignment(
                         &vk::BufferCreateInfo {
-                            size: data.len() as vk::DeviceSize,
+                            size,
                             usage: usage | vk::BufferUsageFlags::TRANSFER_DST,
                             ..Default::default()
                         },
@@ -195,14 +216,14 @@ impl Buffer {
                         &[vk::BufferCopy {
                             src_offset: staging.offset(),
                             dst_offset: 0,
-                            size: data.len() as vk::DeviceSize,
+                            size,
                         }],
                     );
                     Ok(Self {
                         allocator,
                         buffer,
                         allocation,
-                        size: data.len() as vk::DeviceSize,
+                        size,
                     })
                 }
             }
@@ -211,7 +232,7 @@ impl Buffer {
                 unsafe {
                     let (buffer, mut allocation) = allocator.create_buffer_with_alignment(
                         &vk::BufferCreateInfo {
-                            size: data.len() as vk::DeviceSize,
+                            size,
                             usage,
                             ..Default::default()
                         },
@@ -225,13 +246,16 @@ impl Buffer {
                         alignment,
                     )?;
                     let ptr = allocator.map_memory(&mut allocation)?;
-                    std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+                    initializer(std::slice::from_raw_parts_mut(
+                        ptr as *mut u8,
+                        size as usize,
+                    ));
                     allocator.unmap_memory(&mut allocation);
                     Ok(Self {
                         allocator,
                         buffer,
                         allocation,
-                        size: data.len() as vk::DeviceSize,
+                        size,
                     })
                 }
             }

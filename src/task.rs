@@ -91,54 +91,31 @@ impl AsyncTaskPool {
         }
     }
     pub fn spawn_compute(&mut self) -> AsyncCommandRecorder<'c'> {
-        let command_pool = self.get_command_pool::<'c'>();
-        let cmd_buf = unsafe { command_pool.allocate().unwrap() };
-        unsafe {
-            self.device
-                .begin_command_buffer(
-                    cmd_buf,
-                    &vk::CommandBufferBeginInfo {
-                        flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-                        ..Default::default()
-                    },
-                )
-                .unwrap();
-        }
         AsyncCommandRecorder {
-            cmd_buf,
+            cmd_buf: vk::CommandBuffer::null(),
             task_pool: self,
             wait_semaphore: vk::Semaphore::null(),
             all_semaphores: Vec::new(),
             all_compute_cmd_buf: Vec::new(),
             all_transfer_cmd_buf: Vec::new(),
-            drop_marker: AsyncComputeDropMarker,
+            drop_prohibited: AsyncComputeDropMarker(false),
         }
     }
     pub fn spawn_transfer(&mut self) -> AsyncCommandRecorder<'t'> {
-        let command_pool = self.get_command_pool::<'t'>();
-        let cmd_buf = unsafe { command_pool.allocate().unwrap() };
-        unsafe {
-            self.device
-                .begin_command_buffer(
-                    cmd_buf,
-                    &vk::CommandBufferBeginInfo {
-                        flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-                        ..Default::default()
-                    },
-                )
-                .unwrap();
-        }
         AsyncCommandRecorder {
-            cmd_buf,
+            cmd_buf: vk::CommandBuffer::null(),
             task_pool: self,
             wait_semaphore: vk::Semaphore::null(),
             all_semaphores: Vec::new(),
             all_compute_cmd_buf: Vec::new(),
             all_transfer_cmd_buf: Vec::new(),
-            drop_marker: AsyncComputeDropMarker,
+            drop_prohibited: AsyncComputeDropMarker(false),
         }
     }
     pub fn wait_blocked<T>(&mut self, task: AsyncComputeTask<T>) -> T {
+        if task.fence == vk::Fence::null() {
+            return task.result;
+        }
         unsafe {
             self.device
                 .wait_for_fences(&[task.fence], true, u64::MAX)
@@ -170,14 +147,19 @@ pub struct AsyncComputeTask<T> {
 }
 impl<T> AsyncComputeTask<T> {
     pub fn is_finished(&self) -> bool {
+        if self.fence == vk::Fence::null() {
+            return true;
+        }
         unsafe { self.device.get_fence_status(self.fence).unwrap() }
     }
 }
-struct AsyncComputeDropMarker;
+struct AsyncComputeDropMarker(bool);
 
 impl Drop for AsyncComputeDropMarker {
     fn drop(&mut self) {
-        panic!()
+        if self.0 {
+            panic!()
+        }
     }
 }
 
@@ -189,9 +171,12 @@ pub struct AsyncCommandRecorder<'a, const Q: char> {
     all_semaphores: Vec<vk::Semaphore>,
     all_compute_cmd_buf: Vec<vk::CommandBuffer>,
     all_transfer_cmd_buf: Vec<vk::CommandBuffer>,
-    drop_marker: AsyncComputeDropMarker,
+    drop_prohibited: AsyncComputeDropMarker,
 }
 impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
+    /// Submit the existing commands in the command buffer, and return a new command buffer for a different queue family.
+    /// - `wait_stages`: These stages in the current command recorder will wait for the completion of the previous command recorder.
+    /// - `signal_stages`: The next command recorder will begin after the completion of these stages in the current command recorder.
     pub fn commit<const NEXT_Q: char>(
         mut self,
         wait_stages: vk::PipelineStageFlags2,
@@ -206,95 +191,97 @@ impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
                 task_pool: self.task_pool,
                 cmd_buf: self.cmd_buf,
                 wait_semaphore: self.wait_semaphore,
-                drop_marker: self.drop_marker,
+                drop_prohibited: self.drop_prohibited,
                 all_semaphores: self.all_semaphores,
                 all_compute_cmd_buf: self.all_compute_cmd_buf,
                 all_transfer_cmd_buf: self.all_transfer_cmd_buf,
             };
         }
-        // Split queue.
 
-        let signal_semaphore = self.task_pool.semaphores.pop().unwrap_or_else(|| unsafe {
-            self.task_pool
-                .device
-                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                .unwrap()
-        });
-        let queue = self.task_pool.get_queue::<Q>();
-        let queue = self.task_pool.queues.get(queue);
-        unsafe {
-            self.task_pool
-                .device
-                .end_command_buffer(self.cmd_buf)
-                .unwrap();
-            self.task_pool
-                .device
-                .queue_submit2(
-                    *queue,
-                    &[vk::SubmitInfo2 {
-                        command_buffer_info_count: 1,
-                        p_command_buffer_infos: &[vk::CommandBufferSubmitInfo {
-                            command_buffer: self.cmd_buf,
+        let mut signal_semaphore = vk::Semaphore::null();
+        // Split queue.
+        if self.cmd_buf != vk::CommandBuffer::null() {
+            signal_semaphore = self.task_pool.semaphores.pop().unwrap_or_else(|| unsafe {
+                self.task_pool
+                    .device
+                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                    .unwrap()
+            });
+            let queue = self.task_pool.get_queue::<Q>();
+            let queue = self.task_pool.queues.get(queue);
+            unsafe {
+                self.task_pool
+                    .device
+                    .end_command_buffer(self.cmd_buf)
+                    .unwrap();
+                self.task_pool
+                    .device
+                    .queue_submit2(
+                        *queue,
+                        &[vk::SubmitInfo2 {
+                            command_buffer_info_count: 1,
+                            p_command_buffer_infos: &[vk::CommandBufferSubmitInfo {
+                                command_buffer: self.cmd_buf,
+                                ..Default::default()
+                            }] as *const _,
+                            signal_semaphore_info_count: 1,
+                            p_signal_semaphore_infos: &[vk::SemaphoreSubmitInfo {
+                                semaphore: signal_semaphore,
+                                stage_mask: signal_stages,
+                                ..Default::default()
+                            }] as *const _,
+                            p_wait_semaphore_infos: &[vk::SemaphoreSubmitInfo {
+                                semaphore: self.wait_semaphore,
+                                stage_mask: wait_stages,
+                                ..Default::default()
+                            }] as *const _,
+                            wait_semaphore_info_count: if self.wait_semaphore
+                                != vk::Semaphore::null()
+                            {
+                                1
+                            } else {
+                                0
+                            },
                             ..Default::default()
-                        }] as *const _,
-                        signal_semaphore_info_count: 1,
-                        p_signal_semaphore_infos: &[vk::SemaphoreSubmitInfo {
-                            semaphore: signal_semaphore,
-                            stage_mask: signal_stages,
-                            ..Default::default()
-                        }] as *const _,
-                        p_wait_semaphore_infos: &[vk::SemaphoreSubmitInfo {
-                            semaphore: self.wait_semaphore,
-                            stage_mask: wait_stages,
-                            ..Default::default()
-                        }] as *const _,
-                        wait_semaphore_info_count: if self.wait_semaphore != vk::Semaphore::null() {
-                            1
-                        } else {
-                            0
-                        },
-                        ..Default::default()
-                    }],
-                    vk::Fence::null(),
-                )
-                .unwrap();
-        }
-        drop(queue);
-        self.all_semaphores.push(signal_semaphore);
-        if Q == 't' && self.task_pool.transfer_command_pool.is_some() {
-            self.all_transfer_cmd_buf.push(self.cmd_buf);
+                        }],
+                        vk::Fence::null(),
+                    )
+                    .unwrap();
+            }
+            drop(queue);
+            self.all_semaphores.push(signal_semaphore);
+            if Q == 't' && self.task_pool.transfer_command_pool.is_some() {
+                self.all_transfer_cmd_buf.push(self.cmd_buf);
+            } else {
+                self.all_compute_cmd_buf.push(self.cmd_buf);
+            }
         } else {
-            self.all_compute_cmd_buf.push(self.cmd_buf);
-        }
-        let new_command_buffer = unsafe {
-            self.task_pool
-                .get_command_pool::<NEXT_Q>()
-                .allocate()
-                .unwrap()
-        };
-        unsafe {
-            self.task_pool
-                .device
-                .begin_command_buffer(
-                    new_command_buffer,
-                    &vk::CommandBufferBeginInfo {
-                        flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-                        ..Default::default()
-                    },
-                )
-                .unwrap();
+            tracing::warn!("Nothing was commited");
         }
         AsyncCommandRecorder {
             task_pool: self.task_pool,
-            cmd_buf: new_command_buffer,
+            cmd_buf: vk::CommandBuffer::null(),
             wait_semaphore: signal_semaphore,
-            drop_marker: self.drop_marker,
+            drop_prohibited: self.drop_prohibited,
             all_compute_cmd_buf: self.all_compute_cmd_buf,
             all_transfer_cmd_buf: self.all_transfer_cmd_buf,
             all_semaphores: self.all_semaphores,
         }
     }
     pub fn finish<T>(mut self, result: T, stages: vk::PipelineStageFlags2) -> AsyncComputeTask<T> {
+        if self.cmd_buf == vk::CommandBuffer::null() {
+            tracing::warn!("Nothing to finish");
+            panic!();
+            return AsyncComputeTask {
+                fence: vk::Fence::null(),
+                result,
+                compute_cmd_buf: self.all_compute_cmd_buf,
+                transfer_cmd_buf: self.all_transfer_cmd_buf,
+                semaphores: self.all_semaphores,
+                drop_marker: self.drop_prohibited,
+                device: self.task_pool.device.clone(),
+            };
+        }
         let fence = self.task_pool.fences.pop().unwrap_or_else(|| unsafe {
             self.task_pool
                 .device
@@ -346,7 +333,7 @@ impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
             compute_cmd_buf: self.all_compute_cmd_buf,
             transfer_cmd_buf: self.all_transfer_cmd_buf,
             semaphores: self.all_semaphores,
-            drop_marker: self.drop_marker,
+            drop_marker: self.drop_prohibited,
             device: self.task_pool.device.clone(),
         }
     }
@@ -359,13 +346,30 @@ impl<const Q: char> HasDevice for AsyncCommandRecorder<'_, Q> {
 impl<const Q: char> CommandRecorder for AsyncCommandRecorder<'_, Q> {
     const QUEUE_CAP: char = Q;
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
+        if self.cmd_buf == vk::CommandBuffer::null() {
+            println!("Created cmd buf for q {}", Q);
+            unsafe {
+                let cmd_buf = self.task_pool.get_command_pool::<Q>().allocate().unwrap();
+                self.task_pool
+                    .device
+                    .begin_command_buffer(
+                        cmd_buf,
+                        &vk::CommandBufferBeginInfo {
+                            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                self.cmd_buf = cmd_buf;
+            }
+        }
+        self.drop_prohibited.0 = true;
         self.cmd_buf
     }
     fn current_queue(&self) -> QueueRef {
         self.task_pool.get_queue::<Q>()
     }
     fn semaphore_signal(&mut self) -> &mut impl SemaphoreSignalCommands {
-        todo!();
         self
     }
 }
