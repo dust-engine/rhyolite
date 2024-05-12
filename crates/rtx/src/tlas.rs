@@ -591,7 +591,7 @@ fn extract_input<B: TLASBuilder>(
         }
     }
     drop(job);
-    store.has_motion = has_motion;
+    store.has_motion |= has_motion;
     // TODO: if no motion for any instance, we build the TLAS without the motion flag.
 }
 
@@ -737,7 +737,7 @@ fn build_tlas_barrier<B: Send + Sync + 'static>(
 
 pub fn build_tlas<B: Send + Sync + 'static>(
     mut commands: RenderCommands<'c'>,
-    store: Res<TLASDeviceBuildStore<B>>,
+    mut store: ResMut<TLASDeviceBuildStore<B>>,
 ) {
     if store.entity_map.is_empty() {
         return;
@@ -774,6 +774,8 @@ pub fn build_tlas<B: Send + Sync + 'static>(
         &[build_info],
         std::iter::once([build_range_info].as_slice()),
     );
+
+    store.has_motion = false;
 }
 
 /// Building the TLAS on the device.

@@ -32,8 +32,7 @@ pub struct AsyncTaskPool {
     compute_command_pool: CommandPool,
     compute_queue_ref: QueueRef,
 
-    fences: Vec<vk::Fence>,
-    semaphores: Vec<vk::Semaphore>,
+    semaphores: Vec<Arc<TimelineSemaphore>>,
 }
 
 impl FromWorld for AsyncTaskPool {
@@ -61,7 +60,6 @@ impl FromWorld for AsyncTaskPool {
             transfer_queue_ref: None,
             device: device.clone(),
             semaphores: Vec::new(),
-            fences: Vec::new(),
         };
         if transfer_queue.index != compute_queue.index {
             assert_ne!(transfer_queue.family, compute_queue.family);
@@ -83,6 +81,11 @@ impl AsyncTaskPool {
                 .unwrap_or(&mut self.compute_command_pool)
         }
     }
+    fn get_semaphore(&mut self) -> Arc<TimelineSemaphore> {
+        self.semaphores
+            .pop()
+            .unwrap_or_else(|| Arc::new(TimelineSemaphore::new(self.device.clone()).unwrap()))
+    }
     fn get_queue<const Q: char>(&self) -> QueueRef {
         if Q == 'c' {
             self.compute_queue_ref
@@ -94,35 +97,35 @@ impl AsyncTaskPool {
         AsyncCommandRecorder {
             cmd_buf: vk::CommandBuffer::null(),
             task_pool: self,
-            wait_semaphore: vk::Semaphore::null(),
-            all_semaphores: Vec::new(),
+            semaphore: None,
             all_compute_cmd_buf: Vec::new(),
             all_transfer_cmd_buf: Vec::new(),
             drop_prohibited: AsyncComputeDropMarker(false),
+            semaphore_wait_value: 0,
         }
     }
     pub fn spawn_transfer(&mut self) -> AsyncCommandRecorder<'t'> {
         AsyncCommandRecorder {
             cmd_buf: vk::CommandBuffer::null(),
             task_pool: self,
-            wait_semaphore: vk::Semaphore::null(),
-            all_semaphores: Vec::new(),
+            semaphore: None,
             all_compute_cmd_buf: Vec::new(),
             all_transfer_cmd_buf: Vec::new(),
             drop_prohibited: AsyncComputeDropMarker(false),
+            semaphore_wait_value: 0,
         }
     }
     pub fn wait_blocked<T>(&mut self, task: AsyncComputeTask<T>) -> T {
-        if task.fence == vk::Fence::null() {
+        let Some(semaphore) = task.semaphore else {
+            assert!(task.compute_cmd_buf.is_empty());
+            assert!(task.transfer_cmd_buf.is_empty());
             return task.result;
-        }
+        };
+        semaphore
+            .wait_blocked(task.semaphore_wait_value, !0)
+            .unwrap();
         unsafe {
-            self.device
-                .wait_for_fences(&[task.fence], true, u64::MAX)
-                .unwrap();
-            self.device.reset_fences(&[task.fence]).unwrap();
-            self.fences.push(task.fence);
-            self.semaphores.extend(task.semaphores);
+            self.semaphores.push(semaphore);
 
             self.compute_command_pool.free(&task.compute_cmd_buf);
             if let Some(transfer_command_pool) = &mut self.transfer_command_pool {
@@ -137,20 +140,20 @@ impl AsyncTaskPool {
 }
 
 pub struct AsyncComputeTask<T> {
-    device: Device,
-    fence: vk::Fence,
     compute_cmd_buf: Vec<vk::CommandBuffer>,
     transfer_cmd_buf: Vec<vk::CommandBuffer>,
-    semaphores: Vec<vk::Semaphore>,
+    semaphore: Option<Arc<TimelineSemaphore>>,
+    semaphore_wait_value: u64,
     result: T,
     drop_marker: AsyncComputeDropMarker,
 }
 impl<T> AsyncComputeTask<T> {
     pub fn is_finished(&self) -> bool {
-        if self.fence == vk::Fence::null() {
-            return true;
+        if let Some(semaphore) = &self.semaphore {
+            semaphore.is_signaled(self.semaphore_wait_value)
+        } else {
+            true
         }
-        unsafe { self.device.get_fence_status(self.fence).unwrap() }
     }
 }
 struct AsyncComputeDropMarker(bool);
@@ -158,7 +161,7 @@ struct AsyncComputeDropMarker(bool);
 impl Drop for AsyncComputeDropMarker {
     fn drop(&mut self) {
         if self.0 {
-            panic!()
+            tracing::warn!("AsyncComputeTask dropped without waiting for completion");
         }
     }
 }
@@ -166,9 +169,9 @@ impl Drop for AsyncComputeDropMarker {
 pub struct AsyncCommandRecorder<'a, const Q: char> {
     task_pool: &'a mut AsyncTaskPool,
     cmd_buf: vk::CommandBuffer,
-    wait_semaphore: vk::Semaphore,
+    semaphore: Option<Arc<TimelineSemaphore>>,
+    semaphore_wait_value: u64,
 
-    all_semaphores: Vec<vk::Semaphore>,
     all_compute_cmd_buf: Vec<vk::CommandBuffer>,
     all_transfer_cmd_buf: Vec<vk::CommandBuffer>,
     drop_prohibited: AsyncComputeDropMarker,
@@ -190,26 +193,29 @@ impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
             return AsyncCommandRecorder {
                 task_pool: self.task_pool,
                 cmd_buf: self.cmd_buf,
-                wait_semaphore: self.wait_semaphore,
+                semaphore: self.semaphore,
+                semaphore_wait_value: self.semaphore_wait_value,
                 drop_prohibited: self.drop_prohibited,
-                all_semaphores: self.all_semaphores,
                 all_compute_cmd_buf: self.all_compute_cmd_buf,
                 all_transfer_cmd_buf: self.all_transfer_cmd_buf,
             };
         }
 
-        let mut signal_semaphore = vk::Semaphore::null();
         // Split queue.
         if self.cmd_buf != vk::CommandBuffer::null() {
-            signal_semaphore = self.task_pool.semaphores.pop().unwrap_or_else(|| unsafe {
-                self.task_pool
-                    .device
-                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                    .unwrap()
+            let semaphore = self.semaphore.take().unwrap_or_else(|| {
+                let semaphore = self.task_pool.get_semaphore();
+                self.semaphore_wait_value = semaphore.value();
+                semaphore
             });
             let queue = self.task_pool.get_queue::<Q>();
             let queue = self.task_pool.queues.get(queue);
             unsafe {
+                let wait_semaphore_infos = [vk::SemaphoreSubmitInfo {
+                    semaphore: semaphore.raw(),
+                    value: self.semaphore_wait_value,
+                    ..Default::default()
+                }];
                 self.task_pool
                     .device
                     .end_command_buffer(self.cmd_buf)
@@ -218,75 +224,64 @@ impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
                     .device
                     .queue_submit2(
                         *queue,
-                        &[vk::SubmitInfo2 {
-                            command_buffer_info_count: 1,
-                            p_command_buffer_infos: &[vk::CommandBufferSubmitInfo {
+                        &[vk::SubmitInfo2::default()
+                            .command_buffer_infos(&[vk::CommandBufferSubmitInfo {
                                 command_buffer: self.cmd_buf,
                                 ..Default::default()
-                            }] as *const _,
-                            signal_semaphore_info_count: 1,
-                            p_signal_semaphore_infos: &[vk::SemaphoreSubmitInfo {
-                                semaphore: signal_semaphore,
-                                stage_mask: signal_stages,
-                                ..Default::default()
-                            }] as *const _,
-                            p_wait_semaphore_infos: &[vk::SemaphoreSubmitInfo {
-                                semaphore: self.wait_semaphore,
-                                stage_mask: wait_stages,
-                                ..Default::default()
-                            }] as *const _,
-                            wait_semaphore_info_count: if self.wait_semaphore
-                                != vk::Semaphore::null()
-                            {
-                                1
+                            }])
+                            .wait_semaphore_infos(if self.semaphore_wait_value == 0 {
+                                &[]
                             } else {
-                                0
-                            },
-                            ..Default::default()
-                        }],
+                                &wait_semaphore_infos
+                            })
+                            .signal_semaphore_infos(&[vk::SemaphoreSubmitInfo {
+                                semaphore: semaphore.raw(),
+                                stage_mask: signal_stages,
+                                value: self.semaphore_wait_value + 1,
+                                ..Default::default()
+                            }])],
                         vk::Fence::null(),
                     )
                     .unwrap();
             }
             drop(queue);
-            self.all_semaphores.push(signal_semaphore);
+            self.semaphore = Some(semaphore);
             if Q == 't' && self.task_pool.transfer_command_pool.is_some() {
                 self.all_transfer_cmd_buf.push(self.cmd_buf);
             } else {
                 self.all_compute_cmd_buf.push(self.cmd_buf);
             }
         } else {
+            assert!(self.semaphore.is_none());
             tracing::warn!("Nothing was commited");
         }
         AsyncCommandRecorder {
             task_pool: self.task_pool,
             cmd_buf: vk::CommandBuffer::null(),
-            wait_semaphore: signal_semaphore,
+            semaphore: self.semaphore,
+            semaphore_wait_value: self.semaphore_wait_value + 1,
             drop_prohibited: self.drop_prohibited,
             all_compute_cmd_buf: self.all_compute_cmd_buf,
             all_transfer_cmd_buf: self.all_transfer_cmd_buf,
-            all_semaphores: self.all_semaphores,
         }
     }
     pub fn finish<T>(mut self, result: T, stages: vk::PipelineStageFlags2) -> AsyncComputeTask<T> {
         if self.cmd_buf == vk::CommandBuffer::null() {
             tracing::warn!("Nothing to finish");
-            panic!();
+            assert!(self.semaphore.is_none());
             return AsyncComputeTask {
-                fence: vk::Fence::null(),
+                semaphore: None,
                 result,
                 compute_cmd_buf: self.all_compute_cmd_buf,
                 transfer_cmd_buf: self.all_transfer_cmd_buf,
-                semaphores: self.all_semaphores,
                 drop_marker: self.drop_prohibited,
-                device: self.task_pool.device.clone(),
+                semaphore_wait_value: 0,
             };
         }
-        let fence = self.task_pool.fences.pop().unwrap_or_else(|| unsafe {
-            self.task_pool
-                .device
-                .create_fence(&vk::FenceCreateInfo::default(), None)
-                .unwrap()
+        let semaphore = self.semaphore.take().unwrap_or_else(|| {
+            let semaphore = self.task_pool.get_semaphore();
+            self.semaphore_wait_value = semaphore.value();
+            semaphore
         });
         let queue = self.task_pool.get_queue::<Q>();
         let queue = self.task_pool.queues.get(queue);
@@ -295,29 +290,33 @@ impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
                 .device
                 .end_command_buffer(self.cmd_buf)
                 .unwrap();
+            let wait_semaphore_infos = [vk::SemaphoreSubmitInfo {
+                semaphore: semaphore.raw(),
+                stage_mask: stages,
+                value: self.semaphore_wait_value,
+                ..Default::default()
+            }];
             self.task_pool
                 .device
                 .queue_submit2(
                     *queue,
-                    &[vk::SubmitInfo2 {
-                        command_buffer_info_count: 1,
-                        p_command_buffer_infos: &[vk::CommandBufferSubmitInfo {
+                    &[vk::SubmitInfo2::default()
+                        .command_buffer_infos(&[vk::CommandBufferSubmitInfo {
                             command_buffer: self.cmd_buf,
                             ..Default::default()
-                        }] as *const _,
-                        wait_semaphore_info_count: if self.wait_semaphore != vk::Semaphore::null() {
-                            1
+                        }])
+                        .wait_semaphore_infos(if self.semaphore_wait_value == 0 {
+                            &[]
                         } else {
-                            0
-                        },
-                        p_wait_semaphore_infos: &[vk::SemaphoreSubmitInfo {
-                            semaphore: self.wait_semaphore,
-                            stage_mask: stages,
+                            &wait_semaphore_infos
+                        })
+                        .signal_semaphore_infos(&[vk::SemaphoreSubmitInfo {
+                            semaphore: semaphore.raw(),
+                            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                            value: self.semaphore_wait_value + 1,
                             ..Default::default()
-                        }] as *const _,
-                        ..Default::default()
-                    }],
-                    fence,
+                        }])],
+                    vk::Fence::null(),
                 )
                 .unwrap();
         }
@@ -328,13 +327,12 @@ impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
             self.all_compute_cmd_buf.push(self.cmd_buf);
         }
         AsyncComputeTask {
-            fence,
             result,
             compute_cmd_buf: self.all_compute_cmd_buf,
             transfer_cmd_buf: self.all_transfer_cmd_buf,
-            semaphores: self.all_semaphores,
+            semaphore: Some(semaphore),
             drop_marker: self.drop_prohibited,
-            device: self.task_pool.device.clone(),
+            semaphore_wait_value: self.semaphore_wait_value + 1,
         }
     }
 }
@@ -347,7 +345,6 @@ impl<const Q: char> CommandRecorder for AsyncCommandRecorder<'_, Q> {
     const QUEUE_CAP: char = Q;
     fn cmd_buf(&mut self) -> vk::CommandBuffer {
         if self.cmd_buf == vk::CommandBuffer::null() {
-            println!("Created cmd buf for q {}", Q);
             unsafe {
                 let cmd_buf = self.task_pool.get_command_pool::<Q>().allocate().unwrap();
                 self.task_pool
@@ -390,9 +387,14 @@ impl<const Q: char> SemaphoreSignalCommands for AsyncCommandRecorder<'_, Q> {
 
     fn signal_semaphore(
         &mut self,
-        stage: vk::PipelineStageFlags2,
+        _stage: vk::PipelineStageFlags2,
     ) -> (Arc<TimelineSemaphore>, u64) {
-        todo!()
+        let semaphore = self.semaphore.take().unwrap_or_else(|| {
+            let semaphore = self.task_pool.get_semaphore();
+            self.semaphore_wait_value = semaphore.value();
+            semaphore
+        });
+        (semaphore, self.semaphore_wait_value + 1)
     }
 
     fn signal_binary_semaphore_prev_stage(

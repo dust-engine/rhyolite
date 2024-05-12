@@ -10,13 +10,10 @@ use crate::{utils::AsVkHandle, Device, HasDevice};
 pub struct TimelineSemaphore {
     device: Device,
     semaphore: vk::Semaphore,
-    current_value: AtomicU64,
 }
 impl Debug for TimelineSemaphore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = self
-            .current_value
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let value = self.value();
         f.debug_tuple("TimelineSemaphore")
             .field(&self.semaphore)
             .field(&value)
@@ -34,28 +31,22 @@ impl TimelineSemaphore {
             let info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
             device.create_semaphore(&info, None)
         }?;
-        Ok(Self {
-            device,
-            semaphore,
-            current_value: AtomicU64::new(0),
-        })
+        Ok(Self { device, semaphore })
     }
     pub fn raw(&self) -> vk::Semaphore {
         self.semaphore
     }
+    pub fn value(&self) -> u64 {
+        unsafe {
+            self.device
+                .get_semaphore_counter_value(self.semaphore)
+                .unwrap()
+        }
+    }
     pub fn is_signaled(&self, val: u64) -> bool {
-        self.current_value
-            .load(std::sync::atomic::Ordering::Relaxed)
-            >= val
+        self.value() >= val
     }
     pub fn wait_blocked(&self, value: u64, timeout: u64) -> VkResult<()> {
-        if self
-            .current_value
-            .load(std::sync::atomic::Ordering::Relaxed)
-            >= value
-        {
-            return Ok(());
-        }
         unsafe {
             self.device.wait_semaphores(
                 &vk::SemaphoreWaitInfo {
@@ -67,8 +58,6 @@ impl TimelineSemaphore {
                 timeout,
             )?;
         }
-        self.current_value
-            .fetch_max(value, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
     pub fn wait_all_blocked<'a>(
@@ -76,12 +65,10 @@ impl TimelineSemaphore {
         timeout: u64,
     ) -> VkResult<()> {
         let mut device: Option<&Device> = None;
-        let semaphores = semaphores
-            .filter(|(s, t)| s.current_value.load(std::sync::atomic::Ordering::Relaxed) < *t)
-            .map(|(s, t)| {
-                device = Some(&s.device);
-                (s, s.semaphore, t)
-            });
+        let semaphores = semaphores.map(|(s, t)| {
+            device = Some(&s.device);
+            (s, s.semaphore, t)
+        });
         let (semaphores, raws, values): (Vec<&TimelineSemaphore>, Vec<vk::Semaphore>, Vec<u64>) =
             itertools::multiunzip(semaphores);
         if semaphores.is_empty() {
@@ -97,11 +84,6 @@ impl TimelineSemaphore {
                 },
                 timeout,
             )?;
-        }
-        for (&semaphore, &value) in semaphores.iter().zip(values.iter()) {
-            semaphore
-                .current_value
-                .fetch_max(value, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
     }
