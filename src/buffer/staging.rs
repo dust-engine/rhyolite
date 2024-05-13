@@ -24,6 +24,20 @@ use crate::{
 impl FromWorld for StagingBelt {
     fn from_world(world: &mut bevy::ecs::world::World) -> Self {
         let device = world.resource::<Device>().clone();
+        let chunk_size = 64 * 1024 * 1024;
+
+        let mut requirements = vk::MemoryRequirements2::default();
+        unsafe {
+            device.get_device_buffer_memory_requirements(
+                &vk::DeviceBufferMemoryRequirements::default().create_info(&vk::BufferCreateInfo {
+                    usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                    size: chunk_size,
+                    ..Default::default()
+                }),
+                &mut requirements,
+            );
+        }
+        assert_eq!(requirements.memory_requirements.size, chunk_size);
 
         let Some((memory_type_index, _)) = device
             .physical_device()
@@ -32,10 +46,11 @@ impl FromWorld for StagingBelt {
             .iter()
             .enumerate()
             .rev()
-            .filter(|(_, memory_type)| {
+            .filter(|(index, memory_type)| {
                 memory_type
                     .property_flags
                     .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                    && requirements.memory_requirements.memory_type_bits & (1 << index) != 0
             })
             .max_by_key(|(_, memory_type)| {
                 let mut priority: i32 = 0;
@@ -72,7 +87,7 @@ impl FromWorld for StagingBelt {
         // 64MB page size
         StagingBelt::new_with_memory_type_index(
             device,
-            64 * 1024 * 1024,
+            chunk_size,
             memory_type_index as u32,
             vk::BufferUsageFlags::TRANSFER_SRC,
         )
@@ -416,7 +431,7 @@ fn staging_buffer_cleanup_system(
 }
 
 /// Ring allocator for uniform buffers
-/// This will be created on device-local, host-visible memory.
+/// This will be created on host-visible and preferably device-local memory.
 #[derive(Resource)]
 pub struct UniformBelt(StagingBelt);
 impl UniformBelt {
@@ -428,6 +443,36 @@ impl UniformBelt {
 impl FromWorld for UniformBelt {
     fn from_world(world: &mut bevy::prelude::World) -> Self {
         let device = world.resource::<Device>().clone();
+
+        let mut usages = vk::BufferUsageFlags::UNIFORM_BUFFER;
+        if device
+            .feature::<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
+            .map(|f| f.buffer_device_address == vk::TRUE)
+            .unwrap_or(false)
+        {
+            usages |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+        }
+        if device
+            .feature::<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>()
+            .map(|f| f.ray_tracing_pipeline == vk::TRUE)
+            .unwrap_or(false)
+        {
+            usages |= vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR;
+        }
+        let chunk_size = 1 * 1024 * 1024;
+
+        let mut requirements = vk::MemoryRequirements2::default();
+        unsafe {
+            device.get_device_buffer_memory_requirements(
+                &vk::DeviceBufferMemoryRequirements::default().create_info(&vk::BufferCreateInfo {
+                    usage: usages,
+                    size: chunk_size,
+                    ..Default::default()
+                }),
+                &mut requirements,
+            );
+        }
+        assert_eq!(requirements.memory_requirements.size, chunk_size);
         let Some((memory_type_index, flags)) = device
             .physical_device()
             .properties()
@@ -435,10 +480,11 @@ impl FromWorld for UniformBelt {
             .iter()
             .enumerate()
             .rev()
-            .filter(|(_, memory_type)| {
+            .filter(|(index, memory_type)| {
                 memory_type
                     .property_flags
                     .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                    && requirements.memory_requirements.memory_type_bits & (1 << index) != 0
             })
             .max_by_key(|(_, memory_type)| {
                 let mut priority: i32 = 0;
@@ -477,25 +523,9 @@ impl FromWorld for UniformBelt {
         {
             tracing::warn!("Uniform buffers will be created on non-device-local memory");
         }
-
-        let mut usages = vk::BufferUsageFlags::UNIFORM_BUFFER;
-        if device
-            .feature::<vk::PhysicalDeviceBufferDeviceAddressFeatures>()
-            .map(|f| f.buffer_device_address == vk::TRUE)
-            .unwrap_or(false)
-        {
-            usages |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
-        }
-        if device
-            .feature::<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>()
-            .map(|f| f.ray_tracing_pipeline == vk::TRUE)
-            .unwrap_or(false)
-        {
-            usages |= vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR;
-        }
         Self(StagingBelt::new_with_memory_type_index(
             device,
-            64 * 1024 * 1024,
+            chunk_size,
             memory_type_index as u32,
             usages,
         ))

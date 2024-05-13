@@ -39,6 +39,36 @@ impl Extension for ash::khr::synchronization2::Meta {
         device.device_fn_1_3.queue_submit2 = ext.fp().queue_submit2_khr;
     }
 }
+
+impl Extension for ash::khr::maintenance1::Meta {
+    fn promote_device(device: &mut ash::Device, ext: &Self::Device) {
+        let device = ExposedDevice::new(device);
+        device.device_fn_1_1.trim_command_pool = ext.fp().trim_command_pool_khr;
+    }
+}
+
+impl Extension for ash::khr::maintenance3::Meta {
+    fn promote_device(device: &mut ash::Device, ext: &Self::Device) {
+        let device = ExposedDevice::new(device);
+        device.device_fn_1_1.get_descriptor_set_layout_support =
+            ext.fp().get_descriptor_set_layout_support_khr;
+    }
+}
+
+impl Extension for ash::khr::maintenance4::Meta {
+    fn promote_device(device: &mut ash::Device, ext: &Self::Device) {
+        let device = ExposedDevice::new(device);
+        device.device_fn_1_3.get_device_buffer_memory_requirements =
+            ext.fp().get_device_buffer_memory_requirements_khr;
+        device.device_fn_1_3.get_device_image_memory_requirements =
+            ext.fp().get_device_image_memory_requirements_khr;
+        device
+            .device_fn_1_3
+            .get_device_image_sparse_memory_requirements =
+            ext.fp().get_device_image_sparse_memory_requirements_khr;
+    }
+}
+
 pub struct ExposedDevice {
     handle: vk::Device,
     device_fn_1_0: ash::DeviceFnV1_0,
