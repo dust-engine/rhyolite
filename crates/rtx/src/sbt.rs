@@ -276,10 +276,7 @@ where
         mut staging_belt: ResMut<StagingBelt>,
         changed_entries: Query<
             (Entity, B::QueryData, &SbtIndex<T>),
-            (
-                B::QueryFilter,
-                Or<(B::ChangeFilter, Added<SbtIndex<T>>, Changed<SbtIndex<T>>)>,
-            ),
+            (B::QueryFilter, Or<(B::ChangeFilter, Changed<SbtIndex<T>>)>),
         >,
         all_entries: Query<(Entity, B::QueryData, &SbtIndex<T>), B::QueryFilter>,
         mut params: StaticSystemParam<B::Params>,

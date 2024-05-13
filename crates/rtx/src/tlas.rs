@@ -267,6 +267,7 @@ impl TLASInstanceData<'_> {
         }
         self.dirty = true;
     }
+    /// Disable the current instance by setting its acceleration structure reference to 0.
     pub fn disable(&mut self) {
         unsafe {
             self.data.assume_init_mut().acceleration_structure_reference =
@@ -365,8 +366,6 @@ pub trait TLASBuilder: Send + Sync + 'static {
     /// Additional filter for instances.
     type QueryFilter: ArchetypeFilter;
 
-    /// Entities with this filter will have their entry in the TLAS input buffer updated.
-    type ChangeFilter: QueryFilter;
     /// Additional system entities to be passed.
     type Params: SystemParam;
 
@@ -376,6 +375,11 @@ pub trait TLASBuilder: Send + Sync + 'static {
     ) -> bool {
         false
     }
+
+    fn should_update(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+    ) -> bool;
     fn instance(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
@@ -529,13 +533,7 @@ fn extract_input_barrier<B: TLASBuilder>(
 
 fn extract_input<B: TLASBuilder>(
     mut commands: RenderCommands<'c'>,
-    updated_instances: Query<
-        (Entity, B::QueryData),
-        (
-            B::QueryFilter,
-            Or<(B::ChangeFilter, Added<TLASIndex<B::TLASType>>)>,
-        ),
-    >,
+    updated_instances: Query<(Entity, B::QueryData), B::QueryFilter>,
     mut staging_belt: ResMut<StagingBelt>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
     mut params: StaticSystemParam<B::Params>,
@@ -545,6 +543,9 @@ fn extract_input<B: TLASBuilder>(
     let mut has_motion = false;
 
     for (entity, data) in updated_instances.iter() {
+        if !B::should_update(&mut params, &data) {
+            continue;
+        }
         let index = *store.entity_map.get(&entity).unwrap();
         has_motion |= B::has_motion(&mut params, &data);
 
