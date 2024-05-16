@@ -533,7 +533,7 @@ fn extract_input_barrier<B: TLASBuilder>(
 
 fn extract_input<B: TLASBuilder>(
     mut commands: RenderCommands<'c'>,
-    updated_instances: Query<(Entity, B::QueryData), B::QueryFilter>,
+    updated_instances: Query<(Entity, B::QueryData, &TLASIndex<B::TLASType>), B::QueryFilter>,
     mut staging_belt: ResMut<StagingBelt>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
     mut params: StaticSystemParam<B::Params>,
@@ -542,11 +542,10 @@ fn extract_input<B: TLASBuilder>(
     let mut job = BatchCopy::new(&mut commands);
     let mut has_motion = false;
 
-    for (entity, data) in updated_instances.iter() {
+    for (entity, data, index) in updated_instances.iter() {
         if !B::should_update(&mut params, &data) {
             continue;
         }
-        let index = *store.entity_map.get(&entity).unwrap();
         has_motion |= B::has_motion(&mut params, &data);
 
         let mut allocation = staging.allocate_item::<vk::AccelerationStructureInstanceKHR>();
@@ -554,7 +553,7 @@ fn extract_input<B: TLASBuilder>(
             Some(staging.allocate_item::<vk::AccelerationStructureMotionInstanceNV>())
         } else {
             None
-        };
+        }; // FIXME: Not optimal. will increase number of entries in regions.
         B::instance(
             &mut params,
             &data,
@@ -573,7 +572,7 @@ fn extract_input<B: TLASBuilder>(
             store.static_buffer.raw_buffer(),
             &[vk::BufferCopy {
                 src_offset: allocation.offset(),
-                dst_offset: index as u64
+                dst_offset: index.index as u64
                     * std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() as u64,
                 size: std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() as u64,
             }],
@@ -584,7 +583,7 @@ fn extract_input<B: TLASBuilder>(
                 store.motion_buffer.as_ref().unwrap().raw_buffer(),
                 &[vk::BufferCopy {
                     src_offset: motion_allocation.offset(),
-                    dst_offset: index as u64
+                    dst_offset: index.index as u64
                         * std::mem::size_of::<vk::AccelerationStructureMotionInstanceNV>() as u64,
                     size: std::mem::size_of::<vk::AccelerationStructureMotionInstanceNV>() as u64,
                 }],

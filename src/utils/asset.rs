@@ -57,7 +57,7 @@ fn upload_asset<T: AssetUpload>(
             Vec::with_capacity(events.len());
         for event in events.read() {
             match event {
-                AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => {
+                AssetEvent::Added { id } => {
                     let asset = cpu_assets.get(*id).unwrap();
                     let gpu_asset = asset.upload_asset(&mut batch_copy, &mut params);
                     let untyped_id = id.untyped();

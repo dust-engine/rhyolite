@@ -369,6 +369,7 @@ impl RayTracingPipelineManager {
         }
     }
 
+    /// Returns None when one of the dependent pipeline libraries hasn't been built
     pub fn build(
         &mut self,
         pipeline_cache: &PipelineCache,
@@ -928,91 +929,5 @@ impl HitGroup {
             shaders,
             groups,
         }
-    }
-}
-
-pub struct PipelineGroupManager<const NUM_RAYTYPES: usize> {
-    /// Mapping from ray type index to `pipelines` index.
-    ray_types: [u8; NUM_RAYTYPES],
-
-    pipelines: SmallVec<[RayTracingPipelineManager; NUM_RAYTYPES]>,
-    free_hitgroup_handles: Vec<HitgroupHandle>,
-}
-
-impl<const NUM_RAYTYPES: usize> PipelineGroupManager<NUM_RAYTYPES> {
-    /// Create a pipeline group with `NUM_RAYTYPES` ray types, one for each pipeline object.
-    pub fn new(pipelines: [RayTracingPipelineManager; NUM_RAYTYPES]) -> Self {
-        let mut ray_types = [0; NUM_RAYTYPES];
-        ray_types.iter_mut().enumerate().for_each(|(i, ray_type)| {
-            *ray_type = i as u8;
-        });
-        Self {
-            ray_types,
-            pipelines: SmallVec::from(pipelines),
-            free_hitgroup_handles: Vec::new(),
-        }
-    }
-    pub fn pipeline_index_of_raytype(&self, raytype: u32) -> u8 {
-        self.ray_types[raytype as usize]
-    }
-    pub fn build(
-        &mut self,
-        pipeline_cache: &PipelineCache,
-        assets: &Assets<ShaderModule>,
-        pool: &DeferredOperationTaskPool,
-    ) -> Option<SmallVec<[CachedPipeline<RenderObject<RayTracingPipeline>>; NUM_RAYTYPES]>> {
-        let mut pipelines =
-            SmallVec::<[CachedPipeline<RenderObject<RayTracingPipeline>>; NUM_RAYTYPES]>::new();
-        for pipeline in self.pipelines.iter_mut() {
-            pipelines.push(pipeline.build(pipeline_cache, assets, pool)?);
-        }
-        Some(pipelines)
-    }
-    pub fn add_hitgroup(
-        &mut self,
-        hitgroup: HitGroup,
-        pipeline_cache: &PipelineCache,
-    ) -> HitgroupHandle {
-        assert_eq!(hitgroup.groups.len(), NUM_RAYTYPES);
-        let handle = self.free_hitgroup_handles.pop();
-
-        let mut new_handle: Option<HitgroupHandle> = None;
-        for (i, pipeline_manager) in self.pipelines.iter_mut().enumerate() {
-            let indices =
-                self.ray_types
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(raytype, &pipeline_index)| {
-                        if pipeline_index as usize == i {
-                            Some(raytype as u32)
-                        } else {
-                            None
-                        }
-                    });
-            let hitgroup = hitgroup.pick(indices);
-            if let Some(handle) = handle {
-                pipeline_manager.set_hitgroup(handle, hitgroup, pipeline_cache);
-            } else {
-                let handle = pipeline_manager.add_hitgroup(hitgroup, pipeline_cache);
-                if let Some(existing) = &new_handle {
-                    // Handle obtained from all pipelines should be the same.
-                    assert_eq!(existing, &handle);
-                } else {
-                    new_handle = Some(handle);
-                }
-            }
-        }
-        if let Some(handle) = handle {
-            assert!(new_handle.is_none());
-            handle
-        } else {
-            new_handle.unwrap()
-        }
-    }
-    pub fn remove_hitgroup(&mut self, handles: HitgroupHandle) {
-        for pipeline in self.pipelines.iter_mut() {
-            pipeline.remove_hitgroup(handles);
-        }
-        self.free_hitgroup_handles.push(handles);
     }
 }
