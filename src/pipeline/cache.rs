@@ -72,6 +72,18 @@ impl<T: Pipeline> CachedPipeline<T> {
     pub fn get_mut(&mut self) -> Option<&mut T> {
         self.pipeline.as_mut()
     }
+    pub fn replace(&mut self, other: CachedPipeline<T>) {
+        self.build_info = other.build_info;
+        if let Some(task) = other.task {
+            // If the other pipeline is still pending, override current pipeline task
+            assert!(other.pipeline.is_none());
+            self.task = Some(task);
+        } else {
+            assert!(other.pipeline.is_some());
+            self.pipeline = other.pipeline;
+        }
+        self.shader_generations = other.shader_generations;
+    }
 }
 
 impl PipelineCache {

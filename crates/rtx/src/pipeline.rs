@@ -375,10 +375,11 @@ impl RayTracingPipelineManager {
         pipeline_cache: &PipelineCache,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-    ) -> Option<CachedPipeline<RenderObject<RayTracingPipeline>>> {
+        pipeline: &mut Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
+    ) {
         match self {
-            Self::Native(manager) => manager.build(pipeline_cache),
-            Self::PipelineLibrary(manager) => manager.build(pipeline_cache, assets, pool),
+            Self::Native(manager) => manager.build(pipeline_cache, pipeline),
+            Self::PipelineLibrary(manager) => manager.build(pipeline_cache, assets, pool, pipeline),
         }
     }
 }
@@ -433,7 +434,8 @@ impl RayTracingPipelineManagerNative {
     fn build(
         &mut self,
         pipeline_cache: &PipelineCache,
-    ) -> Option<CachedPipeline<RenderObject<RayTracingPipeline>>> {
+        pipeline: &mut Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
+    ) {
         let mut stages = Vec::new();
         let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> = Vec::new();
         for (i, shader) in self.base_stages.iter().enumerate() {
@@ -480,7 +482,13 @@ impl RayTracingPipelineManagerNative {
             num_hitgroup: self.hitgroups.len() as u32,
             hitgroup_mapping,
         };
-        Some(pipeline_cache.create(info))
+        let new_pipeline: CachedPipeline<RenderObject<RayTracingPipeline>> =
+            pipeline_cache.create(info);
+        if let Some(old_pipeline) = pipeline {
+            old_pipeline.replace(new_pipeline);
+        } else {
+            *pipeline = Some(new_pipeline);
+        }
     }
 }
 
@@ -595,8 +603,9 @@ impl RayTracingPipelineManagerPipelineLibrary {
         pipeline_cache: &PipelineCache,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-    ) -> Option<CachedPipeline<RenderObject<RayTracingPipeline>>> {
-        let libraries = std::iter::once(&mut self.base_library)
+        pipeline: &mut Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
+    ) {
+        let Some(libraries) = std::iter::once(&mut self.base_library)
             .chain(
                 self.hitgroup_libraries
                     .iter_mut()
@@ -607,7 +616,10 @@ impl RayTracingPipelineManagerPipelineLibrary {
                     .retrieve_pipeline(library, assets, pool, false)
                     .cloned()
             })
-            .collect::<Option<Vec<RayTracingPipelineLibrary>>>()?;
+            .collect::<Option<Vec<RayTracingPipelineLibrary>>>()
+        else {
+            return;
+        };
 
         let mut group_num = 0;
         let hitgroup_mapping = self
@@ -634,7 +646,12 @@ impl RayTracingPipelineManagerPipelineLibrary {
             libraries,
             hitgroup_mapping,
         };
-        Some(pipeline_cache.create(info))
+        let new_pipeline = pipeline_cache.create(info);
+        if let Some(old_pipeline) = pipeline {
+            old_pipeline.replace(new_pipeline);
+        } else {
+            *pipeline = Some(new_pipeline);
+        }
     }
 }
 

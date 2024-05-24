@@ -209,7 +209,7 @@ impl<T> SbtManager<T> {
 
             if let Some(pipeline) = B::pipeline(params, raytype) {
                 entry[0..self.hitgroup_layout.handle_size]
-                .copy_from_slice(pipeline.handles().hitgroup(hitgroup_handle));
+                    .copy_from_slice(pipeline.handles().hitgroup(hitgroup_handle));
                 raytype_param_callback(
                     raytype as u32,
                     &mut entry[self.hitgroup_layout.handle_size..],
