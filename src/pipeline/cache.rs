@@ -79,8 +79,9 @@ impl<T: Pipeline> CachedPipeline<T> {
             assert!(other.pipeline.is_none());
             self.task = Some(task);
         } else {
-            assert!(other.pipeline.is_some());
-            self.pipeline = other.pipeline;
+            if let Some(pipeline) = other.pipeline {
+                self.pipeline = Some(pipeline);
+            }
         }
         self.shader_generations = other.shader_generations;
     }

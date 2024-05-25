@@ -98,6 +98,8 @@ pub trait SBTBuilder: Send + Sync + 'static {
     type QueryData: ReadOnlyQueryData;
     type QueryFilter: QueryFilter + ArchetypeFilter;
 
+    /// Subset of the SBT entries that need to be updated.
+    /// When not specified, SBT updates will be performed every single frame.
     type ChangeFilter: QueryFilter;
     type Params: SystemParam;
 
@@ -139,6 +141,7 @@ pub struct SbtManager<T> {
     entity_map: BTreeMap<Entity, u32>,
 
     full_update_required: bool,
+    pipeline_generation: u64,
     _marker: PhantomData<T>,
 }
 
@@ -161,6 +164,10 @@ impl<T> Default for SbtIndex<T> {
 }
 
 impl<T> SbtManager<T> {
+    pub(crate) fn pipeline_updated(&mut self, latest_generation: u64) {
+        self.full_update_required = true;
+        self.pipeline_generation = latest_generation;
+    }
     pub fn hitgroup_layout(&self) -> &HitgroupSbtLayout {
         &self.hitgroup_layout
     }
@@ -189,6 +196,7 @@ impl<T> SbtManager<T> {
             full_update_required: false,
             free_entries: Vec::new(),
             entity_map: BTreeMap::new(),
+            pipeline_generation: 0,
             _marker: PhantomData,
         }
     }
@@ -201,6 +209,9 @@ impl<T> SbtManager<T> {
         params: &mut SystemParamItem<B::Params>,
         mut raytype_param_callback: impl FnMut(u32, &mut [u8], &mut SystemParamItem<B::Params>),
     ) {
+        if hitgroup_handle.generation.get() > self.pipeline_generation {
+            return;
+        }
         let offset = dst_index * self.hitgroup_layout.one_entry.pad_to_align().size();
         let entry = &mut dst_buffer[offset..offset + self.hitgroup_layout.one_entry.size()];
         for raytype in 0..B::NUM_RAYTYPES {
@@ -209,7 +220,7 @@ impl<T> SbtManager<T> {
 
             if let Some(pipeline) = B::pipeline(params, raytype) {
                 entry[0..self.hitgroup_layout.handle_size]
-                    .copy_from_slice(pipeline.handles().hitgroup(hitgroup_handle));
+                    .copy_from_slice(pipeline.handles().hitgroup(hitgroup_handle.handle));
                 raytype_param_callback(
                     raytype as u32,
                     &mut entry[self.hitgroup_layout.handle_size..],
@@ -261,16 +272,16 @@ pub fn resize_buffer<T: Send + Sync + 'static>(
         return;
     }
     if let Some(allocation) = this.allocation.as_mut() {
-        if allocation.size() <= total_size {
+        if allocation.size() >= total_size {
             return;
         }
     }
+    this.full_update_required = true;
 
     let rtx_properties = device
         .physical_device()
         .properties()
         .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-    println!("Total size needed: {}", total_size);
     this.allocation = Some(RenderRes::new(
         Buffer::new_resource(
             this.allocator.clone(),
@@ -312,6 +323,7 @@ pub fn transfer<T: SBTBuilder>(
 
     if this.full_update_required {
         tracing::info!("{} SBT Full update", std::any::type_name::<T>());
+        this.full_update_required = false;
         changes = all_entries
             .iter()
             .map(|(entity, _, handle)| (entity, handle.index))
@@ -340,6 +352,7 @@ pub fn transfer<T: SBTBuilder>(
         .unwrap()
         .0
         .size() as u64;
+    println!("Changed items: {}", changes.len());
     let mut host_buffer = staging_belt
         .start(&mut commands)
         .allocate_buffer(total_size, 1);
