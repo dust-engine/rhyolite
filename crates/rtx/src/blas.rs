@@ -285,6 +285,12 @@ fn build_blas_system<T: BLASBuilder>(
     let mut max_primitive_counts: Vec<u32> = Vec::new();
     let mut scratch_buffers: Vec<Buffer> = Vec::new();
     let mut built_accel_structs: Vec<(Entity, AccelStruct)> = Vec::new();
+    let scratch_offset_alignment: u32 = allocator
+        .device()
+        .physical_device()
+        .properties()
+        .get::<vk::PhysicalDeviceAccelerationStructurePropertiesKHR>()
+        .min_acceleration_structure_scratch_offset_alignment;
     for (info, entity) in infos.iter_mut().zip(entities.iter().map(|(e, _, _)| e)) {
         info.p_geometries = unsafe { geometries.as_ptr().add(cur_geometry_index) };
         max_primitive_counts.clear();
@@ -315,7 +321,7 @@ fn build_blas_system<T: BLASBuilder>(
             } else {
                 size_info.build_scratch_size
             },
-            1,
+            scratch_offset_alignment as u64,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .unwrap();

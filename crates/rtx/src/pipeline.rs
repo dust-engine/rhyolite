@@ -307,9 +307,14 @@ pub struct HitgroupHandle(NonMaxU16);
 /// while the hitgroup shaders may change frequently.
 /// As such, we create a pipeline library for the ray gen, miss, and callable shaders,
 /// and a pipeline library for each of the hitgroups.
-pub enum RayTracingPipelineManager {
+pub enum RayTracingPipelineManagerImpl {
     Native(RayTracingPipelineManagerNative),
     PipelineLibrary(RayTracingPipelineManagerPipelineLibrary),
+}
+pub struct RayTracingPipelineManager {
+    inner: RayTracingPipelineManagerImpl,
+    pipeline: Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
+    dirty: bool,
 }
 
 impl RayTracingPipelineManager {
@@ -320,8 +325,8 @@ impl RayTracingPipelineManager {
         callable_shaders: Vec<SpecializedShader>,
         pipeline_cache: &PipelineCache,
     ) -> Self {
-        if true {
-            Self::PipelineLibrary(RayTracingPipelineManagerPipelineLibrary::new(
+        let inner = if true {
+            RayTracingPipelineManagerImpl::PipelineLibrary(RayTracingPipelineManagerPipelineLibrary::new(
                 common,
                 raygen_shaders,
                 miss_shaders,
@@ -329,12 +334,17 @@ impl RayTracingPipelineManager {
                 pipeline_cache,
             ))
         } else {
-            Self::Native(RayTracingPipelineManagerNative::new(
+            RayTracingPipelineManagerImpl::Native(RayTracingPipelineManagerNative::new(
                 common,
                 raygen_shaders,
                 miss_shaders,
                 callable_shaders,
             ))
+        };
+        RayTracingPipelineManager {
+            inner,
+            pipeline: None,
+            dirty: false,
         }
     }
 
@@ -343,9 +353,10 @@ impl RayTracingPipelineManager {
         hitgroup: HitGroup,
         pipeline_cache: &PipelineCache,
     ) -> HitgroupHandle {
-        match self {
-            Self::Native(manager) => manager.add_hitgroup(hitgroup),
-            Self::PipelineLibrary(manager) => manager.add_hitgroup(hitgroup, &pipeline_cache),
+        self.dirty = true;
+        match &mut self.inner {
+            RayTracingPipelineManagerImpl::Native(manager) => manager.add_hitgroup(hitgroup),
+            RayTracingPipelineManagerImpl::PipelineLibrary(manager) => manager.add_hitgroup(hitgroup, &pipeline_cache),
         }
     }
     pub fn set_hitgroup(
@@ -354,33 +365,54 @@ impl RayTracingPipelineManager {
         hitgroup: HitGroup,
         pipeline_cache: &PipelineCache,
     ) {
-        match self {
-            Self::Native(manager) => manager.set_hitgroup(handle, hitgroup),
-            Self::PipelineLibrary(manager) => {
+        self.dirty = true;
+        match &mut self.inner {
+            RayTracingPipelineManagerImpl::Native(manager) => manager.set_hitgroup(handle, hitgroup),
+            RayTracingPipelineManagerImpl::PipelineLibrary(manager) => {
                 manager.set_hitgroup(handle, hitgroup, pipeline_cache)
             }
         }
     }
 
     pub fn remove_hitgroup(&mut self, handle: HitgroupHandle) {
-        match self {
-            Self::Native(manager) => manager.remove_hitgroup(handle),
-            Self::PipelineLibrary(manager) => manager.remove_hitgroup(handle),
+        self.dirty = true;
+        match &mut self.inner {
+            RayTracingPipelineManagerImpl::Native(manager) => manager.remove_hitgroup(handle),
+            RayTracingPipelineManagerImpl::PipelineLibrary(manager) => manager.remove_hitgroup(handle),
         }
     }
 
     /// Returns None when one of the dependent pipeline libraries hasn't been built
-    pub fn build(
+    pub fn try_build(
         &mut self,
         pipeline_cache: &PipelineCache,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-        pipeline: &mut Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
     ) {
-        match self {
-            Self::Native(manager) => manager.build(pipeline_cache, pipeline),
-            Self::PipelineLibrary(manager) => manager.build(pipeline_cache, assets, pool, pipeline),
+        if self.dirty || self.pipeline.is_none() {
+            let new_pipeline = match &mut self.inner {
+                RayTracingPipelineManagerImpl::Native(manager) => Some(manager.build(pipeline_cache)),
+                RayTracingPipelineManagerImpl::PipelineLibrary(manager) => manager.build(pipeline_cache, assets, pool),
+            };
+            if let Some(new_pipeline) = new_pipeline {
+                if let Some(old_pipeline) = &mut self.pipeline {
+                    old_pipeline.replace(new_pipeline);
+                } else {
+                    self.pipeline = Some(new_pipeline);
+                }
+                self.dirty = false;
+            }
         }
+        if let Some(pipeline) = &mut self.pipeline {
+            pipeline_cache.retrieve(pipeline, assets, pool);
+        };
+    }
+
+    pub fn get_pipeline(&self) -> Option<&CachedPipeline<RenderObject<RayTracingPipeline>>> {
+        self.pipeline.as_ref()
+    }
+    pub fn get_pipeline_mut(&mut self) -> Option<&mut CachedPipeline<RenderObject<RayTracingPipeline>>> {
+        self.pipeline.as_mut()
     }
 }
 
@@ -430,12 +462,10 @@ impl RayTracingPipelineManagerNative {
         assert!(self.hitgroups[handle.0.get() as usize].is_some());
         self.hitgroups[handle.0.get() as usize] = None;
     }
-
     fn build(
         &mut self,
         pipeline_cache: &PipelineCache,
-        pipeline: &mut Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
-    ) {
+    ) -> CachedPipeline<RenderObject<RayTracingPipeline>> {
         let mut stages = Vec::new();
         let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> = Vec::new();
         for (i, shader) in self.base_stages.iter().enumerate() {
@@ -482,13 +512,7 @@ impl RayTracingPipelineManagerNative {
             num_hitgroup: self.hitgroups.len() as u32,
             hitgroup_mapping,
         };
-        let new_pipeline: CachedPipeline<RenderObject<RayTracingPipeline>> =
-            pipeline_cache.create(info);
-        if let Some(old_pipeline) = pipeline {
-            old_pipeline.replace(new_pipeline);
-        } else {
-            *pipeline = Some(new_pipeline);
-        }
+        pipeline_cache.create(info)
     }
 }
 
@@ -499,6 +523,8 @@ struct RayTracingPipelineManagerPipelineLibrary {
     num_raygen: u8,
     num_miss: u8,
     num_callable: u8,
+    pipeline: Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
+    dirty: bool,
 }
 
 impl RayTracingPipelineManagerPipelineLibrary {
@@ -554,6 +580,8 @@ impl RayTracingPipelineManagerPipelineLibrary {
             num_raygen,
             num_miss,
             num_callable,
+            pipeline: None,
+            dirty: false,
         }
     }
 
@@ -590,22 +618,22 @@ impl RayTracingPipelineManagerPipelineLibrary {
 
         assert!(self.hitgroup_libraries[handle.0.get() as usize].is_none());
         self.hitgroup_libraries[handle.0.get() as usize] = Some(library);
+        self.dirty = true;
     }
 
     #[track_caller]
     pub fn remove_hitgroup(&mut self, handle: HitgroupHandle) {
         assert!(self.hitgroup_libraries[handle.0.get() as usize].is_some());
         self.hitgroup_libraries[handle.0.get() as usize] = None;
+        self.dirty = true;
     }
-
     pub fn build(
         &mut self,
         pipeline_cache: &PipelineCache,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-        pipeline: &mut Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
-    ) {
-        let Some(libraries) = std::iter::once(&mut self.base_library)
+    ) -> Option<CachedPipeline<RenderObject<RayTracingPipeline>>> {
+        let libraries = std::iter::once(&mut self.base_library)
             .chain(
                 self.hitgroup_libraries
                     .iter_mut()
@@ -616,10 +644,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
                     .retrieve_pipeline(library, assets, pool, false)
                     .cloned()
             })
-            .collect::<Option<Vec<RayTracingPipelineLibrary>>>()
-        else {
-            return;
-        };
+            .collect::<Option<Vec<RayTracingPipelineLibrary>>>()?;
 
         let mut group_num = 0;
         let hitgroup_mapping = self
@@ -646,12 +671,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
             libraries,
             hitgroup_mapping,
         };
-        let new_pipeline = pipeline_cache.create(info);
-        if let Some(old_pipeline) = pipeline {
-            old_pipeline.replace(new_pipeline);
-        } else {
-            *pipeline = Some(new_pipeline);
-        }
+        Some(pipeline_cache.create(info))
     }
 }
 

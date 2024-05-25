@@ -312,6 +312,7 @@ pub struct BufferArray<T> {
     allocation: Option<vk_mem::Allocation>,
     buffer: vk::Buffer,
     len: usize,
+    alignment: u64,
     ptr: *mut MaybeUninit<T>,
     _marker: std::marker::PhantomData<T>,
     usage: vk::BufferUsageFlags,
@@ -373,7 +374,7 @@ impl<T> BufferArray<T> {
                 .allocation
                 .take()
                 .map(|a| Buffer::from_raw(self.allocator.clone(), self.buffer, a));
-            let (buffer, allocation) = self.allocator.create_buffer(
+            let (buffer, allocation) = self.allocator.create_buffer_with_alignment(
                 &vk::BufferCreateInfo {
                     size: Layout::new::<T>()
                         .repeat(new_capacity)
@@ -388,6 +389,7 @@ impl<T> BufferArray<T> {
                     ..Default::default()
                 },
                 &self.allocation_info,
+                self.alignment,
             )?;
 
             let info = self.allocator.get_allocation_info(&allocation);
@@ -423,6 +425,7 @@ impl<T> BufferArray<T> {
             ptr: std::ptr::null_mut(),
             _marker: std::marker::PhantomData,
             usage,
+            alignment: 1,
             sharing_mode: SharingMode::Exclusive,
             allocation_info: vk_mem::AllocationCreateInfo {
                 usage: memory_usage,
@@ -435,9 +438,10 @@ impl<T> BufferArray<T> {
     }
 
     /// Create GPU-owned buffer.
-    pub fn new_resource(allocator: Allocator, usage: vk::BufferUsageFlags) -> Self {
+    pub fn new_resource(allocator: Allocator, usage: vk::BufferUsageFlags, alignment: u64) -> Self {
         let res = Self {
             allocator,
+            alignment,
             allocation: None,
             buffer: vk::Buffer::null(),
             ptr: std::ptr::null_mut(),

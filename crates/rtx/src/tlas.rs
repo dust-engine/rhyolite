@@ -428,6 +428,7 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::TRANSFER_SRC,
+                16,
             ))
         }
         Self {
@@ -437,6 +438,7 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::TRANSFER_SRC,
+                16,
             )),
             has_motion: false,
             motion_buffer: motion_buffer.map(RenderRes::new),
