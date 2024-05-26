@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     num::NonZeroU32,
-    ops::Range,
+    ops::{Deref, Range},
 };
 
 use bevy::{
@@ -162,11 +162,35 @@ impl<T> Default for SbtIndex<T> {
         }
     }
 }
+impl<T> Deref for SbtIndex<T> {
+    type Target = u32;
+    fn deref(&self) -> &Self::Target {
+        &self.index
+    }
+}
 
 impl<T> SbtManager<T> {
     pub(crate) fn pipeline_updated(&mut self, latest_generation: u64) {
         self.full_update_required = true;
         self.pipeline_generation = latest_generation;
+    }
+    pub(crate) fn sbt_region(&self) -> vk::StridedDeviceAddressRegionKHR {
+        let total_size = self
+            .hitgroup_layout
+            .one_entry
+            .repeat(self.entity_map.len())
+            .unwrap()
+            .0
+            .size() as u64;
+        vk::StridedDeviceAddressRegionKHR {
+            device_address: self
+                .allocation
+                .as_ref()
+                .map(|x| x.device_address())
+                .unwrap_or_default(),
+            stride: self.hitgroup_layout.one_entry.pad_to_align().size() as u64,
+            size: total_size,
+        }
     }
     pub fn hitgroup_layout(&self) -> &HitgroupSbtLayout {
         &self.hitgroup_layout
@@ -287,7 +311,9 @@ pub fn resize_buffer<T: Send + Sync + 'static>(
             this.allocator.clone(),
             total_size,
             rtx_properties.shader_group_base_alignment as u64,
-            vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
         )
         .unwrap(),
     ));
@@ -496,7 +522,7 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         self.callable_shader_binding_tables = self.bind_inner(args);
         self
     }
-    pub fn trace(self, raygen_index: usize, extent: UVec3) {
+    pub fn trace<P>(self, raygen_index: usize, extent: UVec3, hitgroup_sbt: &SbtManager<P>) {
         unsafe {
             let cmd_buf = self.commands.cmd_buf();
             self.pipeline.device().cmd_bind_pipeline(
@@ -511,7 +537,7 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
                     cmd_buf,
                     &self.raygen_shader_binding_tables[raygen_index],
                     &self.miss_shader_binding_tables,
-                    &vk::StridedDeviceAddressRegionKHR::default(),
+                    &hitgroup_sbt.sbt_region(),
                     &self.callable_shader_binding_tables,
                     extent.x,
                     extent.y,
