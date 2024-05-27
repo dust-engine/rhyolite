@@ -1,37 +1,24 @@
-use std::{
-    alloc::Layout,
-    collections::{BTreeMap, BTreeSet},
-    ops::Deref,
-};
+use std::ops::Deref;
 
 use bevy::{
     app::{App, Plugin, PostUpdate},
     ecs::{
         component::Component,
         entity::Entity,
-        query::{
-            Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, With,
-            Without,
-        },
-        schedule::{IntoSystemConfigs, SystemSet},
+        query::{ArchetypeFilter, QueryFilter, QueryItem, ReadOnlyQueryData},
         system::{
-            Commands, Local, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
-            SystemParamItem,
+            Commands, Local, Query, Res, ResMut, StaticSystemParam, SystemParam, SystemParamItem,
         },
     },
-    transform,
-    utils::tracing,
 };
 use rhyolite::{
     ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk},
     commands::{ComputeCommands, TransferCommands},
-    cstr,
-    debug::DebugObject,
     task::{AsyncComputeTask, AsyncTaskPool},
     Allocator, Buffer, BufferLike, Device, HasDevice,
 };
 
-use crate::{accel_struct, AccelStruct};
+use crate::AccelStruct;
 #[derive(Component)]
 pub struct BLAS {
     accel_struct: AccelStruct,

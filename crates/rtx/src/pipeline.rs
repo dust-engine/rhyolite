@@ -1,17 +1,12 @@
-use std::{alloc::Layout, collections::BTreeSet, ffi::CStr, num::NonZeroU64, sync::Arc};
+use std::{alloc::Layout, collections::BTreeSet, num::NonZeroU64, sync::Arc};
 
 use bevy::{
     asset::{AssetId, Assets},
-    math::UVec3,
-    utils::{
-        nonmax::{self, NonMaxU16, NonMaxU32},
-        smallvec::SmallVec,
-    },
+    utils::nonmax::{self, NonMaxU32},
 };
 
 use rhyolite::{
     ash::{khr::ray_tracing_pipeline::Meta as RayTracingPipelineExt, prelude::VkResult, vk},
-    commands::ComputeCommands,
     deferred::{DeferredOperationTaskPool, Task},
     dispose::RenderObject,
     pipeline::{

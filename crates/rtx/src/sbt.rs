@@ -1,29 +1,22 @@
-use std::{
-    alloc::Layout,
-    collections::{BTreeMap, BTreeSet},
-    marker::PhantomData,
-    num::NonZeroU32,
-    ops::{Deref, Range},
-};
+use std::{alloc::Layout, collections::BTreeMap, marker::PhantomData, ops::Deref};
 
 use bevy::{
     app::{App, Plugin, PostUpdate},
     ecs::{
         component::Component,
         entity::Entity,
-        query::{
-            Added, ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, Without,
-        },
+        query::{ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, Without},
         removal_detection::RemovedComponents,
         schedule::IntoSystemConfigs,
         system::{
-            Commands, In, ParamSet, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem
+            Commands, In, ParamSet, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
+            SystemParamItem,
         },
     },
     math::UVec3,
     utils::{smallvec::SmallVec, tracing},
 };
-use bytemuck::{NoUninit, Pod};
+use bytemuck::NoUninit;
 use itertools::Itertools;
 use rhyolite::{
     ash::{khr::ray_tracing_pipeline::Meta as RayTracingPipelineExt, vk},
@@ -36,14 +29,12 @@ use rhyolite::{
 use rhyolite::{
     buffer::BufferLike,
     commands::{ResourceTransitionCommands, TransferCommands},
-    dispose::RenderObject,
     ecs::{Barriers, RenderCommands, RenderRes},
-    pipeline::PipelineCache,
     staging::StagingBelt,
     Access, Buffer,
 };
 
-use crate::pipeline::HitGroup;
+use crate::SbtHandles;
 
 use super::pipeline::{HitgroupHandle, RayTracingPipeline};
 
@@ -266,7 +257,10 @@ impl<T> SbtManager<T> {
 pub fn assign_index<T: SBTBuilder>(
     mut commands: Commands,
     mut this: ResMut<SbtManager<T::SbtIndexType>>,
-    new_instances: Query<(Entity, T::QueryData), (T::QueryFilter, Without<SbtIndex<T::SbtIndexType>>)>,
+    new_instances: Query<
+        (Entity, T::QueryData),
+        (T::QueryFilter, Without<SbtIndex<T::SbtIndexType>>),
+    >,
     mut removed: RemovedComponents<SbtIndex<T::SbtIndexType>>,
 ) {
     for removed_entity in removed.read() {
@@ -349,7 +343,7 @@ pub fn transfer<T: SBTBuilder>(
                 Or<(T::ChangeFilter, Changed<SbtIndex<T::SbtIndexType>>)>,
             ),
         >,
-        Query<(T::QueryData, &mut SbtIndex<T::SbtIndexType>), T::QueryFilter>
+        Query<(T::QueryData, &mut SbtIndex<T::SbtIndexType>), T::QueryFilter>,
     )>,
     mut params: StaticSystemParam<T::Params>,
 ) {
@@ -358,21 +352,22 @@ pub fn transfer<T: SBTBuilder>(
     let mut entries0;
     let mut entries1;
 
-    let mut changes: Vec<(QueryItem<T::QueryData>, &mut SbtIndex<T::SbtIndexType>)> = if this.full_update_required {
-        tracing::info!("{} SBT Full update", std::any::type_name::<T>());
-        this.full_update_required = false;
-        entries1 = entries.p1();
-        entries1
-            .iter_mut()
-            .map(|(q, handle)| (q, handle.into_inner()))
-            .collect::<Vec<_>>()
-    } else {
-        entries0 = entries.p0();
-        entries0
-            .iter_mut()
-            .map(|(q, handle)| (q, handle.into_inner()))
-            .collect::<Vec<_>>()
-    };
+    let mut changes: Vec<(QueryItem<T::QueryData>, &mut SbtIndex<T::SbtIndexType>)> =
+        if this.full_update_required {
+            tracing::info!("{} SBT Full update", std::any::type_name::<T>());
+            this.full_update_required = false;
+            entries1 = entries.p1();
+            entries1
+                .iter_mut()
+                .map(|(q, handle)| (q, handle.into_inner()))
+                .collect::<Vec<_>>()
+        } else {
+            entries0 = entries.p0();
+            entries0
+                .iter_mut()
+                .map(|(q, handle)| (q, handle.into_inner()))
+                .collect::<Vec<_>>()
+        };
     if changes.is_empty() {
         return;
     }
@@ -488,12 +483,14 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         };
         self
     }
-    fn bind_inner<'a, D: NoUninit, I>(&mut self, args: I) -> vk::StridedDeviceAddressRegionKHR
+    fn bind_inner<'a, D: NoUninit, I>(
+        &mut self,
+        args: I,
+        handle_getter: fn(&SbtHandles, usize) -> &[u8],
+    ) -> vk::StridedDeviceAddressRegionKHR
     where
-        I: IntoIterator<Item = &'a D>,
-        I::IntoIter: ExactSizeIterator,
+        I: ExactSizeIterator<Item = &'a D>,
     {
-        let args = args.into_iter();
         let properties = self
             .pipeline
             .device()
@@ -507,7 +504,7 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
             .copy_job
             .allocate_buffer(total_size, properties.shader_group_base_alignment as u64);
         for (i, arg) in args.enumerate() {
-            let handle = self.pipeline.handles().rmiss(i);
+            let handle = (handle_getter)(self.pipeline.handles(), i);
             let arg = bytemuck::bytes_of(arg);
             let entry = &mut allocation[i * stride as usize..(i + 1) * stride as usize];
             entry[0..handle.len()].copy_from_slice(handle);
@@ -524,7 +521,9 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         I: IntoIterator<Item = &'a D>,
         I::IntoIter: ExactSizeIterator,
     {
-        self.miss_shader_binding_tables = self.bind_inner(args);
+        let args = args.into_iter();
+        assert_eq!(args.len(), self.pipeline.handles().num_miss() as usize);
+        self.miss_shader_binding_tables = self.bind_inner(args, SbtHandles::rmiss);
         self
     }
     pub fn bind_callable<'a, D: NoUninit, I>(&mut self, args: I) -> &mut Self
@@ -532,10 +531,28 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         I: IntoIterator<Item = &'a D>,
         I::IntoIter: ExactSizeIterator,
     {
-        self.callable_shader_binding_tables = self.bind_inner(args);
+        let args = args.into_iter();
+        assert_eq!(args.len(), self.pipeline.handles().num_callable() as usize);
+        self.callable_shader_binding_tables = self.bind_inner(args, SbtHandles::callable);
         self
     }
+
+    /// Trace the rays using the specified raygen shader.
     pub fn trace<P>(self, raygen_index: usize, extent: UVec3, hitgroup_sbt: &SbtManager<P>) {
+        assert_ne!(
+            self.raygen_shader_binding_tables[raygen_index].device_address, 0,
+            "RayGen shader not bound"
+        );
+        assert_ne!(
+            self.miss_shader_binding_tables.device_address, 0,
+            "Miss shaders not bound"
+        );
+        if self.pipeline.handles().num_callable() > 0 {
+            assert_ne!(
+                self.callable_shader_binding_tables.device_address, 0,
+                "Callable shaders not bound"
+            );
+        }
         unsafe {
             let cmd_buf = self.commands.cmd_buf();
             self.pipeline.device().cmd_bind_pipeline(

@@ -185,6 +185,11 @@ pub struct StagingBeltBatchJob<'a> {
 }
 
 impl StagingBeltBatchJob<'_> {
+    pub fn push_item<T>(&mut self, item: &T) -> StagingBeltSuballocation<T> {
+        let mut x = self.allocate_item::<T>();
+        x.write(item);
+        x
+    }
     pub fn allocate_item<T>(&mut self) -> StagingBeltSuballocation<T> {
         let allocation = self.allocate_buffer(
             std::mem::size_of::<T>() as u64,
@@ -374,13 +379,15 @@ impl<T: ?Sized> BufferLike for StagingBeltSuballocation<T> {
     }
 }
 impl<T: ?Sized> StagingBeltSuballocation<T> {
-    pub fn write(&mut self, item: &T)
-    where
-        T: NoUninit,
-    {
-        let slice =
-            unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.size as usize) };
-        slice.copy_from_slice(bytemuck::bytes_of(item))
+    pub fn write(&mut self, item: &T) {
+        assert_eq!(std::mem::size_of_val(item), self.size as usize);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                item as *const T as *const u8,
+                self.ptr.as_ptr(),
+                self.size as usize,
+            );
+        }
     }
     pub fn uninit_mut(&mut self) -> &mut MaybeUninit<T>
     where

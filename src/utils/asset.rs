@@ -1,21 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 use ash::vk;
 use bevy::{
     app::{App, Plugin, PostUpdate},
-    asset::{Asset, AssetApp, AssetEvent, AssetId, Assets, Handle},
+    asset::{Asset, AssetApp, AssetEvent, AssetId, Assets},
     ecs::{
-        entity::Entity,
         event::EventReader,
-        query::{Added, Changed},
-        removal_detection::RemovedComponents,
-        system::{Local, Query, Res, ResMut, StaticSystemParam, SystemParam, SystemParamItem},
+        system::{Local, Res, ResMut, StaticSystemParam, SystemParam, SystemParamItem},
     },
 };
 
 use crate::{
     commands::{BatchCopy, TransferCommands},
-    task::{AsyncCommandRecorder, AsyncComputeTask, AsyncTaskPool},
+    task::{AsyncComputeTask, AsyncTaskPool},
 };
 
 pub trait AssetUpload: Asset {

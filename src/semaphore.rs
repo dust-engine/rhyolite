@@ -1,4 +1,4 @@
-use std::{fmt::Debug, sync::atomic::AtomicU64};
+use std::fmt::Debug;
 
 use ash::{
     prelude::VkResult,

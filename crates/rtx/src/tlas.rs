@@ -10,9 +10,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{
-            Added, ArchetypeFilter, Or, QueryFilter, QueryItem, ReadOnlyQueryData, With, Without,
-        },
+        query::{ArchetypeFilter, QueryItem, ReadOnlyQueryData, Without},
         removal_detection::RemovedComponents,
         schedule::{IntoSystemConfigs, SystemSet},
         system::{
@@ -21,7 +19,7 @@ use bevy::{
         },
         world::FromWorld,
     },
-    math::{Mat4, Quat, Vec3, Vec4},
+    math::{Mat4, Quat, Vec3},
     utils::tracing,
 };
 use rhyolite::{
@@ -33,10 +31,10 @@ use rhyolite::{
     debug::DebugObject,
     ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands, RenderRes},
     staging::{StagingBelt, StagingBeltSuballocation},
-    Access, Allocator, Buffer, BufferArray, BufferLike, Device, HasDevice, Instance,
+    Access, Allocator, Buffer, BufferArray, BufferLike, Device, HasDevice,
 };
 
-use crate::{AccelStruct, SbtIndex};
+use crate::AccelStruct;
 
 pub struct TLASInstanceData<'a> {
     ty: vk::AccelerationStructureMotionInstanceTypeNV,
@@ -537,7 +535,10 @@ fn extract_input_barrier<B: TLASBuilder>(
 
 fn extract_input<B: TLASBuilder>(
     mut commands: RenderCommands<'c'>,
-    mut updated_instances: Query<(Entity, B::QueryData, &mut TLASIndex<B::TLASType>), B::QueryFilter>,
+    mut updated_instances: Query<
+        (Entity, B::QueryData, &mut TLASIndex<B::TLASType>),
+        B::QueryFilter,
+    >,
     mut staging_belt: ResMut<StagingBelt>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
     mut params: StaticSystemParam<B::Params>,
