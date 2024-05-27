@@ -308,10 +308,12 @@ impl<Filter: QueryFilter + Send + Sync + 'static> EguiDeviceBuffer<Filter> {
             index_buffer: RenderRes::new(BufferArray::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::INDEX_BUFFER,
+                4,
             )),
             vertex_buffer: RenderRes::new(BufferArray::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::VERTEX_BUFFER,
+                4,
             )),
             marker: Default::default(),
             total_indices_count: 0,
@@ -596,6 +598,7 @@ fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
             let mut buf = BufferArray::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                1,
             );
             buf.realloc(device_buffers.total_vertices_count).unwrap();
             RenderRes::new(buf)
@@ -607,6 +610,7 @@ fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
             let mut buf = BufferArray::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                1,
             );
             buf.realloc(device_buffers.total_indices_count).unwrap();
             RenderRes::new(buf)

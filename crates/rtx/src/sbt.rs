@@ -17,8 +17,7 @@ use bevy::{
         removal_detection::RemovedComponents,
         schedule::IntoSystemConfigs,
         system::{
-            Commands, In, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
-            SystemParamItem,
+            Commands, In, ParamSet, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam, SystemParamItem
         },
     },
     math::UVec3,
@@ -150,6 +149,7 @@ unsafe impl<T> Sync for SbtManager<T> {}
 #[derive(Component)]
 pub struct SbtIndex<T> {
     index: u32,
+    generation: u64,
     _marker: PhantomData<*mut T>,
 }
 unsafe impl<T> Send for SbtIndex<T> {}
@@ -158,6 +158,7 @@ impl<T> Default for SbtIndex<T> {
     fn default() -> Self {
         Self {
             index: u32::MAX,
+            generation: 0,
             _marker: PhantomData,
         }
     }
@@ -229,6 +230,7 @@ impl<T> SbtManager<T> {
         &self,
         dst_buffer: &mut [u8],
         dst_index: usize,
+        sbt_index: &mut SbtIndex<T>,
         hitgroup_handle: HitgroupHandle,
         params: &mut SystemParamItem<B::Params>,
         mut raytype_param_callback: impl FnMut(u32, &mut [u8], &mut SystemParamItem<B::Params>),
@@ -236,6 +238,7 @@ impl<T> SbtManager<T> {
         if hitgroup_handle.generation.get() > self.pipeline_generation {
             return;
         }
+        sbt_index.generation = self.pipeline_generation;
         let offset = dst_index * self.hitgroup_layout.one_entry.pad_to_align().size();
         let entry = &mut dst_buffer[offset..offset + self.hitgroup_layout.one_entry.size()];
         for raytype in 0..B::NUM_RAYTYPES {
@@ -253,13 +256,17 @@ impl<T> SbtManager<T> {
             }
         }
     }
+
+    pub fn index_available(&self, index: &SbtIndex<T>) -> bool {
+        index.generation <= self.pipeline_generation
+    }
 }
 
 // -- Systems
 pub fn assign_index<T: SBTBuilder>(
     mut commands: Commands,
     mut this: ResMut<SbtManager<T::SbtIndexType>>,
-    new_instances: Query<Entity, (T::QueryFilter, Without<SbtIndex<T::SbtIndexType>>)>,
+    new_instances: Query<(Entity, T::QueryData), (T::QueryFilter, Without<SbtIndex<T::SbtIndexType>>)>,
     mut removed: RemovedComponents<SbtIndex<T::SbtIndexType>>,
 ) {
     for removed_entity in removed.read() {
@@ -268,7 +275,7 @@ pub fn assign_index<T: SBTBuilder>(
             this.free_entries.push(index);
         }
     }
-    for entity in new_instances.iter() {
+    for (entity, _) in new_instances.iter() {
         assert!(!this.entity_map.contains_key(&entity));
         let index = this
             .free_entries
@@ -277,6 +284,7 @@ pub fn assign_index<T: SBTBuilder>(
         this.entity_map.insert(entity, index);
         commands.entity(entity).insert(SbtIndex::<T::SbtIndexType> {
             index,
+            generation: 0,
             _marker: PhantomData::default(),
         });
     }
@@ -333,33 +341,38 @@ pub fn transfer<T: SBTBuilder>(
     mut commands: RenderCommands<'t'>,
     mut this: ResMut<SbtManager<T::SbtIndexType>>,
     mut staging_belt: ResMut<StagingBelt>,
-    changed_entries: Query<
-        (Entity, T::QueryData, &SbtIndex<T::SbtIndexType>),
-        (
-            T::QueryFilter,
-            Or<(T::ChangeFilter, Changed<SbtIndex<T::SbtIndexType>>)>,
-        ),
-    >,
-    all_entries: Query<(Entity, T::QueryData, &SbtIndex<T::SbtIndexType>), T::QueryFilter>,
+    mut entries: ParamSet<(
+        Query<
+            (T::QueryData, &mut SbtIndex<T::SbtIndexType>),
+            (
+                T::QueryFilter,
+                Or<(T::ChangeFilter, Changed<SbtIndex<T::SbtIndexType>>)>,
+            ),
+        >,
+        Query<(T::QueryData, &mut SbtIndex<T::SbtIndexType>), T::QueryFilter>
+    )>,
     mut params: StaticSystemParam<T::Params>,
 ) {
     let this = &mut *this;
 
-    let mut changes: Vec<(Entity, u32)>;
+    let mut entries0;
+    let mut entries1;
 
-    if this.full_update_required {
+    let mut changes: Vec<(QueryItem<T::QueryData>, &mut SbtIndex<T::SbtIndexType>)> = if this.full_update_required {
         tracing::info!("{} SBT Full update", std::any::type_name::<T>());
         this.full_update_required = false;
-        changes = all_entries
-            .iter()
-            .map(|(entity, _, handle)| (entity, handle.index))
-            .collect::<Vec<_>>();
+        entries1 = entries.p1();
+        entries1
+            .iter_mut()
+            .map(|(q, handle)| (q, handle.into_inner()))
+            .collect::<Vec<_>>()
     } else {
-        changes = changed_entries
-            .iter()
-            .map(|(entity, _, handle)| (entity, handle.index))
-            .collect::<Vec<_>>();
-    }
+        entries0 = entries.p0();
+        entries0
+            .iter_mut()
+            .map(|(q, handle)| (q, handle.into_inner()))
+            .collect::<Vec<_>>()
+    };
     if changes.is_empty() {
         return;
     }
@@ -369,7 +382,7 @@ pub fn transfer<T: SBTBuilder>(
         changes.len()
     );
 
-    changes.sort_unstable_by_key(|n| n.1);
+    changes.sort_unstable_by_key(|n| n.1.index);
 
     let total_size = this
         .hitgroup_layout
@@ -383,12 +396,12 @@ pub fn transfer<T: SBTBuilder>(
         .start(&mut commands)
         .allocate_buffer(total_size, 1);
 
-    for (i, &(entity, _)) in changes.iter().enumerate() {
-        let (_, item, _) = all_entries.get(entity).unwrap();
-        let hitgroup_handle = T::hitgroup_handle(&mut params, &item);
+    for (i, (item, sbt_index)) in changes.iter_mut().enumerate() {
+        let hitgroup_handle = T::hitgroup_handle(&mut params, item);
         this.copy_sbt::<T>(
             &mut host_buffer,
             i,
+            sbt_index,
             hitgroup_handle,
             &mut params,
             |raytype, dst, params| {
@@ -401,7 +414,7 @@ pub fn transfer<T: SBTBuilder>(
     }
     let regions = changes
         .iter()
-        .map(|a| (a.1, 1_u32))
+        .map(|(_, a)| (a.index, 1_u32))
         .coalesce(|a, b| {
             if a.0 + 1 == b.0 {
                 Ok((a.0, a.1 + b.1))

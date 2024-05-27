@@ -353,6 +353,7 @@ pub struct DefaultTLAS;
 #[derive(Component)]
 pub struct TLASIndex<T: Send + Sync + 'static> {
     pub index: u32,
+    initialized: bool,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -472,6 +473,7 @@ fn assign_index<B: TLASBuilder>(
         store.entity_map.insert(entity, index);
         commands.entity(entity).insert(TLASIndex::<B::TLASType> {
             index,
+            initialized: false,
             _marker: Default::default(),
         });
     }
@@ -535,7 +537,7 @@ fn extract_input_barrier<B: TLASBuilder>(
 
 fn extract_input<B: TLASBuilder>(
     mut commands: RenderCommands<'c'>,
-    updated_instances: Query<(Entity, B::QueryData, &TLASIndex<B::TLASType>), B::QueryFilter>,
+    mut updated_instances: Query<(Entity, B::QueryData, &mut TLASIndex<B::TLASType>), B::QueryFilter>,
     mut staging_belt: ResMut<StagingBelt>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
     mut params: StaticSystemParam<B::Params>,
@@ -544,10 +546,11 @@ fn extract_input<B: TLASBuilder>(
     let mut job = BatchCopy::new(&mut commands);
     let mut has_motion = false;
 
-    for (entity, data, index) in updated_instances.iter() {
-        if !B::should_update(&mut params, &data) {
+    for (entity, data, mut index) in updated_instances.iter_mut() {
+        if index.initialized && !B::should_update(&mut params, &data) {
             continue;
         }
+        index.initialized = true;
         has_motion |= B::has_motion(&mut params, &data);
 
         let mut allocation = staging.allocate_item::<vk::AccelerationStructureInstanceKHR>();
