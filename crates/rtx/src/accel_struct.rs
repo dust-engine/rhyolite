@@ -59,7 +59,8 @@ impl AccelStruct {
             allocator,
             size,
             1,
-            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
+                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
         )?;
         let name = if ty == vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL {
             cstr!("BLAS backing buffer")

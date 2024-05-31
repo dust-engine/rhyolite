@@ -122,13 +122,23 @@ impl PipelineCache {
     ) -> CachedPipeline<RenderObject<ComputePipeline>> {
         self.create::<RenderObject<ComputePipeline>>(build_info)
     }
+    pub fn is_outdated<T: Pipeline>(&self, cached_pipeline: &CachedPipeline<T>) -> bool {
+        for (shader, generation) in cached_pipeline.shader_generations.iter() {
+            if let Some(latest_generation) = self.shader_generations.get(shader) {
+                if latest_generation > generation {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     pub fn retrieve<'a, T: Pipeline>(
         &self,
         cached_pipeline: &'a mut CachedPipeline<T>,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
     ) -> Option<&'a mut T> {
-        self.retrieve_pipeline(cached_pipeline, assets, pool, true)
+        self.retrieve_pipeline(cached_pipeline, assets, pool, true, None)
     }
     pub fn retrieve_pipeline<'a, T: Pipeline>(
         &self,
@@ -136,6 +146,7 @@ impl PipelineCache {
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
         allow_stale: bool,
+        force_reload: Option<bool>,
     ) -> Option<&'a mut T> {
         if let Some(pipeline) = &mut cached_pipeline.task {
             if pipeline.is_finished() {
@@ -156,36 +167,36 @@ impl PipelineCache {
         }
 
         if self.hot_reload_enabled {
-            for (shader, generation) in cached_pipeline.shader_generations.iter() {
-                if let Some(latest_generation) = self.shader_generations.get(shader) {
-                    if latest_generation > generation {
-                        // schedule.
-                        cached_pipeline.task = cached_pipeline
-                            .build_info
-                            .as_mut()
-                            .unwrap()
-                            .build(pool, assets, self.cache);
-                        if cached_pipeline.task.is_some() {
-                            // if cached.pipeline.task is still none, it means that some of the shaders hasn't finished loading.
-                            // in that case we skip updating the generations and we'll retry on the next frame.
-                            for (shader, generation) in
-                                cached_pipeline.shader_generations.iter_mut()
-                            {
-                                if let Some(latest_generation) = self.shader_generations.get(shader)
-                                {
-                                    *generation = *latest_generation;
-                                }
-                            }
-                            tracing::info!("Shader hot reload: updated");
+            if (force_reload == None && self.is_outdated(cached_pipeline))
+                || force_reload == Some(true)
+            {
+                // schedule.
+                cached_pipeline.task = cached_pipeline
+                    .build_info
+                    .as_mut()
+                    .unwrap()
+                    .build(pool, assets, self.cache);
+                if cached_pipeline.task.is_some() {
+                    // if cached.pipeline.task is still none, it means that some of the shaders hasn't finished loading.
+                    // in that case we skip updating the generations and we'll retry on the next frame.
+                    for (shader, generation) in cached_pipeline.shader_generations.iter_mut() {
+                        if let Some(latest_generation) = self.shader_generations.get(shader) {
+                            *generation = *latest_generation;
                         }
-                        break;
                     }
+                    tracing::info!("Shader hot reload: updated");
                 }
             }
         }
 
         if let Some(pipeline) = cached_pipeline.pipeline.as_mut() {
-            return Some(pipeline);
+            if cached_pipeline.task.is_none() {
+                return Some(pipeline);
+            } else if allow_stale {
+                return Some(pipeline);
+            } else {
+                return None;
+            }
         } else {
             if cached_pipeline.task.is_none() {
                 // schedule

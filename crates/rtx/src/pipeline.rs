@@ -1,4 +1,4 @@
-use std::{alloc::Layout, collections::BTreeSet, num::NonZeroU64, sync::Arc};
+use std::{alloc::Layout, collections::BTreeSet, fmt::Debug, num::NonZeroU64, sync::Arc};
 
 use bevy::{
     asset::{AssetId, Assets},
@@ -307,7 +307,7 @@ pub struct HitgroupHandle {
 /// while the hitgroup shaders may change frequently.
 /// As such, we create a pipeline library for the ray gen, miss, and callable shaders,
 /// and a pipeline library for each of the hitgroups.
-pub enum RayTracingPipelineManagerImpl {
+enum RayTracingPipelineManagerImpl {
     Native(RayTracingPipelineManagerNative),
     PipelineLibrary(RayTracingPipelineManagerPipelineLibrary),
 }
@@ -398,7 +398,19 @@ impl RayTracingPipelineManager {
         pool: &DeferredOperationTaskPool,
         sbt_manager: &mut SbtManager<T>,
     ) {
-        if self.dirty || self.pipeline.is_none() {
+        let mut force_rebuild = false;
+        if self.dirty // rebuild if add_hitgroup or remove_hitgroup was called
+            || self
+                .pipeline
+                .as_ref()
+                .map(|p| {
+                    // rebuild if self.pipeline becomes outdated due to hot reload
+                    force_rebuild = pipeline_cache.is_outdated(p);
+                    force_rebuild
+                })
+                .unwrap_or(true)
+        // if self.pipeline is none, always rebuild
+        {
             let new_pipeline = match &mut self.inner {
                 RayTracingPipelineManagerImpl::Native(manager) => {
                     Some(manager.build(pipeline_cache))
@@ -415,13 +427,19 @@ impl RayTracingPipelineManager {
                 }
                 self.dirty = false;
                 self.pipeline_generation = self.latest_generation;
+            } else {
+                force_rebuild = false;
             }
         }
         if let Some(pipeline) = &mut self.pipeline {
             let old_pipeline = pipeline.get().map(|x| x.get().raw()).unwrap_or_default();
-            pipeline_cache.retrieve(pipeline, assets, pool);
+            pipeline_cache.retrieve_pipeline(pipeline, assets, pool, true, Some(force_rebuild));
             let new_pipeline = pipeline.get().map(|x| x.get().raw()).unwrap_or_default();
             if old_pipeline != new_pipeline {
+                println!(
+                    "Pipeline updated: {:?} -> {:?} ({})",
+                    old_pipeline, new_pipeline, self.pipeline_generation
+                );
                 sbt_manager.pipeline_updated(self.pipeline_generation);
             }
         };
@@ -543,7 +561,6 @@ struct RayTracingPipelineManagerPipelineLibrary {
     num_raygen: u8,
     num_miss: u8,
     num_callable: u8,
-    pipeline: Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
     dirty: bool,
 }
 
@@ -600,7 +617,6 @@ impl RayTracingPipelineManagerPipelineLibrary {
             num_raygen,
             num_miss,
             num_callable,
-            pipeline: None,
             dirty: false,
         }
     }
@@ -656,7 +672,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
             )
             .map(|library| {
                 pipeline_cache
-                    .retrieve_pipeline(library, assets, pool, false)
+                    .retrieve_pipeline(library, assets, pool, false, None)
                     .cloned()
             })
             .collect::<Option<Vec<RayTracingPipelineLibrary>>>()?;
@@ -700,6 +716,34 @@ pub struct SbtHandles {
     num_miss: u8,
     num_callable: u8,
     num_hitgroup: u32,
+}
+impl Debug for SbtHandles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct HexStr<'a>(&'a [u8]);
+        impl<'a> Debug for HexStr<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("0x")?;
+                for item in self.0 {
+                    f.write_fmt(format_args!("{:x?}", item))?;
+                }
+                Ok(())
+            }
+        }
+        let mut f_struct = f.debug_struct("SbtHandles");
+        for i in 0..self.num_raygen {
+            let data = self.rgen(i as usize);
+            f_struct.field("raygen", &HexStr(data));
+        }
+        for i in 0..self.num_miss {
+            let data = self.rmiss(i as usize);
+            f_struct.field("miss", &HexStr(data));
+        }
+        for i in 0..self.num_callable {
+            let data = self.callable(i as usize);
+            f_struct.field("callable", &HexStr(data));
+        }
+        Ok(())
+    }
 }
 impl SbtHandles {
     pub fn handle_layout(&self) -> &Layout {

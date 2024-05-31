@@ -155,11 +155,16 @@ fn build_blas_system<T: BLASBuilder>(
         for (entity, blas) in task.built_accel_structs {
             commands.entity(entity).insert(BLAS { accel_struct: blas });
         }
+        // Return here so that any new BLAS builds will be scheduled in the next frame.
+        // This is important, otherwise we're going to rebuild what we just built.
+        // `entities` won't reflect the changes we made to `commands`.
+        return;
     }
     if entities.is_empty() {
         return;
     }
     let mut infos: Vec<vk::AccelerationStructureBuildGeometryInfoKHR> = Vec::new();
+    let mut info_entities: Vec<Entity> = Vec::new();
     let mut geometries: Vec<vk::AccelerationStructureGeometryKHR> = Vec::new();
     let mut buffers: Vec<T::BufferType> = Vec::new();
     let mut build_ranges: Vec<vk::AccelerationStructureBuildRangeInfoKHR> = Vec::new();
@@ -167,7 +172,7 @@ fn build_blas_system<T: BLASBuilder>(
 
     let mut commands = task_pool.spawn_transfer();
 
-    for (_, data, blas) in entities.iter() {
+    for (entity, data, blas) in entities.iter() {
         if blas.is_some() && !T::should_update(&mut params, &data) {
             continue;
         }
@@ -263,6 +268,7 @@ fn build_blas_system<T: BLASBuilder>(
             }
         }
         infos.push(info);
+        info_entities.push(entity);
     }
     if infos.is_empty() {
         return;
@@ -278,7 +284,7 @@ fn build_blas_system<T: BLASBuilder>(
         .properties()
         .get::<vk::PhysicalDeviceAccelerationStructurePropertiesKHR>()
         .min_acceleration_structure_scratch_offset_alignment;
-    for (info, entity) in infos.iter_mut().zip(entities.iter().map(|(e, _, _)| e)) {
+    for (info, entity) in infos.iter_mut().zip(info_entities.into_iter()) {
         info.p_geometries = unsafe { geometries.as_ptr().add(cur_geometry_index) };
         max_primitive_counts.clear();
         max_primitive_counts.extend(

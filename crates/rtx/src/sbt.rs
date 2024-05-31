@@ -7,7 +7,7 @@ use bevy::{
         entity::Entity,
         query::{ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, Without},
         removal_detection::RemovedComponents,
-        schedule::IntoSystemConfigs,
+        schedule::{IntoSystemConfigs, SystemSet},
         system::{
             Commands, In, ParamSet, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
             SystemParamItem,
@@ -254,7 +254,7 @@ impl<T> SbtManager<T> {
 }
 
 // -- Systems
-pub fn assign_index<T: SBTBuilder>(
+fn assign_index<T: SBTBuilder>(
     mut commands: Commands,
     mut this: ResMut<SbtManager<T::SbtIndexType>>,
     new_instances: Query<
@@ -283,10 +283,7 @@ pub fn assign_index<T: SBTBuilder>(
         });
     }
 }
-pub fn resize_buffer<T: Send + Sync + 'static>(
-    mut this: ResMut<SbtManager<T>>,
-    device: Res<Device>,
-) {
+fn resize_buffer<T: Send + Sync + 'static>(mut this: ResMut<SbtManager<T>>, device: Res<Device>) {
     let total_size = this
         .hitgroup_layout
         .one_entry
@@ -321,7 +318,7 @@ pub fn resize_buffer<T: Send + Sync + 'static>(
     ));
 }
 
-pub fn transfer_barrier<T: Send + Sync + 'static>(
+fn copy_sbt_barrier<T: Send + Sync + 'static>(
     In(mut barriers): In<Barriers>,
     mut this: ResMut<SbtManager<T>>,
 ) {
@@ -331,7 +328,7 @@ pub fn transfer_barrier<T: Send + Sync + 'static>(
     }
 }
 
-pub fn transfer<T: SBTBuilder>(
+fn copy_sbt<T: SBTBuilder>(
     mut commands: RenderCommands<'t'>,
     mut this: ResMut<SbtManager<T::SbtIndexType>>,
     mut staging_belt: ResMut<StagingBelt>,
@@ -603,6 +600,19 @@ impl<T: SBTBuilder> Default for SbtPlugin<T> {
         }
     }
 }
+
+#[derive(SystemSet, Clone, Eq, PartialEq, Debug, Hash)]
+pub struct CopySBT {
+    type_id: std::any::TypeId,
+}
+impl CopySBT {
+    pub fn of<T: 'static>() -> Self {
+        Self {
+            type_id: std::any::TypeId::of::<T>(),
+        }
+    }
+}
+
 impl<T: SBTBuilder> Plugin for SbtPlugin<T> {
     fn build(&self, app: &mut App) {
         app.add_systems(
@@ -611,9 +621,10 @@ impl<T: SBTBuilder> Plugin for SbtPlugin<T> {
         );
         app.add_systems(
             PostUpdate,
-            transfer::<T>
-                .with_barriers(transfer_barrier::<T::SbtIndexType>) // TODO: ensure that there's only one instance of this.
-                .after(resize_buffer::<T::SbtIndexType>),
+            copy_sbt::<T>
+                .with_barriers(copy_sbt_barrier::<T::SbtIndexType>) // TODO: ensure that there's only one instance of this.
+                .after(resize_buffer::<T::SbtIndexType>)
+                .in_set(CopySBT::of::<T::SbtIndexType>()),
         );
     }
     fn finish(&self, app: &mut App) {
