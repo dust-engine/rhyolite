@@ -422,6 +422,7 @@ impl RayTracingPipelineManager {
             if let Some(new_pipeline) = new_pipeline {
                 if let Some(old_pipeline) = &mut self.pipeline {
                     old_pipeline.replace(new_pipeline);
+                    force_rebuild = true;
                 } else {
                     self.pipeline = Some(new_pipeline);
                 }
