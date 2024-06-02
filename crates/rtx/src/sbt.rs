@@ -386,7 +386,7 @@ fn copy_sbt<T: SBTBuilder>(
     println!("Changed items: {}", changes.len());
     let mut host_buffer = staging_belt
         .start(&mut commands)
-        .allocate_buffer(total_size, 1);
+        .allocate_buffer(total_size);
 
     for (i, (item, sbt_index)) in changes.iter_mut().enumerate() {
         let hitgroup_handle = T::hitgroup_handle(&mut params, item);
@@ -441,9 +441,17 @@ impl RayTracingPipeline {
         uniform_belt: &'a mut UniformBelt,
         commands: &'a mut T,
     ) -> TraceRayBuilder<'_, T> {
+        let properties = self
+            .device()
+            .physical_device()
+            .properties()
+            .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
         TraceRayBuilder {
             pipeline: self,
-            copy_job: uniform_belt.start(commands.semaphore_signal()),
+            copy_job: uniform_belt.start_aligned(
+                commands.semaphore_signal(),
+                properties.shader_group_base_alignment,
+            ),
             raygen_shader_binding_tables: SmallVec::from_elem(
                 vk::StridedDeviceAddressRegionKHR::default(),
                 self.handles().num_raygen() as usize,
@@ -460,16 +468,9 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         let handle = self.pipeline.handles().rgen(index as usize);
         let data = bytemuck::bytes_of(data);
 
-        let properties = self
-            .pipeline
-            .device()
-            .physical_device()
-            .properties()
-            .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-        let mut allocation = self.copy_job.allocate_buffer(
-            handle.len() as u64 + data.len() as u64,
-            properties.shader_group_base_alignment as u64,
-        );
+        let mut allocation = self
+            .copy_job
+            .allocate_buffer(handle.len() as u64 + data.len() as u64);
         allocation[0..handle.len()].copy_from_slice(handle);
         allocation[handle.len()..].copy_from_slice(data);
 
@@ -497,9 +498,7 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         let stride = (properties.shader_group_handle_size + std::mem::size_of::<D>() as u32)
             .next_multiple_of(properties.shader_group_handle_alignment);
         let total_size = stride as u64 * args.len() as u64;
-        let mut allocation = self
-            .copy_job
-            .allocate_buffer(total_size, properties.shader_group_base_alignment as u64);
+        let mut allocation = self.copy_job.allocate_buffer(total_size);
         for (i, arg) in args.enumerate() {
             let handle = (handle_getter)(self.pipeline.handles(), i);
             let arg = bytemuck::bytes_of(arg);

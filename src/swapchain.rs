@@ -15,6 +15,7 @@ use bevy::{
     math::{UVec2, UVec3},
 };
 
+use crate::HasDevice;
 use crate::{
     commands::{ResourceTransitionCommands, SemaphoreSignalCommands, TrackedResource},
     ecs::{Barriers, IntoRenderSystemConfigs, RenderImage, RenderSystemPass},
@@ -22,7 +23,7 @@ use crate::{
     utils::{ColorSpace, SharingMode},
     Access, Device, ImageLike, ImageViewLike, PhysicalDevice, Queues, Surface,
 };
-use ash::khr::swapchain::Meta as KhrSwapchain;
+use ash::khr::swapchain::{self, Meta as KhrSwapchain};
 pub struct SwapchainPlugin {
     num_frame_in_flight: u32,
 }
@@ -70,6 +71,12 @@ pub struct Swapchain {
     inner: Arc<SwapchainInner>,
     acquire_semaphore: vk::Semaphore,
     images: SmallVec<[Option<RenderImage<SwapchainImageInner>>; 3]>,
+}
+
+impl HasDevice for Swapchain {
+    fn device(&self) -> &Device {
+        &self.inner.device
+    }
 }
 
 impl Drop for Swapchain {
@@ -407,6 +414,23 @@ pub struct SuboptimalEvent {
     window: Entity,
 }
 
+fn recreate_swapchain(
+    swapchain: &mut Swapchain,
+    surface: &Surface,
+    window: &Window,
+    config: Option<&SwapchainConfig>,
+) {
+    let default_config = SwapchainConfig::default();
+    let config = config.unwrap_or(&default_config);
+    let create_info = get_create_info(
+        surface,
+        swapchain.device().physical_device(),
+        window,
+        config,
+    );
+    swapchain.recreate(&create_info).unwrap();
+}
+
 pub(super) fn extract_swapchains(
     mut commands: Commands,
     device: Res<Device>,
@@ -429,10 +453,7 @@ pub(super) fn extract_swapchains(
     for resized_window in windows_to_rebuild.into_iter() {
         let (window, config, swapchain, surface) = query.get_mut(resized_window).unwrap();
         if let Some(mut swapchain) = swapchain {
-            let default_config = SwapchainConfig::default();
-            let config = config.unwrap_or(&default_config);
-            let create_info = get_create_info(surface, device.physical_device(), window, config);
-            swapchain.recreate(&create_info).unwrap();
+            recreate_swapchain(&mut swapchain, surface, window, config);
         }
     }
     for create_event in window_created_events.read() {
@@ -776,22 +797,57 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
             Entity,
             &mut Swapchain, // Need mutable reference to swapchain to call acquire_next_image
             &mut SwapchainImage,
+            Option<&SwapchainConfig>,
+            &Window,
+            &Surface,
         ),
         Filter,
     >,
     mut suboptimal_events: EventWriter<SuboptimalEvent>,
+    device: Res<Device>,
 ) {
-    let (entity, mut swapchain, mut swapchain_image) = match query.get_single_mut() {
-        Ok(item) => item,
-        Err(QuerySingleError::NoEntities(_str)) => {
-            return;
-        }
-        Err(QuerySingleError::MultipleEntities(str)) => {
-            panic!("{}", str)
+    let (entity, mut swapchain, mut swapchain_image, swapchain_config, window, surface) =
+        match query.get_single_mut() {
+            Ok(item) => item,
+            Err(QuerySingleError::NoEntities(_str)) => {
+                return;
+            }
+            Err(QuerySingleError::MultipleEntities(str)) => {
+                panic!("{}", str)
+            }
+        };
+
+    let mut swapchain_acquire_second_try = |swapchain: &mut Swapchain| {
+        recreate_swapchain(swapchain, surface, window, swapchain_config);
+        match unsafe {
+            swapchain
+                .inner
+                .device
+                .extension::<KhrSwapchain>()
+                .acquire_next_image(
+                    swapchain.inner.inner,
+                    !0,
+                    swapchain.acquire_semaphore,
+                    vk::Fence::null(),
+                )
+        } {
+            Ok((indice, suboptimal)) => {
+                if suboptimal {
+                    tracing::warn!("Suboptimal swapchain");
+                    suboptimal_events.send(SuboptimalEvent { window: entity });
+                }
+                indice
+            }
+            Err(err) => {
+                panic!(
+                    "Failed to acquire next image after swapchain recreate: {:?}",
+                    err
+                );
+            }
         }
     };
 
-    let (indice, suboptimal) = unsafe {
+    let indice = match unsafe {
         // Technically, we don't have to do this here. With Swapchain_Maintenance1,
         // we could do this in the present workflow which should be more correct.
         // TODO: verify correctness.
@@ -805,12 +861,22 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
                 swapchain.acquire_semaphore,
                 vk::Fence::null(),
             )
-    }
-    .unwrap();
-    if suboptimal {
-        tracing::warn!("Suboptimal swapchain");
-        suboptimal_events.send(SuboptimalEvent { window: entity });
-    }
+    } {
+        Ok((indice, suboptimal)) => {
+            if suboptimal {
+                tracing::warn!("vkAcquireNextImageKHR: Suboptimal");
+                suboptimal_events.send(SuboptimalEvent { window: entity });
+            }
+            indice
+        }
+        Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+            tracing::warn!("vkAcquireNextImageKHR: OUT_OF_DATE");
+            swapchain_acquire_second_try(&mut swapchain)
+        }
+        Err(err) => {
+            panic!("Failed to acquire next image: {:?}", err);
+        }
+    };
     let mut image = swapchain.images[indice as usize]
         .take()
         .expect("Acquiring image that hasn't been presented");
@@ -906,12 +972,18 @@ fn present_barriers(
 pub fn present(
     device: Res<Device>,
     queues_router: Res<Queues>,
-    mut query: Query<(&mut Swapchain, &mut SwapchainImage)>,
+    mut query: Query<(
+        &mut Swapchain,
+        &mut SwapchainImage,
+        &Surface,
+        &Window,
+        Option<&SwapchainConfig>,
+    )>,
 ) {
     let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
     let mut semaphores: Vec<vk::Semaphore> = Vec::new();
     let mut swapchain_image_indices: Vec<u32> = Vec::new();
-    for (mut swapchain, mut swapchain_image) in query.iter_mut() {
+    for (mut swapchain, mut swapchain_image, _, _, _) in query.iter_mut() {
         let Some(swapchain_image) = swapchain_image.inner.take() else {
             continue;
         };
@@ -933,20 +1005,36 @@ pub fn present(
         .unwrap();
     let queue = queues_router.get(present_queue);
     unsafe {
-        device
-            .extension::<KhrSwapchain>()
-            .queue_present(
-                *queue,
-                &vk::PresentInfoKHR {
-                    swapchain_count: swapchains.len() as u32,
-                    p_swapchains: swapchains.as_ptr(),
-                    p_image_indices: swapchain_image_indices.as_ptr(),
-                    p_wait_semaphores: semaphores.as_ptr(),
-                    wait_semaphore_count: semaphores.len() as u32,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        match device.extension::<KhrSwapchain>().queue_present(
+            *queue,
+            &vk::PresentInfoKHR {
+                swapchain_count: swapchains.len() as u32,
+                p_swapchains: swapchains.as_ptr(),
+                p_image_indices: swapchain_image_indices.as_ptr(),
+                p_wait_semaphores: semaphores.as_ptr(),
+                wait_semaphore_count: semaphores.len() as u32,
+                ..Default::default()
+            },
+        ) {
+            Ok(suboptimal) => {
+                if suboptimal {
+                    tracing::warn!("vkQueuePresent: Suboptimal");
+                }
+            }
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                tracing::warn!("vkQueuePresent: ERROR_OUT_OF_DATE");
+                // Proactively recreate surface if presenting one swapchain only.
+                if let Ok((mut swapchain, _, surface, window, config)) = query.get_single_mut() {
+                    tracing::warn!(
+                        "Immediately recreating swapchain after vkQueuePresent: ERROR_OUT_OF_DATE"
+                    );
+                    recreate_swapchain(&mut swapchain, surface, window, config);
+                };
+                // If presenting multiple swapchains together, leave this for `acquire_next_image` which is done
+                // individually for each surface.
+            }
+            Err(err) => panic!("Failed to present: {:?}", err),
+        }
     }
     drop(queue);
 }

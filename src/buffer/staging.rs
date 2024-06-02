@@ -150,6 +150,14 @@ impl StagingBelt {
     }
     #[must_use]
     pub fn start(&mut self, commands: &mut impl SemaphoreSignalCommands) -> StagingBeltBatchJob {
+        self.start_aligned(commands, 1)
+    }
+    #[must_use]
+    pub fn start_aligned(
+        &mut self,
+        commands: &mut impl SemaphoreSignalCommands,
+        alignment: u32,
+    ) -> StagingBeltBatchJob {
         let (sem, val) = commands.signal_semaphore(vk::PipelineStageFlags2KHR::TRANSFER);
 
         for (curr_sem, curr_val) in self.lifetime_marker.iter_mut() {
@@ -158,6 +166,7 @@ impl StagingBelt {
                 return StagingBeltBatchJob {
                     belt: self,
                     dirty: false,
+                    alignment,
                 };
             }
         }
@@ -165,6 +174,7 @@ impl StagingBelt {
         StagingBeltBatchJob {
             belt: self,
             dirty: false,
+            alignment,
         }
     }
 }
@@ -181,6 +191,7 @@ unsafe impl Sync for StagingBeltChunk {}
 
 pub struct StagingBeltBatchJob<'a> {
     belt: &'a mut StagingBelt,
+    alignment: u32,
     dirty: bool,
 }
 
@@ -191,26 +202,19 @@ impl StagingBeltBatchJob<'_> {
         x
     }
     pub fn allocate_item<T>(&mut self) -> StagingBeltSuballocation<T> {
-        let allocation = self.allocate_buffer(
-            std::mem::size_of::<T>() as u64,
-            std::mem::align_of::<T>() as u64,
-        );
+        let allocation = self.allocate_buffer(std::mem::size_of::<T>() as u64);
         StagingBeltSuballocation {
             _marker: std::marker::PhantomData,
             ..allocation
         }
     }
-    pub fn allocate_buffer(
-        &mut self,
-        size: vk::DeviceSize,
-        alignment: vk::DeviceSize,
-    ) -> StagingBeltSuballocation<[u8]> {
+    pub fn allocate_buffer(&mut self, size: vk::DeviceSize) -> StagingBeltSuballocation<[u8]> {
         self.dirty = true;
         if size > self.belt.chunk_size {
             unimplemented!()
         }
         let start = self.belt.tail;
-        let aligned_start = self.belt.tail.next_multiple_of(alignment);
+        let aligned_start = self.belt.tail.next_multiple_of(self.alignment as u64);
         let end = aligned_start + size;
 
         let mut current_chunk_end_index = 0;
@@ -444,7 +448,23 @@ pub struct UniformBelt(StagingBelt);
 impl UniformBelt {
     #[must_use]
     pub fn start(&mut self, commands: &mut impl SemaphoreSignalCommands) -> StagingBeltBatchJob {
-        self.0.start(commands)
+        let alignment = self
+            .0
+            .device
+            .physical_device()
+            .properties()
+            .limits
+            .min_uniform_buffer_offset_alignment;
+        self.0.start_aligned(commands, alignment as u32)
+    }
+
+    #[must_use]
+    pub fn start_aligned(
+        &mut self,
+        commands: &mut impl SemaphoreSignalCommands,
+        alignment: u32,
+    ) -> StagingBeltBatchJob {
+        self.0.start_aligned(commands, alignment)
     }
 }
 impl FromWorld for UniformBelt {
