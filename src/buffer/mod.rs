@@ -194,8 +194,9 @@ impl Buffer {
         match memory_model {
             PhysicalDeviceMemoryModel::Bar | PhysicalDeviceMemoryModel::Discrete => {
                 let mut batch = staging_belt.start(commands.semaphore_signal());
-                let staging = batch.allocate_buffer(size);
+                let mut staging = batch.allocate_buffer(size);
                 unsafe {
+                    initializer(&mut staging);
                     let (buffer, allocation) = allocator.create_buffer_with_alignment(
                         &vk::BufferCreateInfo {
                             size,
