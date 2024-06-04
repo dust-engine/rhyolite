@@ -1,12 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
-use bevy::{
-    ecs::system::{InstancedResource, Resource},
-    utils::smallvec::SmallVec,
-};
+use bevy::ecs::system::{InstancedResource, Resource};
 
 use crate::semaphore::TimelineSemaphore;
+use smallvec::SmallVec;
 
 use super::{queue_cap::IsQueueCap, QueueSubmissionInfo, RenderCommands};
 

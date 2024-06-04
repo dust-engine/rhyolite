@@ -35,10 +35,10 @@ use bevy::{
         system::{Res, Resource, System, SystemMeta, SystemParam},
         world::World,
     },
-    utils::smallvec::SmallVec,
 };
 use itertools::Itertools;
 use queue_cap::*;
+use smallvec::SmallVec;
 
 use crate::{
     command_pool::ManagedCommandPool,

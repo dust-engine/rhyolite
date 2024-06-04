@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ash::vk;
-use bevy::utils::smallvec::SmallVec;
+use smallvec::SmallVec;
 
 use crate::{access::utils::compare_pipeline_stages, semaphore::TimelineSemaphore, QueueRef};
 

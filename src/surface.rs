@@ -24,8 +24,8 @@ impl Plugin for SurfacePlugin {
         app.add_instance_extension::<KhrSurface>().unwrap();
 
         if let Some(event_loop) = app
-            .world
-            .get_non_send_resource::<winit::event_loop::EventLoop<()>>()
+            .world()
+            .get_non_send_resource::<winit::event_loop::EventLoop<bevy::winit::WakeUp>>()
         {
             match event_loop.display_handle().unwrap().as_raw() {
                 #[cfg(target_os = "windows")]

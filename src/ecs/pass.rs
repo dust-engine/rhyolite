@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use bevy::ptr::OwningPtr;
 use bevy::{
     ecs::{
         schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
@@ -11,19 +12,6 @@ use bevy::{
         world::World,
     },
     utils::ConfigMap,
-};
-use bevy::{
-    ptr::OwningPtr,
-    utils::{
-        petgraph::{
-            graphmap::DiGraphMap,
-            visit::{
-                Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker,
-            },
-            Direction::{self, Incoming, Outgoing},
-        },
-        smallvec::SmallVec,
-    },
 };
 
 use crate::{
@@ -36,11 +24,17 @@ use crate::{
     semaphore::TimelineSemaphore,
     Device,
 };
+use petgraph::{
+    graphmap::DiGraphMap,
+    visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
+    Direction::{self, Incoming, Outgoing},
+};
+use smallvec::SmallVec;
 
 use super::RenderSystemConfig;
 
 pub struct RenderSystemPass {
-    queue_graph: bevy::utils::petgraph::graphmap::DiGraphMap<u32, ()>,
+    queue_graph: petgraph::graphmap::DiGraphMap<u32, ()>,
     queue_graph_nodes: Vec<QueueGraphNodeMeta>,
 }
 
@@ -94,10 +88,10 @@ impl ScheduleBuildPass for RenderSystemPass {
         &mut self,
         _set: bevy::ecs::schedule::NodeId,
         _systems: &[bevy::ecs::schedule::NodeId],
-        _dependency_flattened: &bevy::utils::petgraph::prelude::GraphMap<
+        _dependency_flattened: &petgraph::prelude::GraphMap<
             bevy::ecs::schedule::NodeId,
             (),
-            bevy::utils::petgraph::prelude::Directed,
+            petgraph::prelude::Directed,
         >,
     ) -> Self::CollapseSetIterator {
         std::iter::empty()
@@ -107,13 +101,13 @@ impl ScheduleBuildPass for RenderSystemPass {
         &mut self,
         world: &mut World,
         graph: &mut bevy::ecs::schedule::ScheduleGraph,
-        dependency_flattened: &mut bevy::utils::petgraph::prelude::GraphMap<
+        dependency_flattened: &mut petgraph::prelude::GraphMap<
             bevy::ecs::schedule::NodeId,
             (),
-            bevy::utils::petgraph::prelude::Directed,
+            petgraph::prelude::Directed,
         >,
     ) -> Result<(), bevy::ecs::schedule::ScheduleBuildError> {
-        let mut render_graph = bevy::utils::petgraph::graphmap::DiGraphMap::<usize, ()>::new();
+        let mut render_graph = petgraph::graphmap::DiGraphMap::<usize, ()>::new();
 
         struct RenderGraphNodeMeta {
             force_binary_semaphore: bool,
@@ -205,8 +199,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             vec![Default::default(); num_queues as usize];
         let mut queue_op_colors: Vec<(Option<usize>, Vec<usize>)> =
             vec![Default::default(); num_queues as usize];
-        let mut tiny_graph =
-            bevy::utils::petgraph::graphmap::DiGraphMap::<(QueueRef, bool), ()>::new();
+        let mut tiny_graph = petgraph::graphmap::DiGraphMap::<(QueueRef, bool), ()>::new();
         let mut current_graph = render_graph.clone();
         let mut heap_next_stage: Vec<usize> = Vec::new(); // nodes to be deferred to the next stage
         while let Some(node) = heap.pop() {
@@ -309,7 +302,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             queue: QueueRef,
         }
 
-        let mut queue_graph = bevy::utils::petgraph::graphmap::DiGraphMap::<u32, ()>::new();
+        let mut queue_graph = petgraph::graphmap::DiGraphMap::<u32, ()>::new();
         let mut queue_graph_nodes = Vec::<QueueGraphNodeMeta>::new();
 
         // Flush all colors
@@ -548,20 +541,17 @@ impl ScheduleBuildPass for RenderSystemPass {
             }
         }
         // Remove redundant edges
-        let queue_nodes_topo_sorted =
-            bevy::utils::petgraph::algo::toposort(&queue_graph, None).unwrap();
-        let (queue_nodes_tred_list, _) =
-            bevy::utils::petgraph::algo::tred::dag_to_toposorted_adjacency_list::<_, u32>(
-                &queue_graph,
-                &queue_nodes_topo_sorted,
-            );
-        let (reduction, _) = bevy::utils::petgraph::algo::tred::dag_transitive_reduction_closure(
-            &queue_nodes_tred_list,
-        );
+        let queue_nodes_topo_sorted = petgraph::algo::toposort(&queue_graph, None).unwrap();
+        let (queue_nodes_tred_list, _) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
+            _,
+            u32,
+        >(&queue_graph, &queue_nodes_topo_sorted);
+        let (reduction, _) =
+            petgraph::algo::tred::dag_transitive_reduction_closure(&queue_nodes_tred_list);
 
         // Step 1.5: Disperse semaphores
         // Step 1.5.1: Assign semaphore IDs
-        let mut queue_graph_reduced = bevy::utils::petgraph::graphmap::DiGraphMap::<u32, ()>::new();
+        let mut queue_graph_reduced = petgraph::graphmap::DiGraphMap::<u32, ()>::new();
         for edge in reduction.edge_references() {
             let src = queue_nodes_topo_sorted[edge.source() as usize];
             let dst = queue_nodes_topo_sorted[edge.target() as usize];

@@ -11,7 +11,7 @@ use bevy::ecs::{
     system::BoxedSystem,
     system::System,
 };
-use bevy::utils::smallvec::SmallVec;
+use smallvec::SmallVec;
 
 use crate::commands::{ResourceTransitionCommands, SemaphoreSignalCommands};
 use crate::semaphore::TimelineSemaphore;

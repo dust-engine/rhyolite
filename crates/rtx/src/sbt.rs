@@ -14,7 +14,7 @@ use bevy::{
         },
     },
     math::UVec3,
-    utils::{smallvec::SmallVec, tracing},
+    utils::tracing,
 };
 use bytemuck::NoUninit;
 use itertools::Itertools;
@@ -25,6 +25,7 @@ use rhyolite::{
     staging::{StagingBeltBatchJob, UniformBelt},
     Allocator, Device, HasDevice,
 };
+use smallvec::SmallVec;
 
 use rhyolite::{
     buffer::BufferLike,
@@ -627,21 +628,24 @@ impl<T: SBTBuilder> Plugin for SbtPlugin<T> {
         );
     }
     fn finish(&self, app: &mut App) {
-        if app
-            .world
+        let world = app.world_mut();
+        let mut first_run = false;
+        if world
             .get_resource::<SbtManager<T::SbtIndexType>>()
             .is_none()
         {
-            app.world
-                .insert_resource(SbtManager::<T::SbtIndexType>::new(
-                    app.world.get_resource::<Allocator>().unwrap().clone(),
-                    T::NUM_RAYTYPES,
-                ));
-            app.add_systems(PostUpdate, resize_buffer::<T::SbtIndexType>);
+            world.insert_resource(SbtManager::<T::SbtIndexType>::new(
+                world.get_resource::<Allocator>().unwrap().clone(),
+                T::NUM_RAYTYPES,
+            ));
+            first_run = true;
         }
-        app.world
+        world
             .resource_mut::<SbtManager<T::SbtIndexType>>()
             .hitgroup_layout
             .extend(Layout::new::<T::InlineParam>());
+        if first_run {
+            app.add_systems(PostUpdate, resize_buffer::<T::SbtIndexType>);
+        }
     }
 }

@@ -88,7 +88,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
-        let device = app.world.resource::<Device>();
+        let device = app.world().resource::<Device>();
         if device
             .physical_device()
             .properties()

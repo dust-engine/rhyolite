@@ -173,9 +173,11 @@ impl Plugin for RhyolitePlugin {
             app.add_instance_extension_named(ash::vk::KhrPortabilityEnumerationFn::name())
                 .unwrap();
         }
-        let mut instance_extensions = app.world.remove_resource::<InstanceExtensions>();
-        let instance_layers = app.world.remove_resource::<InstanceLayers>();
-        let entry: &VulkanEntry = &app.world.get_resource_or_insert_with(VulkanEntry::default);
+        let mut instance_extensions = app.world_mut().remove_resource::<InstanceExtensions>();
+        let instance_layers = app.world_mut().remove_resource::<InstanceLayers>();
+        let entry: &VulkanEntry = &app
+            .world_mut()
+            .get_resource_or_insert_with(VulkanEntry::default);
         let enabled_extensions = instance_extensions
             .as_mut()
             .map(|a| std::mem::take(&mut a.enabled_extensions))
@@ -211,7 +213,7 @@ impl Plugin for RhyolitePlugin {
         );
         let features = PhysicalDeviceFeaturesSetup::new(physical_device.clone());
         let mut device_extensions = app
-            .world
+            .world_mut()
             .get_resource_or_insert_with(DeviceExtensions::default);
         device_extensions.set_pdevice(&physical_device);
 
@@ -257,14 +259,16 @@ impl Plugin for RhyolitePlugin {
         app.add_plugins(crate::pipeline::PipelineCachePlugin::default());
     }
     fn finish(&self, app: &mut App) {
-        let extension_settings: DeviceExtensions =
-            app.world.remove_resource::<DeviceExtensions>().unwrap();
+        let extension_settings: DeviceExtensions = app
+            .world_mut()
+            .remove_resource::<DeviceExtensions>()
+            .unwrap();
         let features = app
-            .world
+            .world_mut()
             .remove_resource::<PhysicalDeviceFeaturesSetup>()
             .unwrap()
             .finalize();
-        let physical_device: &PhysicalDevice = app.world.resource();
+        let physical_device: &PhysicalDevice = app.world().resource();
         let (device, queues) = Device::create(
             physical_device.clone(),
             features,
@@ -276,9 +280,10 @@ impl Plugin for RhyolitePlugin {
         app.insert_resource(queues);
 
         // Add allocator
-        app.world.init_resource::<crate::Allocator>();
-        app.world.init_resource::<crate::task::AsyncTaskPool>();
-        app.world
+        app.world_mut().init_resource::<crate::Allocator>();
+        app.world_mut()
+            .init_resource::<crate::task::AsyncTaskPool>();
+        app.world_mut()
             .init_resource::<crate::DeferredOperationTaskPool>();
         app.init_asset_loader::<crate::shader::loader::SpirvLoader>();
     }
@@ -331,12 +336,13 @@ impl RhyoliteApp for App {
     {
         if let PromotionStatus::PromotedToCore(promoted_extension) = T::PROMOTION_STATUS {
             let promoted_extension = Version(promoted_extension);
-            let instance = self.world.resource::<Instance>();
+            let instance = self.world().resource::<Instance>();
             if instance.api_version() >= promoted_extension {
                 return Ok(());
             }
         }
-        let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
+        let Some(mut extension_settings) = self.world_mut().get_resource_mut::<DeviceExtensions>()
+        else {
             panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
         };
         if let Some(_v) = extension_settings.available_extensions.get(T::NAME) {
@@ -360,24 +366,25 @@ impl RhyoliteApp for App {
         T::Instance: Send + Sync + 'static,
         T::Device: Send + Sync + 'static,
     {
-        if self.world.get_resource::<Instance>().is_some() {
+        if self.world().get_resource::<Instance>().is_some() {
             panic!("Instance extensions may only be added before the instance was created. Add RhyolitePlugin after all instance plugins.")
         }
         if let PromotionStatus::PromotedToCore(promoted_extension) = T::PROMOTION_STATUS {
             let promoted_extension = Version(promoted_extension);
-            let instance = self.world.resource::<Instance>();
+            let instance = self.world().resource::<Instance>();
             if instance.api_version() >= promoted_extension {
                 return Ok(());
             }
         }
-        let mut instance_extensions =
-            if let Some(extension_settings) = self.world.get_resource_mut::<InstanceExtensions>() {
-                extension_settings
-            } else {
-                let extension_settings = InstanceExtensions::from_world(&mut self.world);
-                self.world.insert_resource(extension_settings);
-                self.world.resource_mut::<InstanceExtensions>()
-            };
+        let mut instance_extensions = if let Some(extension_settings) =
+            self.world_mut().get_resource_mut::<InstanceExtensions>()
+        {
+            extension_settings
+        } else {
+            let extension_settings = InstanceExtensions::from_world(self.world_mut());
+            self.world_mut().insert_resource(extension_settings);
+            self.world_mut().resource_mut::<InstanceExtensions>()
+        };
         if let Some(_v) = instance_extensions.available_extensions.get(T::NAME) {
             instance_extensions.enabled_extensions.insert(
                 T::NAME,
@@ -388,7 +395,7 @@ impl RhyoliteApp for App {
             );
             if std::any::TypeId::of::<T::Device>() != std::any::TypeId::of::<()>() {
                 let mut device_extensions = self
-                    .world
+                    .world_mut()
                     .get_resource_or_insert_with(DeviceExtensions::default);
                 device_extensions.extension_builders.insert(
                     T::NAME,
@@ -409,7 +416,8 @@ impl RhyoliteApp for App {
         &mut self,
         extension: &'static CStr,
     ) -> Result<(), ExtensionNotFoundError> {
-        let Some(mut extension_settings) = self.world.get_resource_mut::<DeviceExtensions>() else {
+        let Some(mut extension_settings) = self.world_mut().get_resource_mut::<DeviceExtensions>()
+        else {
             panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
         };
         if let Some(v) = extension_settings.available_extensions.get(extension) {
@@ -427,13 +435,13 @@ impl RhyoliteApp for App {
         &mut self,
         extension: &'static CStr,
     ) -> Result<(), ExtensionNotFoundError> {
-        let extension_settings = self.world.get_resource_mut::<InstanceExtensions>();
+        let extension_settings = self.world_mut().get_resource_mut::<InstanceExtensions>();
         let mut extension_settings = match extension_settings {
             Some(extension_settings) => extension_settings,
             None => {
-                let extension_settings = InstanceExtensions::from_world(&mut self.world);
-                self.world.insert_resource(extension_settings);
-                self.world.resource_mut::<InstanceExtensions>()
+                let extension_settings = InstanceExtensions::from_world(self.world_mut());
+                self.world_mut().insert_resource(extension_settings);
+                self.world_mut().resource_mut::<InstanceExtensions>()
             }
         };
         if let Some(v) = extension_settings.available_extensions.get(extension) {
@@ -447,33 +455,33 @@ impl RhyoliteApp for App {
         }
     }
     fn add_instance_layer(&mut self, layer: &'static CStr) -> Option<LayerProperties> {
-        let layers = self.world.get_resource_mut::<InstanceLayers>();
+        let layers = self.world_mut().get_resource_mut::<InstanceLayers>();
         let mut layers = match layers {
             Some(layers) => layers,
             None => {
-                let extension_settings = InstanceLayers::from_world(&mut self.world);
-                self.world.insert_resource(extension_settings);
-                self.world.resource_mut::<InstanceLayers>()
+                let extension_settings = InstanceLayers::from_world(self.world_mut());
+                self.world_mut().insert_resource(extension_settings);
+                self.world_mut().resource_mut::<InstanceLayers>()
             }
         };
         if let Some(v) = layers.available_layers.get(layer) {
             let v = v.clone();
             layers.enabled_layers.push(layer.as_ptr());
 
-            let vulkan_entry = self.world.resource::<VulkanEntry>();
+            let vulkan_entry = self.world_mut().resource::<VulkanEntry>();
             let additional_instance_extensions = unsafe {
                 vulkan_entry
                     .enumerate_instance_extension_properties(Some(layer))
                     .unwrap()
             };
 
-            let instance_extensions = self.world.get_resource_mut::<InstanceExtensions>();
+            let instance_extensions = self.world_mut().get_resource_mut::<InstanceExtensions>();
             let mut instance_extensions = match instance_extensions {
                 Some(instance_extensions) => instance_extensions,
                 None => {
-                    let instance_extensions = InstanceExtensions::from_world(&mut self.world);
-                    self.world.insert_resource(instance_extensions);
-                    self.world.resource_mut::<InstanceExtensions>()
+                    let instance_extensions = InstanceExtensions::from_world(self.world_mut());
+                    self.world_mut().insert_resource(instance_extensions);
+                    self.world_mut().resource_mut::<InstanceExtensions>()
                 }
             };
             instance_extensions.available_extensions.extend(
@@ -494,8 +502,8 @@ impl RhyoliteApp for App {
         &'a mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,
     ) -> FeatureEnableResult<'a> {
-        let device_extension = self.world.resource::<DeviceExtensions>();
-        let instance = self.world.resource::<Instance>();
+        let device_extension = self.world().resource::<DeviceExtensions>();
+        let instance = self.world().resource::<Instance>();
         if !device_extension
             .extension_builders
             .contains_key(T::REQUIRED_DEVICE_EXT)
@@ -518,7 +526,9 @@ impl RhyoliteApp for App {
                 );
             }
         }
-        let mut features = self.world.resource_mut::<PhysicalDeviceFeaturesSetup>();
+        let mut features = self
+            .world_mut()
+            .resource_mut::<PhysicalDeviceFeaturesSetup>();
         if features.enable_feature::<T>(selector).is_none() {
             return FeatureEnableResult::NotFound { app: self };
         }

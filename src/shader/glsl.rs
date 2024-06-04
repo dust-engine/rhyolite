@@ -125,9 +125,11 @@ impl AssetLoader for GlslShadercCompiler {
                     };
                     let normalized_path = normalize_path(&path);
                     let inc = ctx
-                        .load_direct(AssetPath::from_path(&normalized_path))
+                        .loader()
+                        .direct()
+                        .load::<GlslShaderSource>(AssetPath::from_path(&normalized_path))
                         .await?;
-                    let source: &GlslShaderSource = inc.get().unwrap();
+                    let source: &GlslShaderSource = inc.get();
                     pending_sources.push((included_filename.to_string(), source.source.clone()));
                 }
                 if !filename.is_empty() {
@@ -184,7 +186,7 @@ pub struct GlslPlugin;
 impl Plugin for GlslPlugin {
     fn build(&self, app: &mut App) {
         use super::loader::SpirvSaver;
-        let target_vk_version = app.world.resource::<Instance>().api_version();
+        let target_vk_version = app.world().resource::<Instance>().api_version();
         app.init_asset::<GlslShaderSource>()
             .register_asset_loader(GlslSourceLoader)
             .register_asset_loader(PlayoutGlslLoader)
@@ -193,7 +195,7 @@ impl Plugin for GlslPlugin {
                 target_vk_version: target_vk_version,
             });
         if let Some(processor) = app
-            .world
+            .world()
             .get_resource::<bevy::asset::processor::AssetProcessor>()
         {
             use bevy::asset::processor::LoadAndSave;

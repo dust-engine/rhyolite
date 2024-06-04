@@ -1,7 +1,7 @@
 use std::{borrow::Cow, ops::Deref, sync::Arc};
 
 use ash::{khr, vk};
-use bevy::utils::smallvec::SmallVec;
+use smallvec::SmallVec;
 
 use crate::{
     buffer::BufferLike,

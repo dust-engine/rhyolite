@@ -248,7 +248,7 @@ impl Plugin for PipelineCachePlugin {
     fn build(&self, app: &mut bevy::prelude::App) {}
     fn finish(&self, app: &mut bevy::app::App) {
         let cache = PipelineCache {
-            device: app.world.resource::<Device>().clone(),
+            device: app.world().resource::<Device>().clone(),
             cache: vk::PipelineCache::null(), // TODO
             shader_generations: Default::default(),
             hot_reload_enabled: self.shader_hot_reload,

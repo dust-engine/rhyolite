@@ -19,7 +19,7 @@ impl Plugin for DebugUtilsPlugin {
         app.add_systems(Startup, set_device);
     }
     fn finish(&self, app: &mut bevy::app::App) {
-        let instance: Instance = app.world.resource::<Instance>().clone();
+        let instance: Instance = app.world().resource::<Instance>().clone();
         app.insert_resource(DebugUtilsMessenger::new(instance).unwrap());
     }
 }

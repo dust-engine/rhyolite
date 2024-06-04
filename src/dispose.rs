@@ -4,10 +4,11 @@ use std::{
 };
 
 use ash::vk;
-use bevy::{app::Plugin, ecs::system::Resource, utils::smallvec::SmallVec};
+use bevy::{app::Plugin, ecs::system::Resource};
 use crossbeam_channel::Sender;
 
 use crate::{commands::SemaphoreSignalCommands, semaphore::TimelineSemaphore};
+use smallvec::SmallVec;
 
 pub trait DisposeObject: Send + Sync {
     fn wait_blocked(&mut self);

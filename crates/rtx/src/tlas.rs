@@ -808,7 +808,7 @@ impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
     fn build(&self, _app: &mut App) {}
     fn finish(&self, app: &mut App) {
         if app
-            .world
+            .world()
             .get_resource::<TLASDeviceBuildStore<T::TLASType>>()
             .is_none()
         {

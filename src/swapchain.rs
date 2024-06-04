@@ -2,11 +2,8 @@ use cstr::cstr;
 use std::{collections::BTreeSet, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
+use bevy::app::{App, Plugin, PostUpdate};
 use bevy::window::{PrimaryWindow, Window};
-use bevy::{
-    app::{App, Plugin, PostUpdate},
-    utils::smallvec::SmallVec,
-};
 use bevy::{
     ecs::{
         prelude::*,
@@ -14,6 +11,7 @@ use bevy::{
     },
     math::{UVec2, UVec3},
 };
+use smallvec::SmallVec;
 
 use crate::HasDevice;
 use crate::{

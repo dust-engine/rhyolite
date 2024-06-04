@@ -1,9 +1,7 @@
 use std::{alloc::Layout, collections::BTreeSet, fmt::Debug, num::NonZeroU64, sync::Arc};
 
-use bevy::{
-    asset::{AssetId, Assets},
-    utils::nonmax::{self, NonMaxU32},
-};
+use bevy::asset::{AssetId, Assets};
+use nonmax::{self, NonMaxU32};
 
 use rhyolite::{
     ash::{khr::ray_tracing_pipeline::Meta as RayTracingPipelineExt, prelude::VkResult, vk},
