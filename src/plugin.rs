@@ -1,6 +1,7 @@
 use ash::vk::{ExtensionMeta, PromotionStatus};
 use ash::{khr, prelude::VkResult, vk};
 use bevy::ecs::prelude::*;
+use bevy::utils::HashSet;
 use bevy::{app::prelude::*, asset::AssetApp, utils::hashbrown::HashMap};
 use std::{
     any::Any,
@@ -65,22 +66,21 @@ impl Default for VulkanEntry {
 }
 pub(crate) type InstanceMetaBuilder =
     Box<dyn FnOnce(&ash::Entry, &ash::Instance) -> Box<dyn Any + Send + Sync> + Send + Sync>;
-pub(crate) type DeviceMetaBuilder = Box<
-    dyn FnOnce(&ash::Instance, &mut ash::Device) -> Option<Box<dyn Any + Send + Sync>>
-        + Send
-        + Sync,
->;
-#[derive(Resource)]
+pub(crate) type DeviceMetaBuilder =
+    Box<dyn FnOnce(&ash::Instance, &mut ash::Device) -> Box<dyn Any + Send + Sync> + Send + Sync>;
+#[derive(Resource, Default)]
 struct DeviceExtensions {
     available_extensions: BTreeMap<CString, Version>,
+    enabled_extensions: HashSet<&'static CStr>,
     extension_builders: HashMap<&'static CStr, Option<DeviceMetaBuilder>>,
 }
 impl DeviceExtensions {
-    fn new(pdevice: &PhysicalDevice) -> VkResult<Self> {
+    fn set_pdevice(&mut self, pdevice: &PhysicalDevice) {
         let extension_names = unsafe {
             pdevice
                 .instance()
-                .enumerate_device_extension_properties(pdevice.raw())?
+                .enumerate_device_extension_properties(pdevice.raw())
+                .unwrap()
         };
         let extension_names = extension_names
             .into_iter()
@@ -89,10 +89,7 @@ impl DeviceExtensions {
                 (str.to_owned(), Version(ext.spec_version))
             })
             .collect::<BTreeMap<CString, Version>>();
-        Ok(Self {
-            available_extensions: extension_names,
-            extension_builders: HashMap::default(),
-        })
+        self.available_extensions = extension_names;
     }
 }
 unsafe impl Send for DeviceExtensions {}
@@ -213,10 +210,12 @@ impl Plugin for RhyolitePlugin {
             physical_device.properties().memory_model
         );
         let features = PhysicalDeviceFeaturesSetup::new(physical_device.clone());
-        let extensions = DeviceExtensions::new(&physical_device).unwrap();
+        let mut device_extensions = app
+            .world
+            .get_resource_or_insert_with(DeviceExtensions::default);
+        device_extensions.set_pdevice(&physical_device);
 
-        app.insert_resource(extensions)
-            .insert_resource(instance)
+        app.insert_resource(instance)
             .insert_resource(physical_device)
             .insert_resource(features)
             .init_asset::<crate::shader::ShaderModule>()
@@ -269,6 +268,7 @@ impl Plugin for RhyolitePlugin {
         let (device, queues) = Device::create(
             physical_device.clone(),
             features,
+            extension_settings.enabled_extensions,
             extension_settings.extension_builders,
         )
         .unwrap();
@@ -295,7 +295,8 @@ pub trait RhyoliteApp {
     /// Instance plugins must be added before [RhyolitePlugin].
     fn add_instance_extension<T: ExtensionMeta>(&mut self) -> Result<(), ExtensionNotFoundError>
     where
-        T::Instance: Send + Sync + 'static;
+        T::Instance: Send + Sync + 'static,
+        T::Device: Send + Sync + 'static;
 
     /// Called in the [Plugin::build] phase of device plugins.
     /// Device plugins must be added after [RhyolitePlugin].
@@ -339,12 +340,13 @@ impl RhyoliteApp for App {
             panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
         };
         if let Some(_v) = extension_settings.available_extensions.get(T::NAME) {
+            extension_settings.enabled_extensions.insert(T::NAME);
             extension_settings.extension_builders.insert(
                 T::NAME,
                 Some(Box::new(|instance, device| {
                     let ext = T::new_device(instance, device);
                     T::promote_device(device, &ext);
-                    Some(Box::new(ext))
+                    Box::new(ext)
                 })),
             );
             Ok(())
@@ -356,6 +358,7 @@ impl RhyoliteApp for App {
     fn add_instance_extension<T: Extension>(&mut self) -> Result<(), ExtensionNotFoundError>
     where
         T::Instance: Send + Sync + 'static,
+        T::Device: Send + Sync + 'static,
     {
         if self.world.get_resource::<Instance>().is_some() {
             panic!("Instance extensions may only be added before the instance was created. Add RhyolitePlugin after all instance plugins.")
@@ -367,7 +370,7 @@ impl RhyoliteApp for App {
                 return Ok(());
             }
         }
-        let mut extension_settings =
+        let mut instance_extensions =
             if let Some(extension_settings) = self.world.get_resource_mut::<InstanceExtensions>() {
                 extension_settings
             } else {
@@ -375,14 +378,27 @@ impl RhyoliteApp for App {
                 self.world.insert_resource(extension_settings);
                 self.world.resource_mut::<InstanceExtensions>()
             };
-        if let Some(_v) = extension_settings.available_extensions.get(T::NAME) {
-            extension_settings.enabled_extensions.insert(
+        if let Some(_v) = instance_extensions.available_extensions.get(T::NAME) {
+            instance_extensions.enabled_extensions.insert(
                 T::NAME,
                 Some(Box::new(|entry, instance| {
                     let ext = T::new_instance(entry, instance);
                     Box::new(ext)
                 })),
             );
+            if std::any::TypeId::of::<T::Device>() != std::any::TypeId::of::<()>() {
+                let mut device_extensions = self
+                    .world
+                    .get_resource_or_insert_with(DeviceExtensions::default);
+                device_extensions.extension_builders.insert(
+                    T::NAME,
+                    Some(Box::new(|instance, device| {
+                        let ext = T::new_device(instance, device);
+                        Box::new(ext)
+                    })),
+                );
+            }
+
             Ok(())
         } else {
             Err(ExtensionNotFoundError)
@@ -398,6 +414,7 @@ impl RhyoliteApp for App {
         };
         if let Some(v) = extension_settings.available_extensions.get(extension) {
             let v = *v;
+            extension_settings.enabled_extensions.insert(extension);
             extension_settings
                 .extension_builders
                 .insert(extension, None);

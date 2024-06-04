@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{ffi::CString, ops::Deref};
 
 use bevy::{
     app::{App, Plugin, PostUpdate},
@@ -10,10 +10,12 @@ use bevy::{
             Commands, Local, Query, Res, ResMut, StaticSystemParam, SystemParam, SystemParamItem,
         },
     },
+    log::tracing_subscriber::fmt::format,
 };
 use rhyolite::{
     ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk},
     commands::{ComputeCommands, TransferCommands},
+    debug::DebugObject,
     task::{AsyncComputeTask, AsyncTaskPool},
     Allocator, Buffer, BufferLike, Device, HasDevice,
 };
@@ -327,7 +329,12 @@ fn build_blas_system<T: BLASBuilder>(
             size_info.acceleration_structure_size,
             vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
         )
-        .unwrap();
+        .unwrap()
+        .with_name(
+            CString::new(format!("BLAS for entity {:?}", entity))
+                .unwrap()
+                .as_c_str(),
+        );
         info.dst_acceleration_structure = accel_struct.raw;
         scratch_buffers.push(scratch_buffer);
         built_accel_structs.push((entity, accel_struct));

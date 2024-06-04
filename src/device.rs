@@ -10,6 +10,7 @@ use ash::vk;
 use ash::vk::ExtensionMeta;
 use bevy::ecs::system::Resource;
 use bevy::utils::hashbrown::HashMap;
+use bevy::utils::HashSet;
 
 use std::any::Any;
 use std::ffi::CStr;
@@ -40,6 +41,7 @@ impl Device {
     pub(crate) fn create(
         physical_device: PhysicalDevice,
         mut features: FeatureMap,
+        extension_names: HashSet<&'static CStr>,
         extensions: HashMap<&'static CStr, Option<DeviceMetaBuilder>>,
     ) -> VkResult<(Self, Queues)> {
         let mut available_queue_family = physical_device.get_queue_family_properties();
@@ -51,16 +53,15 @@ impl Device {
             }
         });
         let queue_create_infos = Queues::find_with_queue_family_properties(&available_queue_family);
-        let pdevice_features2 = features.as_physical_device_features();
-        let extension_names = extensions.keys().map(|k| k.as_ptr()).collect::<Vec<_>>();
-        let create_info = vk::DeviceCreateInfo {
-            p_next: &pdevice_features2 as *const vk::PhysicalDeviceFeatures2 as *const _,
-            queue_create_info_count: queue_create_infos.len() as u32,
-            p_queue_create_infos: queue_create_infos.as_ptr(),
-            enabled_extension_count: extensions.len() as u32,
-            pp_enabled_extension_names: extension_names.as_ptr(),
-            ..Default::default()
-        };
+        let mut pdevice_features2 = features.as_physical_device_features();
+        let extension_names = extension_names
+            .into_iter()
+            .map(|k| k.as_ptr())
+            .collect::<Vec<_>>();
+        let create_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queue_create_infos)
+            .enabled_extension_names(&extension_names)
+            .push_next(&mut pdevice_features2);
         let mut device = unsafe {
             physical_device
                 .instance()
@@ -71,7 +72,7 @@ impl Device {
             .map(|(name, builder)| {
                 return (
                     name,
-                    builder.and_then(|builder| builder(&physical_device.instance(), &mut device)),
+                    builder.map(|builder| builder(&physical_device.instance(), &mut device)),
                 );
             })
             .collect();
