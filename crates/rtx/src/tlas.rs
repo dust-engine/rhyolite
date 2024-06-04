@@ -259,7 +259,7 @@ impl TLASInstanceData<'_> {
         }
         unsafe {
             self.data
-                .assume_init()
+                .assume_init_mut()
                 .instance_shader_binding_table_record_offset_and_flags =
                 vk::Packed24_8::new(offset, flags.as_raw() as u8);
         }
@@ -776,10 +776,6 @@ pub fn build_tlas<B: Send + Sync + 'static>(
         primitive_count: store.entity_map.len() as u32,
         ..Default::default()
     };
-    commands.build_acceleration_structure(
-        &[build_info],
-        std::iter::once([build_range_info].as_slice()),
-    );
 
     store.has_motion = false;
 }
