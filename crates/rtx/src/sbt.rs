@@ -417,8 +417,7 @@ fn copy_sbt<T: SBTBuilder>(
         })
         .enumerate()
         .map(|(i, (start, len))| vk::BufferCopy {
-            // Note: this might be problematic. Add StagingBelt base offset.
-            src_offset: i as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
+            src_offset: host_buffer.offset + i as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
             dst_offset: start as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
             size: len as u64 * this.hitgroup_layout.one_entry.pad_to_align().size() as u64,
         })

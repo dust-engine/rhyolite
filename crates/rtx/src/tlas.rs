@@ -524,12 +524,23 @@ fn resize_buffer<B: Send + Sync + 'static>(
 
 fn extract_input_barrier<B: TLASBuilder>(
     In(mut barriers): In<Barriers>,
+    mut updated_instances: Query<
+        (Entity, B::QueryData, &mut TLASIndex<B::TLASType>),
+        B::QueryFilter,
+    >,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
+    mut params: StaticSystemParam<B::Params>,
 ) {
-    // Inputs from extract may overlap regions from resize copy, so we need a barrier here
-    barriers.transition(&mut store.static_buffer, Access::COPY_WRITE, true, ());
-    if let Some(motion) = store.motion_buffer.as_mut() {
-        barriers.transition(motion, Access::COPY_WRITE, true, ());
+    for (entity, data, mut index) in updated_instances.iter_mut() {
+        if index.initialized && !B::should_update(&mut params, &data) {
+            continue;
+        }
+        // Inputs from extract may overlap regions from resize copy, so we need a barrier here
+        barriers.transition(&mut store.static_buffer, Access::COPY_WRITE, true, ());
+        if let Some(motion) = store.motion_buffer.as_mut() {
+            barriers.transition(motion, Access::COPY_WRITE, true, ());
+        }
+        return;
     }
 }
 
@@ -776,6 +787,10 @@ pub fn build_tlas<B: Send + Sync + 'static>(
         primitive_count: store.entity_map.len() as u32,
         ..Default::default()
     };
+    commands.build_acceleration_structure(
+        &[build_info],
+        std::iter::once([build_range_info].as_slice()),
+    );
 
     store.has_motion = false;
 }

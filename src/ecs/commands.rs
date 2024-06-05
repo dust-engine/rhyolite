@@ -133,7 +133,7 @@ impl QueueSubmissionInfo {
     ) -> bool {
         if let Some(signal_semaphore) = self.signal_semaphore.as_ref() {
             if Arc::ptr_eq(signal_semaphore, semaphore.as_ref()) {
-                if self.signal_semaphore_value >= value {
+                if self.signal_semaphore_value <= value {
                     return false;
                 }
             }
