@@ -330,7 +330,21 @@ impl RayTracingPipelineManager {
         callable_shaders: Vec<SpecializedShader>,
         pipeline_cache: &PipelineCache,
     ) -> Self {
-        let inner = if true {
+        let driver_properties = common
+            .layout
+            .device()
+            .physical_device()
+            .properties()
+            .get::<vk::PhysicalDeviceDriverProperties>();
+        // White listing drivers correctly implementing pipeline libraries.
+        // Tested platforms:
+        // - NVIDIA_PROPRIETARY, Windows PC: Ok
+        // - AMD_PROPRIETARY, Windows, 31.0.24033.1003: DEVICE_LOST
+        // - AMD_PROPRIETARY, Windows, 31.0.24027.1012, ASUS Ally: Ok, but crash on hot reload 
+        let should_use_pipeline_library = [
+            vk::DriverId::NVIDIA_PROPRIETARY,
+        ].contains(&driver_properties.driver_id);
+        let inner = if should_use_pipeline_library {
             RayTracingPipelineManagerImpl::PipelineLibrary(
                 RayTracingPipelineManagerPipelineLibrary::new(
                     common,
