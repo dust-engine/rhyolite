@@ -70,11 +70,11 @@ impl Extension for ash::khr::maintenance4::Meta {
 }
 
 pub struct ExposedDevice {
-    handle: vk::Device,
-    device_fn_1_0: ash::DeviceFnV1_0,
-    device_fn_1_1: ash::DeviceFnV1_1,
-    device_fn_1_2: ash::DeviceFnV1_2,
-    device_fn_1_3: ash::DeviceFnV1_3,
+    pub handle: vk::Device,
+    pub device_fn_1_0: ash::DeviceFnV1_0,
+    pub device_fn_1_1: ash::DeviceFnV1_1,
+    pub device_fn_1_2: ash::DeviceFnV1_2,
+    pub device_fn_1_3: ash::DeviceFnV1_3,
 }
 impl ExposedDevice {
     pub fn new(device: &mut Device) -> &mut Self {

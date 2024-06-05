@@ -30,7 +30,7 @@ pub struct SpirvLoader {
 impl FromWorld for SpirvLoader {
     fn from_world(world: &mut bevy::ecs::world::World) -> Self {
         let device = world.resource::<Device>().clone();
-        Self { device }
+        Self::new(device)
     }
 }
 impl SpirvLoader {

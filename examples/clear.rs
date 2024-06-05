@@ -35,12 +35,12 @@ fn main() {
     );
 
     let primary_window = app
-        .world
+        .world_mut()
         .query_filtered::<Entity, With<PrimaryWindow>>()
-        .iter(&app.world)
+        .iter(app.world())
         .next()
         .unwrap();
-    app.world
+    app.world_mut()
         .entity_mut(primary_window)
         .insert(SwapchainConfig {
             image_usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT,

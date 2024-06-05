@@ -10,7 +10,6 @@ use bevy::{
             Commands, Local, Query, Res, ResMut, StaticSystemParam, SystemParam, SystemParamItem,
         },
     },
-    log::tracing_subscriber::fmt::format,
 };
 use rhyolite::{
     ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk},
@@ -42,6 +41,7 @@ pub trait BLASBuilder: Send + Sync + 'static {
     /// Additional system entities to be passed.
     type Params: SystemParam;
 
+    #[allow(unused_variables)]
     fn build_flags(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
@@ -53,6 +53,7 @@ pub trait BLASBuilder: Send + Sync + 'static {
     /// BLAS updates will occur if:
     /// 1. The BLAS was initially built with the `ALLOW_UPDATE` flag set. This is set by the `build_flags` function.
     /// 2. This function returns true.
+    #[allow(unused_variables)]
     fn should_update(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
@@ -356,8 +357,8 @@ fn build_blas_system<T: BLASBuilder>(
 
     *task = Some(cmd_recorder.finish(
         BuildTask {
-            scratch_buffers,
-            buffers,
+            _scratch_buffers: scratch_buffers,
+            _buffers: buffers,
             built_accel_structs,
         },
         vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR,
@@ -365,8 +366,8 @@ fn build_blas_system<T: BLASBuilder>(
 }
 
 struct BuildTask<T> {
-    scratch_buffers: Vec<Buffer>,
-    buffers: Vec<T>,
+    _scratch_buffers: Vec<Buffer>,
+    _buffers: Vec<T>,
     built_accel_structs: Vec<(Entity, AccelStruct)>,
 }
 

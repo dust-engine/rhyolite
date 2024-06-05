@@ -368,6 +368,7 @@ pub trait TLASBuilder: Send + Sync + 'static {
     /// Additional system entities to be passed.
     type Params: SystemParam;
 
+    #[allow(unused_variables)]
     fn has_motion(
         params: &mut SystemParamItem<Self::Params>,
         data: &QueryItem<Self::QueryData>,
@@ -524,14 +525,11 @@ fn resize_buffer<B: Send + Sync + 'static>(
 
 fn extract_input_barrier<B: TLASBuilder>(
     In(mut barriers): In<Barriers>,
-    mut updated_instances: Query<
-        (Entity, B::QueryData, &mut TLASIndex<B::TLASType>),
-        B::QueryFilter,
-    >,
+    mut updated_instances: Query<(B::QueryData, &mut TLASIndex<B::TLASType>), B::QueryFilter>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
     mut params: StaticSystemParam<B::Params>,
 ) {
-    for (entity, data, mut index) in updated_instances.iter_mut() {
+    for (data, index) in updated_instances.iter_mut() {
         if index.initialized && !B::should_update(&mut params, &data) {
             continue;
         }
@@ -546,10 +544,7 @@ fn extract_input_barrier<B: TLASBuilder>(
 
 fn extract_input<B: TLASBuilder>(
     mut commands: RenderCommands<'c'>,
-    mut updated_instances: Query<
-        (Entity, B::QueryData, &mut TLASIndex<B::TLASType>),
-        B::QueryFilter,
-    >,
+    mut updated_instances: Query<(B::QueryData, &mut TLASIndex<B::TLASType>), B::QueryFilter>,
     mut staging_belt: ResMut<StagingBelt>,
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
     mut params: StaticSystemParam<B::Params>,
@@ -558,7 +553,7 @@ fn extract_input<B: TLASBuilder>(
     let mut job = BatchCopy::new(&mut commands);
     let mut has_motion = false;
 
-    for (entity, data, mut index) in updated_instances.iter_mut() {
+    for (data, mut index) in updated_instances.iter_mut() {
         if index.initialized && !B::should_update(&mut params, &data) {
             continue;
         }

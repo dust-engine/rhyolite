@@ -21,7 +21,7 @@ use crate::{
     utils::{ColorSpace, SharingMode},
     Access, Device, ImageLike, ImageViewLike, PhysicalDevice, Queues, Surface,
 };
-use ash::khr::swapchain::{self, Meta as KhrSwapchain};
+use ash::khr::swapchain::Meta as KhrSwapchain;
 pub struct SwapchainPlugin {
     num_frame_in_flight: u32,
 }

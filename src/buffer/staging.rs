@@ -18,7 +18,7 @@ use bevy::{
 use bytemuck::{AnyBitPattern, NoUninit};
 
 use crate::{
-    commands::SemaphoreSignalCommands, semaphore::TimelineSemaphore, BufferLike, Device, HasDevice,
+    commands::SemaphoreSignalCommands, semaphore::TimelineSemaphore, BufferLike, Device,
 };
 
 impl FromWorld for StagingBelt {

@@ -1,5 +1,5 @@
 use ash::vk::{ExtensionMeta, PromotionStatus};
-use ash::{khr, prelude::VkResult, vk};
+use ash::{khr, vk};
 use bevy::ecs::prelude::*;
 use bevy::utils::HashSet;
 use bevy::{app::prelude::*, asset::AssetApp, utils::hashbrown::HashMap};

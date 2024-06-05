@@ -17,7 +17,6 @@ pub trait DisposeObject: Send + Sync {
 static DISPOSER: once_cell::sync::OnceCell<Disposer> = once_cell::sync::OnceCell::new();
 
 pub struct Disposer {
-    join_handle: std::thread::JoinHandle<()>,
     sender: Weak<Sender<Box<dyn DisposeObject>>>,
 }
 
@@ -25,7 +24,7 @@ pub(crate) struct DisposerPlugin;
 impl Plugin for DisposerPlugin {
     fn build(&self, app: &mut bevy::app::App) {
         let (sender, receiver) = crossbeam_channel::unbounded::<Box<dyn DisposeObject>>();
-        let join_handle = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("Disposer thread".into())
             .spawn(move || loop {
                 let Ok(mut handle) = receiver.recv() else {
@@ -40,7 +39,6 @@ impl Plugin for DisposerPlugin {
         let weak = Arc::downgrade(&sender);
 
         let mut disposer = Some(Disposer {
-            join_handle,
             sender: weak,
         });
 

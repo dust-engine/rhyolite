@@ -340,10 +340,9 @@ impl RayTracingPipelineManager {
         // Tested platforms:
         // - NVIDIA_PROPRIETARY, Windows PC: Ok
         // - AMD_PROPRIETARY, Windows, 31.0.24033.1003: DEVICE_LOST
-        // - AMD_PROPRIETARY, Windows, 31.0.24027.1012, ASUS Ally: Ok, but crash on hot reload 
-        let should_use_pipeline_library = [
-            vk::DriverId::NVIDIA_PROPRIETARY,
-        ].contains(&driver_properties.driver_id);
+        // - AMD_PROPRIETARY, Windows, 31.0.24027.1012, ASUS Ally: Ok, but crash on hot reload
+        let should_use_pipeline_library =
+            [vk::DriverId::NVIDIA_PROPRIETARY].contains(&driver_properties.driver_id);
         let inner = if should_use_pipeline_library {
             RayTracingPipelineManagerImpl::PipelineLibrary(
                 RayTracingPipelineManagerPipelineLibrary::new(
@@ -504,9 +503,6 @@ impl RayTracingPipelineManagerNative {
         let handle = self.hitgroups.len() as u16;
         self.hitgroups.push(Some(hitgroup));
         handle
-    }
-    fn set_hitgroup(&mut self, handle: u16, hitgroup: HitGroup) {
-        self.hitgroups[handle as usize] = Some(hitgroup);
     }
     #[track_caller]
     fn remove_hitgroup(&mut self, handle: u16) {
