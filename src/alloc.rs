@@ -41,7 +41,7 @@ impl Allocator {
         if buffer_device_address_enabled {
             info.flags |= vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
         }
-        let alloc = vk_mem::Allocator::new(info)?;
+        let alloc = unsafe { vk_mem::Allocator::new(info)? };
         Ok(Self(Arc::new(AllocatorInner {
             device,
             inner: alloc,

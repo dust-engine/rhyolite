@@ -27,7 +27,7 @@ winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 raw-window-handle = "0.6"
 arrayvec = "0.7"
 itertools = "0.12"
-vk-mem = { git = "https://github.com/gwihlidal/vk-mem-rs", branch = "ash-0.38" }
+vk-mem = "0.4"
 thiserror = "1.0"
 playout = { path = "../playout", optional = true }
 once_cell = "1.19"
