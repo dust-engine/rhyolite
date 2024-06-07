@@ -14,6 +14,7 @@ use bevy::{
         },
     },
     math::UVec3,
+    prelude::{DetectChanges, Mut, Ref},
     utils::tracing,
 };
 use bytemuck::NoUninit;
@@ -89,9 +90,16 @@ pub trait SBTBuilder: Send + Sync + 'static {
     type QueryData: ReadOnlyQueryData;
     type QueryFilter: QueryFilter + ArchetypeFilter;
 
-    /// Subset of the SBT entries that need to be updated.
-    /// When not specified, SBT updates will be performed every single frame.
-    type ChangeFilter: QueryFilter;
+    fn should_update(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+    ) -> bool;
+
+    fn is_enabled(
+        params: &mut SystemParamItem<Self::Params>,
+        data: &QueryItem<Self::QueryData>,
+    ) -> bool;
+
     type Params: SystemParam;
 
     type InlineParam;
@@ -141,15 +149,22 @@ unsafe impl<T> Sync for SbtManager<T> {}
 #[derive(Component)]
 pub struct SbtIndex<T> {
     index: u32,
+    enabled: bool,
     generation: u64,
     _marker: PhantomData<*mut T>,
 }
 unsafe impl<T> Send for SbtIndex<T> {}
 unsafe impl<T> Sync for SbtIndex<T> {}
+impl<T> SbtIndex<T> {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+}
 impl<T> Default for SbtIndex<T> {
     fn default() -> Self {
         Self {
             index: u32::MAX,
+            enabled: false,
             generation: 0,
             _marker: PhantomData,
         }
@@ -280,6 +295,7 @@ fn assign_index<T: SBTBuilder>(
         commands.entity(entity).insert(SbtIndex::<T::SbtIndexType> {
             index,
             generation: 0,
+            enabled: false,
             _marker: PhantomData::default(),
         });
     }
@@ -333,37 +349,35 @@ fn copy_sbt<T: SBTBuilder>(
     mut commands: RenderCommands<'t'>,
     mut this: ResMut<SbtManager<T::SbtIndexType>>,
     mut staging_belt: ResMut<StagingBelt>,
-    mut entries: ParamSet<(
-        Query<
-            (T::QueryData, &mut SbtIndex<T::SbtIndexType>),
-            (
-                T::QueryFilter,
-                Or<(T::ChangeFilter, Changed<SbtIndex<T::SbtIndexType>>)>,
-            ),
-        >,
-        Query<(T::QueryData, &mut SbtIndex<T::SbtIndexType>), T::QueryFilter>,
-    )>,
+    mut entries: Query<(T::QueryData, &mut SbtIndex<T::SbtIndexType>), T::QueryFilter>,
     mut params: StaticSystemParam<T::Params>,
 ) {
     let this = &mut *this;
 
-    let mut entries0;
-    let mut entries1;
-
-    let mut changes: Vec<(QueryItem<T::QueryData>, &mut SbtIndex<T::SbtIndexType>)> =
+    let mut changes: Vec<(QueryItem<T::QueryData>, Mut<SbtIndex<T::SbtIndexType>>)> =
         if this.full_update_required {
             tracing::info!("{} SBT Full update", std::any::type_name::<T>());
             this.full_update_required = false;
-            entries1 = entries.p1();
-            entries1
-                .iter_mut()
-                .map(|(q, handle)| (q, handle.into_inner()))
-                .collect::<Vec<_>>()
+            entries.iter_mut().collect::<Vec<_>>()
         } else {
-            entries0 = entries.p0();
-            entries0
+            entries
                 .iter_mut()
-                .map(|(q, handle)| (q, handle.into_inner()))
+                .filter_map(|(q, mut handle)| {
+                    let is_enabled = T::is_enabled(&mut params, &q);
+                    if !is_enabled {
+                        handle.enabled = false;
+                        return None;
+                    }
+                    if !handle.enabled {
+                        handle.enabled = true;
+                        return Some((q, handle));
+                    }
+                    handle.enabled = true;
+                    if T::should_update(&mut params, &q) {
+                        return Some((q, handle));
+                    }
+                    None
+                })
                 .collect::<Vec<_>>()
         };
     if changes.is_empty() {

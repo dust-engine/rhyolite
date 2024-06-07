@@ -50,16 +50,17 @@ impl VkTaggedObject {
         );
         unsafe { &*ptr }
     }
+    pub unsafe fn new_unchecked<T>(obj: T) -> Box<Self> {
+        let boxed = Box::new(obj);
+        let boxed_ptr = NonNull::new_unchecked(Box::into_raw(boxed));
+        let fat_ptr = NonNull::<Self>::from_raw_parts(
+            boxed_ptr.cast(),
+            std::mem::size_of::<T>() - std::mem::size_of::<vk::BaseInStructure>(),
+        );
+        Box::from_raw(fat_ptr.as_ptr())
+    }
     pub fn new<T: TaggedStructure>(obj: T) -> Box<Self> {
-        unsafe {
-            let boxed = Box::new(obj);
-            let boxed_ptr = NonNull::new_unchecked(Box::into_raw(boxed));
-            let fat_ptr = NonNull::<Self>::from_raw_parts(
-                boxed_ptr.cast(),
-                std::mem::size_of::<T>() - std::mem::size_of::<vk::BaseInStructure>(),
-            );
-            Box::from_raw(fat_ptr.as_ptr())
-        }
+        unsafe { Self::new_unchecked(obj) }
     }
     pub fn downcast_ref<T: TaggedStructure>(&self) -> Option<&T> {
         if self.s_type == T::STRUCTURE_TYPE {
@@ -68,9 +69,23 @@ impl VkTaggedObject {
             None
         }
     }
+    pub unsafe fn downcast_ref_to_type<T>(&self, ty: vk::StructureType) -> Option<&T> {
+        if self.s_type == ty {
+            Some(&*(self as *const Self as *const T))
+        } else {
+            None
+        }
+    }
     pub fn downcast_mut<T: TaggedStructure>(&mut self) -> Option<&mut T> {
         if self.s_type == T::STRUCTURE_TYPE {
             Some(unsafe { &mut *(self as *mut Self as *mut T) })
+        } else {
+            None
+        }
+    }
+    pub unsafe fn downcast_mut_to_type<T>(&mut self, ty: vk::StructureType) -> Option<&mut T> {
+        if self.s_type == ty {
+            Some(&mut *(self as *mut Self as *mut T))
         } else {
             None
         }

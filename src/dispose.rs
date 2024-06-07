@@ -38,9 +38,7 @@ impl Plugin for DisposerPlugin {
         let sender = Arc::new(sender);
         let weak = Arc::downgrade(&sender);
 
-        let mut disposer = Some(Disposer {
-            sender: weak,
-        });
+        let mut disposer = Some(Disposer { sender: weak });
 
         DISPOSER.get_or_init(|| disposer.take().unwrap());
         assert!(

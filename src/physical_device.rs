@@ -255,9 +255,14 @@ pub struct FeatureMap {
 
 impl FeatureMap {
     pub fn get<T: Feature + Default + 'static>(&self) -> Option<&T> {
-        let enabled_features = self.features.get(&T::STRUCTURE_TYPE)?;
-        let enabled_features = enabled_features.deref().downcast_ref::<T>().unwrap();
-        Some(enabled_features)
+        if let Some(ty) = T::STRUCTURE_TYPE {
+            let enabled_features = self.features.get(&ty)?;
+            let enabled_features =
+                unsafe { enabled_features.deref().downcast_ref_to_type::<T>(ty) }.unwrap();
+            Some(enabled_features)
+        } else {
+            None
+        }
     }
 }
 
@@ -290,20 +295,37 @@ pub struct PhysicalDeviceFeaturesSetup {
 unsafe impl Send for PhysicalDeviceFeaturesSetup {}
 unsafe impl Sync for PhysicalDeviceFeaturesSetup {}
 
-pub unsafe trait Feature: TaggedStructure {
+pub unsafe trait Feature {
     const REQUIRED_DEVICE_EXT: &'static CStr;
     const PROMOTION_STATUS: PromotionStatus = PromotionStatus::None;
+    const STRUCTURE_TYPE: Option<vk::StructureType>;
 }
 
 impl PhysicalDeviceFeaturesSetup {
-    pub(crate) fn enable_feature<T: Feature + Default>(
+    pub(crate) fn enable_feature<T: Feature + Default + 'static>(
         &mut self,
         mut selector: impl FnMut(&mut T) -> &mut vk::Bool32,
     ) -> Option<()> {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<vk::PhysicalDeviceFeatures>() {
+            // special case for enabling the base features
+            let feature_available: vk::Bool32 = *selector(unsafe {
+                std::mem::transmute(&mut self.available_features.physical_device_features)
+            });
+            if feature_available == vk::FALSE {
+                return None;
+            }
+            let feature_to_enable = selector(unsafe {
+                std::mem::transmute(&mut self.enabled_features.physical_device_features)
+            });
+            *feature_to_enable = vk::TRUE;
+            assert!(T::STRUCTURE_TYPE.is_none());
+            return Some(());
+        }
+        let structure_type = T::STRUCTURE_TYPE.unwrap();
         let feature: &mut Box<VkTaggedObject> = self
             .available_features
             .features
-            .entry(T::STRUCTURE_TYPE)
+            .entry(structure_type)
             .or_insert_with(|| {
                 let mut feature = T::default();
                 let mut wrapper = vk::PhysicalDeviceFeatures2::default();
@@ -312,10 +334,15 @@ impl PhysicalDeviceFeaturesSetup {
                     self.physical_device
                         .instance()
                         .get_physical_device_features2(self.physical_device.raw(), &mut wrapper);
-                };
-                VkTaggedObject::new(feature)
+                    VkTaggedObject::new_unchecked(feature)
+                }
             });
-        let feature = feature.deref_mut().downcast_mut::<T>().unwrap();
+        let feature = unsafe {
+            feature
+                .deref_mut()
+                .downcast_mut_to_type::<T>(structure_type)
+        }
+        .unwrap();
         let feature_available: vk::Bool32 = *selector(feature);
         if feature_available == vk::FALSE {
             // feature unavailable
@@ -325,9 +352,14 @@ impl PhysicalDeviceFeaturesSetup {
         let enabled_features = self
             .enabled_features
             .features
-            .entry(T::STRUCTURE_TYPE)
-            .or_insert_with(|| VkTaggedObject::new(T::default()));
-        let enabled_features = enabled_features.deref_mut().downcast_mut::<T>().unwrap();
+            .entry(structure_type)
+            .or_insert_with(|| unsafe { VkTaggedObject::new_unchecked(T::default()) });
+        let enabled_features = unsafe {
+            enabled_features
+                .deref_mut()
+                .downcast_mut_to_type::<T>(structure_type)
+        }
+        .unwrap();
         let feature_to_enable = selector(enabled_features);
         *feature_to_enable = vk::TRUE;
         Some(())
@@ -363,8 +395,17 @@ macro_rules! impl_feature_for_ext {
         unsafe impl Feature for $feature {
             const REQUIRED_DEVICE_EXT: &'static CStr = <$ext>::NAME;
             const PROMOTION_STATUS: PromotionStatus = <$ext>::PROMOTION_STATUS;
+            const STRUCTURE_TYPE: Option<vk::StructureType> =
+                Some(<$feature as TaggedStructure>::STRUCTURE_TYPE);
         }
     };
+}
+unsafe impl Feature for vk::PhysicalDeviceFeatures {
+    const REQUIRED_DEVICE_EXT: &'static CStr = cstr::cstr!("Vulkan Base");
+
+    const PROMOTION_STATUS: PromotionStatus =
+        PromotionStatus::PromotedToCore(vk::make_api_version(0, 1, 0, 0));
+    const STRUCTURE_TYPE: Option<vk::StructureType> = None;
 }
 impl_feature_for_ext!(
     vk::PhysicalDeviceSynchronization2FeaturesKHR<'_>,
@@ -397,4 +438,16 @@ impl_feature_for_ext!(
 impl_feature_for_ext!(
     vk::PhysicalDeviceRayTracingMotionBlurFeaturesNV<'_>,
     nv::ray_tracing_motion_blur::Meta
+);
+impl_feature_for_ext!(
+    vk::PhysicalDevice8BitStorageFeatures<'_>,
+    khr::_8bit_storage::Meta
+);
+impl_feature_for_ext!(
+    vk::PhysicalDevice16BitStorageFeatures<'_>,
+    khr::_16bit_storage::Meta
+);
+impl_feature_for_ext!(
+    vk::PhysicalDeviceShaderFloat16Int8Features<'_>,
+    khr::shader_float16_int8::Meta
 );

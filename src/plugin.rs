@@ -323,7 +323,7 @@ pub trait RhyoliteApp {
 
     /// Called in the [Plugin::build] phase of device plugins.
     /// Device plugins must be added after [RhyolitePlugin].
-    fn enable_feature<T: Feature + Default>(
+    fn enable_feature<T: Feature + Default + 'static>(
         &mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,
     ) -> FeatureEnableResult;
@@ -498,7 +498,7 @@ impl RhyoliteApp for App {
             None
         }
     }
-    fn enable_feature<'a, T: Feature + Default>(
+    fn enable_feature<'a, T: Feature + Default + 'static>(
         &'a mut self,
         selector: impl FnMut(&mut T) -> &mut vk::Bool32,
     ) -> FeatureEnableResult<'a> {
