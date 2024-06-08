@@ -421,9 +421,9 @@ fn copy_sbt<T: SBTBuilder>(
     }
     let regions = changes
         .iter()
-        .map(|(_, a)| (a.index, 1_u32))
+        .map(|(_, a)| (a.index, 1_u32)) // map into (start, len)
         .coalesce(|a, b| {
-            if a.0 + 1 == b.0 {
+            if a.0 + a.1 == b.0 {
                 Ok((a.0, a.1 + b.1))
             } else {
                 Err((a, b))
