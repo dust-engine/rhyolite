@@ -354,6 +354,10 @@ impl Swapchain {
         }
         Ok(())
     }
+
+    pub fn extent(&self) -> UVec2 {
+        self.inner.extent
+    }
 }
 
 #[derive(Component)]
@@ -446,7 +450,15 @@ pub(super) fn extract_swapchains(
     >,
 ) {
     let mut windows_to_rebuild: BTreeSet<Entity> = BTreeSet::new();
-    windows_to_rebuild.extend(window_resized_events.read().map(|a| a.window));
+    windows_to_rebuild.extend(window_resized_events.read().filter_map(|event| {
+        let (window, _, swapchain, _) = query.get(event.window).ok()?;
+        let swapchain = swapchain?;
+        if window.physical_height() != swapchain.extent().y || window.physical_width() != swapchain.extent().x {
+            Some(event.window)
+        } else {
+            None
+        }
+    }));
     windows_to_rebuild.extend(suboptimal_events.read().map(|a| a.window));
     for resized_window in windows_to_rebuild.into_iter() {
         let (window, config, swapchain, surface) = query.get_mut(resized_window).unwrap();
