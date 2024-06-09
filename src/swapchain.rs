@@ -453,7 +453,9 @@ pub(super) fn extract_swapchains(
     windows_to_rebuild.extend(window_resized_events.read().filter_map(|event| {
         let (window, _, swapchain, _) = query.get(event.window).ok()?;
         let swapchain = swapchain?;
-        if window.physical_height() != swapchain.extent().y || window.physical_width() != swapchain.extent().x {
+        if window.physical_height() != swapchain.extent().y
+            || window.physical_width() != swapchain.extent().x
+        {
             Some(event.window)
         } else {
             None

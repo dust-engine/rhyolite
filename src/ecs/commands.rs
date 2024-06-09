@@ -238,11 +238,17 @@ where
         value: u64,
         stage: vk::PipelineStageFlags2,
     ) -> bool {
-        todo!()
+        self.submission_info
+            .lock()
+            .unwrap()
+            .wait_semaphore(semaphore, value, stage)
     }
 
     fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
-        todo!()
+        self.submission_info
+            .lock()
+            .unwrap()
+            .wait_binary_semaphore(semaphore, stage)
     }
 
     fn signal_semaphore(
@@ -696,9 +702,11 @@ impl System for InsertPipelineBarrier {
         let mut global_barriers = vk::MemoryBarrier2::default();
         let mut dependency_flags = vk::DependencyFlags::empty();
         let mut prev_stage_barriers = SmallVec::new();
+        let device = world.get_resource::<Device>().unwrap();
         for i in self.barrier_producers.iter_mut() {
             let mut dropped = false;
             let barrier = Barriers {
+                device,
                 image_barriers: &mut image_barriers,
                 buffer_barriers: &mut buffer_barriers,
                 global_barriers: &mut global_barriers,
@@ -723,7 +731,7 @@ impl System for InsertPipelineBarrier {
             || !image_barriers.is_empty()
             || !buffer_barriers.is_empty()
         {
-            let render_commands = RenderCommands::<'t'>::get_param(
+            let mut render_commands = RenderCommands::<'t'>::get_param(
                 self.render_command_state.as_mut().unwrap(),
                 &self.system_meta,
                 world,
@@ -732,7 +740,7 @@ impl System for InsertPipelineBarrier {
             let cmd_buf = render_commands.default_cmd_pool.current_buffer();
             let barriers = ImmediateTransitions {
                 cmd_buf,
-                device: render_commands.device(),
+                semaphore_signals: &mut render_commands,
                 global_barriers,
                 image_barriers,
                 buffer_barriers,

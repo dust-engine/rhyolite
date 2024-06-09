@@ -358,7 +358,20 @@ fn copy_sbt<T: SBTBuilder>(
         if this.full_update_required {
             tracing::info!("{} SBT Full update", std::any::type_name::<T>());
             this.full_update_required = false;
-            entries.iter_mut().collect::<Vec<_>>()
+            entries
+                .iter_mut()
+                .filter_map(|(q, mut handle)| {
+                    let is_enabled = T::is_enabled(&mut params, &q);
+                    if !is_enabled {
+                        handle.enabled = false;
+                        return None;
+                    }
+                    if !handle.enabled {
+                        handle.enabled = true;
+                    }
+                    Some((q, handle))
+                })
+                .collect::<Vec<_>>()
         } else {
             entries
                 .iter_mut()
@@ -372,7 +385,6 @@ fn copy_sbt<T: SBTBuilder>(
                         handle.enabled = true;
                         return Some((q, handle));
                     }
-                    handle.enabled = true;
                     if T::should_update(&mut params, &q) {
                         return Some((q, handle));
                     }

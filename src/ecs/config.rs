@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 
 use crate::commands::{ResourceTransitionCommands, SemaphoreSignalCommands};
 use crate::semaphore::TimelineSemaphore;
-use crate::QueueRef;
+use crate::{HasDevice, QueueRef};
 
 use super::{QueueSubmissionInfo, RenderSystemPass};
 
@@ -80,6 +80,7 @@ impl BarriersPrevStage {
 }
 /// GAT limitation. All references contained herein are valid for the duration of the system call.
 pub struct Barriers {
+    pub(crate) device: *const crate::Device,
     pub(crate) dependency_flags: *mut vk::DependencyFlags,
     pub(crate) image_barriers: *mut SmallVec<[vk::ImageMemoryBarrier2<'static>; 4]>,
     pub(crate) buffer_barriers: *mut SmallVec<[vk::BufferMemoryBarrier2<'static>; 4]>,
@@ -97,6 +98,11 @@ impl Drop for Barriers {
         unsafe {
             *self.dropped = true;
         }
+    }
+}
+impl HasDevice for Barriers {
+    fn device(&self) -> &crate::Device {
+        unsafe { &*self.device }
     }
 }
 impl SemaphoreSignalCommands for Barriers {

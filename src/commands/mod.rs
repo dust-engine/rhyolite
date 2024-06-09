@@ -73,11 +73,11 @@ pub trait CommonCommands: CommandRecorder {
             )
         }
     }
-    fn transition_resources(&mut self) -> ImmediateTransitions {
+    fn transition_resources(&mut self) -> ImmediateTransitions<impl SemaphoreSignalCommands> {
         let cmd_buf = self.cmd_buf();
         ImmediateTransitions {
             queue: self.current_queue(),
-            device: self.device(),
+            semaphore_signals: self.semaphore_signal(),
             cmd_buf,
             global_barriers: vk::MemoryBarrier2::default(),
             image_barriers: SmallVec::new(),
@@ -88,8 +88,8 @@ pub trait CommonCommands: CommandRecorder {
 }
 impl<T> CommonCommands for T where T: CommandRecorder {}
 
-pub struct ImmediateTransitions<'w> {
-    pub(crate) device: &'w Device,
+pub struct ImmediateTransitions<'w, S: HasDevice> {
+    pub(crate) semaphore_signals: &'w mut S,
     pub(crate) cmd_buf: vk::CommandBuffer,
     pub(crate) global_barriers: vk::MemoryBarrier2<'static>,
     pub(crate) image_barriers: SmallVec<[vk::ImageMemoryBarrier2<'static>; 4]>,
@@ -98,7 +98,7 @@ pub struct ImmediateTransitions<'w> {
     pub(crate) queue: QueueRef,
 }
 
-impl Drop for ImmediateTransitions<'_> {
+impl<S: HasDevice> Drop for ImmediateTransitions<'_, S> {
     fn drop(&mut self) {
         if self.global_barriers.src_access_mask == vk::AccessFlags2::empty()
             && self.global_barriers.dst_access_mask == vk::AccessFlags2::empty()
@@ -110,7 +110,7 @@ impl Drop for ImmediateTransitions<'_> {
             return;
         }
         unsafe {
-            self.device.cmd_pipeline_barrier2(
+            self.semaphore_signals.device().cmd_pipeline_barrier2(
                 self.cmd_buf,
                 &vk::DependencyInfo {
                     dependency_flags: self.dependency_flags,
@@ -381,7 +381,7 @@ where
     }
 }
 
-pub trait SemaphoreSignalCommands: Sized {
+pub trait SemaphoreSignalCommands: Sized + HasDevice {
     /// Specify that the current submission must wait on a semaphore before executing.
     fn wait_semaphore(
         &mut self,
@@ -438,24 +438,26 @@ pub trait ResourceTransitionCommands: SemaphoreSignalCommands {
     }
 }
 
-impl SemaphoreSignalCommands for ImmediateTransitions<'_> {
+impl<S: SemaphoreSignalCommands> SemaphoreSignalCommands for ImmediateTransitions<'_, S> {
     fn wait_semaphore(
         &mut self,
         semaphore: Cow<Arc<TimelineSemaphore>>,
         value: u64,
         stage: vk::PipelineStageFlags2,
     ) -> bool {
-        todo!()
+        self.semaphore_signals
+            .wait_semaphore(semaphore, value, stage)
     }
 
     fn signal_semaphore(
         &mut self,
         stage: vk::PipelineStageFlags2,
     ) -> (Arc<TimelineSemaphore>, u64) {
-        todo!()
+        self.semaphore_signals.signal_semaphore(stage)
     }
     fn wait_binary_semaphore(&mut self, semaphore: vk::Semaphore, stage: vk::PipelineStageFlags2) {
-        todo!()
+        self.semaphore_signals
+            .wait_binary_semaphore(semaphore, stage)
     }
     fn signal_binary_semaphore_prev_stage(
         &mut self,
@@ -463,7 +465,8 @@ impl SemaphoreSignalCommands for ImmediateTransitions<'_> {
         stage: vk::PipelineStageFlags2,
         prev_queue: QueueRef,
     ) {
-        todo!()
+        self.semaphore_signals
+            .signal_binary_semaphore_prev_stage(semaphore, stage, prev_queue)
     }
     fn wait_binary_semaphore_prev_stage(
         &mut self,
@@ -471,10 +474,16 @@ impl SemaphoreSignalCommands for ImmediateTransitions<'_> {
         stage: vk::PipelineStageFlags2,
         prev_queue: QueueRef,
     ) {
-        todo!()
+        self.semaphore_signals
+            .wait_binary_semaphore_prev_stage(semaphore, stage, prev_queue)
     }
 }
-impl ResourceTransitionCommands for ImmediateTransitions<'_> {
+impl<T: SemaphoreSignalCommands> HasDevice for ImmediateTransitions<'_, T> {
+    fn device(&self) -> &Device {
+        self.semaphore_signals.device()
+    }
+}
+impl<T: SemaphoreSignalCommands> ResourceTransitionCommands for ImmediateTransitions<'_, T> {
     fn current_queue(&self) -> QueueRef {
         self.queue
     }
