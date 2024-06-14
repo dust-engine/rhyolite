@@ -178,6 +178,12 @@ impl<T> Deref for SbtIndex<T> {
 }
 
 impl<T> SbtManager<T> {
+    pub fn buffer(&self) -> Option<&RenderRes<Buffer>> {
+        self.allocation.as_ref()
+    }
+    pub fn buffer_mut(&mut self) -> Option<&mut RenderRes<Buffer>> {
+        self.allocation.as_mut()
+    }
     pub(crate) fn pipeline_updated(&mut self, latest_generation: u64) {
         self.full_update_required = true;
         self.pipeline_generation = latest_generation;
@@ -346,7 +352,7 @@ fn copy_sbt_barrier<T: Send + Sync + 'static>(
 }
 
 fn copy_sbt<T: SBTBuilder>(
-    mut commands: RenderCommands<'t'>,
+    mut commands: RenderCommands<'u'>,
     mut this: ResMut<SbtManager<T::SbtIndexType>>,
     mut staging_belt: ResMut<StagingBelt>,
     mut entries: Query<(T::QueryData, &mut SbtIndex<T::SbtIndexType>), T::QueryFilter>,

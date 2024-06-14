@@ -30,6 +30,8 @@ impl Plugin for RtxPlugin {
             .unwrap();
         app.add_device_extension::<khr::pipeline_library::Meta>()
             .ok();
+        app.add_device_extension::<khr::ray_tracing_maintenance1::Meta>()
+            .ok();
         app.enable_feature::<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>(|f| {
             &mut f.acceleration_structure
         })

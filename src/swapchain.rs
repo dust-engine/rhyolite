@@ -67,7 +67,13 @@ impl Plugin for SwapchainPlugin {
 #[derive(Component)]
 pub struct Swapchain {
     inner: Arc<SwapchainInner>,
+
+    /// An available semaphore for the next acquire.
+    /// The semaphore becomes available after `acquire_fence` becomes signaled,
+    /// indicating that the previous acquire has been completed.
     acquire_semaphore: vk::Semaphore,
+    /// An unsignaled fence for the next acquire.
+    acquire_fence: vk::Fence,
     images: SmallVec<[Option<RenderImage<SwapchainImageInner>>; 3]>,
 }
 
@@ -85,6 +91,8 @@ impl Drop for Swapchain {
             self.inner
                 .device
                 .destroy_semaphore(self.acquire_semaphore, None);
+            // Same goes for this fence. It should be unsignaled.
+            self.inner.device.destroy_fence(self.acquire_fence, None);
         }
     }
 }
@@ -209,12 +217,15 @@ impl Swapchain {
                         let acquire_semaphore = device
                             .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
                             .unwrap();
-                        device
-                            .set_debug_name(present_semaphore, cstr!("Present Semaphore"))
-                            .ok();
-                        device
-                            .set_debug_name(acquire_semaphore, cstr!("Acquire Semaphore"))
-                            .ok();
+                        let acquire_fence = device
+                            .create_fence(
+                                &vk::FenceCreateInfo {
+                                    flags: vk::FenceCreateFlags::SIGNALED,
+                                    ..Default::default()
+                                },
+                                None,
+                            )
+                            .unwrap();
                         let mut img = RenderImage::new(SwapchainImageInner {
                             image,
                             indice: i as u32,
@@ -222,6 +233,7 @@ impl Swapchain {
                             view,
                             present_semaphore,
                             acquire_semaphore,
+                            acquire_fence,
                         });
                         img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                         img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
@@ -237,6 +249,22 @@ impl Swapchain {
                         .unwrap();
                     device
                         .set_debug_name(semaphore, cstr!("Extra Acquire Semaphore"))
+                        .ok();
+                    semaphore
+                },
+                acquire_fence: {
+                    // Create one extra semaphore for the first acquire
+                    let semaphore = device
+                        .create_fence(
+                            &vk::FenceCreateInfo {
+                                flags: vk::FenceCreateFlags::empty(), // Important: we expect this fence to be unsignaled!
+                                ..Default::default()
+                            },
+                            None,
+                        )
+                        .unwrap();
+                    device
+                        .set_debug_name(semaphore, cstr!("Extra Acquire Fence"))
                         .ok();
                     semaphore
                 },
@@ -337,6 +365,17 @@ impl Swapchain {
                         .device
                         .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
                         .unwrap();
+                    let acquire_fence = self
+                        .inner
+                        .device
+                        .create_fence(
+                            &vk::FenceCreateInfo {
+                                flags: vk::FenceCreateFlags::SIGNALED,
+                                ..Default::default()
+                            },
+                            None,
+                        )
+                        .unwrap();
                     let mut img = RenderImage::new(SwapchainImageInner {
                         image,
                         indice: i as u32,
@@ -344,6 +383,7 @@ impl Swapchain {
                         view,
                         present_semaphore,
                         acquire_semaphore,
+                        acquire_fence,
                     });
                     img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
                     img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
@@ -753,12 +793,18 @@ pub struct SwapchainImageInner {
     indice: u32,
     swapchain: Arc<SwapchainInner>,
 
+    /// The swapchain image was acquired using this semaphore.
     acquire_semaphore: vk::Semaphore,
+    acquire_fence: vk::Fence,
     present_semaphore: vk::Semaphore,
 }
 impl Drop for SwapchainImageInner {
     fn drop(&mut self) {
         unsafe {
+            self.swapchain
+                .device
+                .wait_for_fences(&[self.acquire_fence], true, !0)
+                .unwrap();
             self.swapchain.device.destroy_image_view(self.view, None);
             self.swapchain
                 .device
@@ -840,7 +886,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
                     swapchain.inner.inner,
                     !0,
                     swapchain.acquire_semaphore,
-                    vk::Fence::null(),
+                    swapchain.acquire_fence,
                 )
         } {
             Ok((indice, suboptimal)) => {
@@ -871,7 +917,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
                 swapchain.inner.inner,
                 !0,
                 swapchain.acquire_semaphore,
-                vk::Fence::null(),
+                swapchain.acquire_fence,
             )
     } {
         Ok((indice, suboptimal)) => {
@@ -896,9 +942,22 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         swapchain_image.inner.is_none(),
         "Must present the current image before acquiring a new one"
     );
+
+    unsafe {
+        device
+            .wait_for_fences(&[image.acquire_fence], true, !0)
+            .unwrap();
+        device.reset_fences(&[image.acquire_fence]).unwrap();
+    }
+    // At this point, we just acquired an image with semaphore 1.
+    // We can also assume that 2 is now available since we've waited on its fence.
     std::mem::swap(
-        &mut swapchain.acquire_semaphore,
-        &mut unsafe { image.get_mut() }.acquire_semaphore,
+        &mut swapchain.acquire_semaphore,                  // 1
+        &mut unsafe { image.get_mut() }.acquire_semaphore, // 2
+    );
+    std::mem::swap(
+        &mut swapchain.acquire_fence,
+        &mut unsafe { image.get_mut() }.acquire_fence,
     );
     swapchain_image.acquire_semaphore = image.acquire_semaphore;
     swapchain_image.present_semaphore = image.present_semaphore;
