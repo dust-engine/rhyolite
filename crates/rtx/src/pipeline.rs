@@ -1,6 +1,9 @@
 use std::{alloc::Layout, collections::BTreeSet, fmt::Debug, num::NonZeroU64, sync::Arc};
 
-use bevy::asset::{AssetId, Assets};
+use bevy::{
+    asset::{AssetId, Assets},
+    utils::tracing,
+};
 use nonmax::{self, NonMaxU32};
 
 use rhyolite::{
@@ -48,6 +51,14 @@ impl Pipeline for RayTracingPipeline {
         info: &mut RayTracingPipelineBuildInfo,
         item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
+        tracing::info!(
+            "Ray Tracing Pipeline built with {} libs, {} raygen, {} miss, {} callable, {} hitgroup",
+            info.libraries.len(),
+            info.num_raygen,
+            info.num_miss,
+            info.num_callable,
+            info.num_hitgroup
+        );
         RayTracingPipeline {
             handles: SbtHandles::new(
                 item.device(),
@@ -67,6 +78,14 @@ impl Pipeline for RayTracingPipeline {
         info: RayTracingPipelineBuildInfo,
         item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
     ) -> Self {
+        tracing::info!(
+            "Ray Tracing Pipeline built with {} libs, {} raygen, {} miss, {} callable, {} hitgroup",
+            info.libraries.len(),
+            info.num_raygen,
+            info.num_miss,
+            info.num_callable,
+            info.num_hitgroup
+        );
         RayTracingPipeline {
             handles: SbtHandles::new(
                 item.device(),
@@ -218,7 +237,6 @@ impl PipelineBuildInfo for RayTracingPipelineBuildInfo {
             if args.0.stage_count > 0 {
                 args.0.p_stages = args.9.as_ptr();
             }
-
             let (result, pipeline) = unsafe {
                 let mut pipeline = vk::Pipeline::null();
                 let result = (device
@@ -312,14 +330,11 @@ enum RayTracingPipelineManagerImpl {
 pub struct RayTracingPipelineManager {
     inner: RayTracingPipelineManagerImpl,
     latest_generation: u64,
-    pipeline: Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
+    latest_pipeline: Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
 
     /// The pipeline generation of [`Self::pipeline`]
     pipeline_generation: u64,
-
-    /// Marked true when [`Self::add_hitgroup`] or [`Self::remove_hitgroup`] is called.
-    /// Marked false when [`Self::try_build`] is called and a new pipeline was successfully built.
-    dirty: bool,
+    pipeline: Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
 }
 
 impl RayTracingPipelineManager {
@@ -364,9 +379,9 @@ impl RayTracingPipelineManager {
         RayTracingPipelineManager {
             inner,
             pipeline_generation: 0,
-            latest_generation: 0,
+            latest_generation: 1,
             pipeline: None,
-            dirty: false,
+            latest_pipeline: None,
         }
     }
 
@@ -375,7 +390,6 @@ impl RayTracingPipelineManager {
         hitgroup: HitGroup,
         pipeline_cache: &PipelineCache,
     ) -> HitgroupHandle {
-        self.dirty = true;
         let handle = match &mut self.inner {
             RayTracingPipelineManagerImpl::Native(manager) => manager.add_hitgroup(hitgroup),
             RayTracingPipelineManagerImpl::PipelineLibrary(manager) => {
@@ -390,7 +404,7 @@ impl RayTracingPipelineManager {
     }
 
     pub fn remove_hitgroup(&mut self, handle: HitgroupHandle) {
-        self.dirty = true;
+        self.latest_generation += 1;
         match &mut self.inner {
             RayTracingPipelineManagerImpl::Native(manager) => {
                 manager.remove_hitgroup(handle.handle)
@@ -401,7 +415,6 @@ impl RayTracingPipelineManager {
         }
     }
 
-    /// Returns None when one of the dependent pipeline libraries hasn't been built
     pub fn try_build<T>(
         &mut self,
         pipeline_cache: &PipelineCache,
@@ -409,61 +422,57 @@ impl RayTracingPipelineManager {
         pool: &DeferredOperationTaskPool,
         sbt_manager: &mut SbtManager<T>,
     ) {
-        let mut force_rebuild = false;
-        if self.dirty // rebuild if add_hitgroup or remove_hitgroup was called
-            || self
-                .pipeline
-                .as_ref()
-                .map(|p| {
-                    // rebuild if self.pipeline becomes outdated due to hot reload
-                    force_rebuild = pipeline_cache.is_outdated(p);
-                    force_rebuild
-                })
-                .unwrap_or(true)
-        // if self.pipeline is none, always rebuild
-        {
-            let new_pipeline = match &mut self.inner {
-                RayTracingPipelineManagerImpl::Native(manager) => {
-                    Some(manager.build(pipeline_cache))
-                }
-                RayTracingPipelineManagerImpl::PipelineLibrary(manager) => {
-                    manager.build(pipeline_cache, assets, pool)
-                }
-            };
-            if let Some(new_pipeline) = new_pipeline {
-                if let Some(old_pipeline) = &mut self.pipeline {
-                    old_pipeline.replace(new_pipeline);
-                    force_rebuild = true;
-                } else {
-                    self.pipeline = Some(new_pipeline);
-                }
-                self.dirty = false;
-                self.pipeline_generation = self.latest_generation;
-            } else {
-                force_rebuild = false;
-            }
-        }
-        if let Some(pipeline) = &mut self.pipeline {
-            let old_pipeline = pipeline.get().map(|x| x.get().raw()).unwrap_or_default();
-            pipeline_cache.retrieve_pipeline(pipeline, assets, pool, true, Some(force_rebuild));
-            let new_pipeline = pipeline.get().map(|x| x.get().raw()).unwrap_or_default();
-            if old_pipeline != new_pipeline {
-                println!(
-                    "Pipeline updated: {:?} -> {:?} ({})",
-                    old_pipeline, new_pipeline, self.pipeline_generation
+        if let Some(pipeline) = &mut self.latest_pipeline {
+            let pipeline = pipeline_cache.retrieve_pipeline(pipeline, assets, pool, true);
+            if let Some(pipeline) = pipeline {
+                tracing::info!(
+                    "Current pipeline updated: {:?} ({})",
+                    pipeline.as_raw(),
+                    self.pipeline_generation
                 );
                 sbt_manager.pipeline_updated(self.pipeline_generation);
+                self.pipeline = self.latest_pipeline.take();
+            } else if let Some(pipeline) = &mut self.pipeline {
+                pipeline_cache.retrieve_pipeline(pipeline, assets, pool, true);
             }
-        };
+        } else if let Some(pipeline) = &mut self.pipeline {
+            pipeline_cache.retrieve_pipeline(pipeline, assets, pool, true);
+        }
+
+        if self.latest_pipeline.is_none() {
+            if self.pipeline_generation != self.latest_generation // rebuild if add_hitgroup or remove_hitgroup was called
+                || self
+                    .pipeline
+                    .as_ref()
+                    .map(|p| {
+                        // rebuild if self.pipeline becomes outdated due to hot reload
+                        self.latest_pipeline.is_none() && pipeline_cache.is_outdated(p)
+                    })
+                    .unwrap_or(false)
+            {
+                let new_pipeline = match &mut self.inner {
+                    RayTracingPipelineManagerImpl::Native(manager) => {
+                        Some(manager.build(pipeline_cache))
+                    }
+                    RayTracingPipelineManagerImpl::PipelineLibrary(manager) => {
+                        manager.build(pipeline_cache, assets, pool)
+                    }
+                };
+                if let Some(new_pipeline) = new_pipeline {
+                    tracing::info!(
+                        "Latest pipeline updated: generation {} -> {}",
+                        self.pipeline_generation,
+                        self.latest_generation
+                    );
+                    self.latest_pipeline = Some(new_pipeline);
+                    self.pipeline_generation = self.latest_generation;
+                }
+            }
+        }
     }
 
-    pub fn get_pipeline(&self) -> Option<&CachedPipeline<RenderObject<RayTracingPipeline>>> {
-        self.pipeline.as_ref()
-    }
-    pub fn get_pipeline_mut(
-        &mut self,
-    ) -> Option<&mut CachedPipeline<RenderObject<RayTracingPipeline>>> {
-        self.pipeline.as_mut()
+    pub fn get_pipeline(&mut self) -> Option<&mut RenderObject<RayTracingPipeline>> {
+        self.pipeline.as_mut()?.get_mut()
     }
 }
 
@@ -474,6 +483,7 @@ struct RayTracingPipelineManagerNative {
     num_callable: u8,
     /// closest hit, any hit, intersection
     hitgroups: Vec<Option<HitGroup>>,
+    available_indices: Vec<u16>,
     base_stages: Vec<SpecializedShader>,
 }
 impl RayTracingPipelineManagerNative {
@@ -497,11 +507,17 @@ impl RayTracingPipelineManagerNative {
                 .chain(callable_shaders)
                 .collect(),
             hitgroups: Vec::new(),
+            available_indices: Vec::new(),
         }
     }
     fn add_hitgroup(&mut self, hitgroup: HitGroup) -> u16 {
-        let handle = self.hitgroups.len() as u16;
-        self.hitgroups.push(Some(hitgroup));
+        tracing::info!("Adding hitgroup");
+        let handle = self.available_indices.pop().unwrap_or_else(|| {
+            let handle = self.hitgroups.len() as u16;
+            self.hitgroups.push(None);
+            handle
+        });
+        self.hitgroups[handle as usize] = Some(hitgroup);
         handle
     }
     #[track_caller]
@@ -567,6 +583,7 @@ struct RayTracingPipelineManagerPipelineLibrary {
     common: RayTracingPipelineBuildInfoCommon,
     base_library: CachedPipeline<RayTracingPipelineLibrary>,
     hitgroup_libraries: Vec<Option<CachedPipeline<RayTracingPipelineLibrary>>>,
+    available_indices: Vec<u16>,
     num_raygen: u8,
     num_miss: u8,
     num_callable: u8,
@@ -627,21 +644,20 @@ impl RayTracingPipelineManagerPipelineLibrary {
             num_miss,
             num_callable,
             dirty: false,
+            available_indices: Vec::new(),
         }
     }
 
     pub fn add_hitgroup(&mut self, hitgroup: HitGroup, pipeline_cache: &PipelineCache) -> u16 {
-        let handle = self.hitgroup_libraries.len() as u16;
-        self.hitgroup_libraries.push(None);
+        let handle = self.available_indices.pop().unwrap_or_else(|| {
+            let handle = self.hitgroup_libraries.len() as u16;
+            self.hitgroup_libraries.push(None);
+            handle
+        });
         self.set_hitgroup(handle, hitgroup, pipeline_cache);
         handle
     }
-    pub fn set_hitgroup(
-        &mut self,
-        handle: u16,
-        hitgroup: HitGroup,
-        pipeline_cache: &PipelineCache,
-    ) {
+    fn set_hitgroup(&mut self, handle: u16, hitgroup: HitGroup, pipeline_cache: &PipelineCache) {
         let mut info = RayTracingPipelineBuildInfo {
             common: self.common.clone(),
             groups: hitgroup.to_vk_groups(0),
@@ -681,7 +697,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
             )
             .map(|library| {
                 pipeline_cache
-                    .retrieve_pipeline(library, assets, pool, false, None)
+                    .retrieve_pipeline(library, assets, pool, false)
                     .cloned()
             })
             .collect::<Option<Vec<RayTracingPipelineLibrary>>>()?;

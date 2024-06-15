@@ -72,19 +72,6 @@ impl<T: Pipeline> CachedPipeline<T> {
     pub fn get_mut(&mut self) -> Option<&mut T> {
         self.pipeline.as_mut()
     }
-    pub fn replace(&mut self, other: CachedPipeline<T>) {
-        self.build_info = other.build_info;
-        if let Some(task) = other.task {
-            // If the other pipeline is still pending, override current pipeline task
-            assert!(other.pipeline.is_none());
-            self.task = Some(task);
-        } else {
-            if let Some(pipeline) = other.pipeline {
-                self.pipeline = Some(pipeline);
-            }
-        }
-        self.shader_generations = other.shader_generations;
-    }
 }
 
 impl PipelineCache {
@@ -138,7 +125,7 @@ impl PipelineCache {
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
     ) -> Option<&'a mut T> {
-        self.retrieve_pipeline(cached_pipeline, assets, pool, true, None)
+        self.retrieve_pipeline(cached_pipeline, assets, pool, true)
     }
     pub fn retrieve_pipeline<'a, T: Pipeline>(
         &self,
@@ -146,7 +133,6 @@ impl PipelineCache {
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
         allow_stale: bool,
-        force_reload: Option<bool>,
     ) -> Option<&'a mut T> {
         if let Some(pipeline) = &mut cached_pipeline.task {
             if pipeline.is_finished() {
@@ -158,7 +144,6 @@ impl PipelineCache {
                     let build_info = cached_pipeline.build_info.take().unwrap();
                     T::from_built_with_owned_info(build_info, new_pipeline)
                 };
-                println!("Pipeline built");
                 cached_pipeline.pipeline.replace(built);
             } else if !allow_stale {
                 // A build task is pending, and we don't want to return a stale pipeline.
@@ -167,9 +152,7 @@ impl PipelineCache {
         }
 
         if self.hot_reload_enabled {
-            if (force_reload == None && self.is_outdated(cached_pipeline))
-                || force_reload == Some(true)
-            {
+            if self.is_outdated(cached_pipeline) {
                 // schedule.
                 cached_pipeline.task = cached_pipeline
                     .build_info

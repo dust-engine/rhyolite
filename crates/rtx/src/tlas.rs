@@ -549,7 +549,8 @@ fn extract_input<B: TLASBuilder>(
     mut store: ResMut<TLASDeviceBuildStore<B::TLASType>>,
     mut params: StaticSystemParam<B::Params>,
 ) {
-    let mut staging: rhyolite::staging::StagingBeltBatchJob<'_> = staging_belt.start(&mut commands);
+    let mut staging: rhyolite::staging::StagingBeltBatchJob<'_> =
+        staging_belt.start_aligned(&mut commands, 4);
     let mut job = BatchCopy::new(&mut commands);
     let mut has_motion = false;
 

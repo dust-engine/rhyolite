@@ -416,7 +416,6 @@ fn copy_sbt<T: SBTBuilder>(
         .unwrap()
         .0
         .size() as u64;
-    println!("Changed items: {}", changes.len());
     let mut host_buffer = staging_belt
         .start(&mut commands)
         .allocate_buffer(total_size);
