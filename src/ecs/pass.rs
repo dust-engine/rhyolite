@@ -7,8 +7,8 @@ use std::{
 use bevy::ptr::OwningPtr;
 use bevy::{
     ecs::{
-        schedule::{IntoSystemConfigs, NodeId, ScheduleBuildPass, SystemNode},
-        system::{BoxedSystem, IntoSystem, System},
+        schedule::{NodeId, ScheduleBuildPass, SystemNode},
+        system::{BoxedSystem, IntoSystem},
         world::World,
     },
     utils::ConfigMap,
@@ -26,7 +26,7 @@ use crate::{
 };
 use petgraph::{
     graphmap::DiGraphMap,
-    visit::{Dfs, EdgeRef, IntoEdgeReferences, IntoNeighbors, IntoNeighborsDirected, Walker},
+    visit::{Dfs, EdgeRef, IntoEdgeReferences, Walker},
     Direction::{self, Incoming, Outgoing},
 };
 use smallvec::SmallVec;
@@ -57,7 +57,6 @@ struct SubmitSystemMarker;
 
 #[derive(Clone)]
 struct QueueGraphNodeMeta {
-    force_binary_semaphore: bool,
     is_queue_op: bool,
     /// for the queue node, this is the system id of the "queue op" system?
     queue_node_index: usize,
@@ -76,9 +75,9 @@ impl ScheduleBuildPass for RenderSystemPass {
 
     fn add_dependency(
         &mut self,
-        from: bevy::ecs::schedule::NodeId,
-        to: bevy::ecs::schedule::NodeId,
-        options: Option<&Self::EdgeOptions>,
+        _from: bevy::ecs::schedule::NodeId,
+        _to: bevy::ecs::schedule::NodeId,
+        _options: Option<&Self::EdgeOptions>,
     ) {
     }
 
@@ -318,7 +317,6 @@ impl ScheduleBuildPass for RenderSystemPass {
                 let meta = render_graph_meta[*stage].as_mut().unwrap();
                 meta.queue_graph_node = queue_graph_node;
                 queue_graph_nodes.push(QueueGraphNodeMeta {
-                    force_binary_semaphore: meta.force_binary_semaphore,
                     nodes: vec![*stage],
                     is_queue_op: true,
                     queue_node_index: 0,
@@ -375,7 +373,6 @@ impl ScheduleBuildPass for RenderSystemPass {
                 }
                 if let Some(queue_graph_node_info) = queue_graph_node_info {
                     queue_graph_nodes.push(QueueGraphNodeMeta {
-                        force_binary_semaphore,
                         nodes: std::mem::take(stage),
                         is_queue_op: false,
                         queue_node_index: 0,

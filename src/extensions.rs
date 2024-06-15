@@ -1,7 +1,4 @@
-use ash::{
-    vk::{self},
-    Device,
-};
+use ash::{vk, Device};
 
 pub trait Extension: ash::vk::ExtensionMeta {
     fn promote_device(device: &mut ash::Device, ext: &Self::Device);
@@ -10,7 +7,7 @@ impl<T> Extension for T
 where
     T: ash::vk::ExtensionMeta,
 {
-    default fn promote_device(device: &mut ash::Device, ext: &Self::Device) {}
+    default fn promote_device(_device: &mut ash::Device, _ext: &Self::Device) {}
 }
 #[derive(Debug)]
 pub struct ExtensionNotFoundError;

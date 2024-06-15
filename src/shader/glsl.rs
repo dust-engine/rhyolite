@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::{collections::HashMap, path::PathBuf};
 
 use bevy::app::{App, Plugin};
@@ -7,7 +8,7 @@ use bevy::asset::{
 };
 use bevy::asset::{AssetApp, AsyncReadExt, AsyncWriteExt};
 use bevy::reflect::TypePath;
-use bevy::utils::BoxedFuture;
+use bevy::utils::ConditionalSendFuture;
 use shaderc::ResolvedInclude;
 use thiserror::Error;
 
@@ -32,7 +33,7 @@ impl AssetLoader for GlslSourceLoader {
         reader: &'a mut bevy::asset::io::Reader,
         _settings: &'a Self::Settings,
         _load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<Self::Asset, Self::Error>> {
+    ) -> impl ConditionalSendFuture + Future<Output = Result<Self::Asset, Self::Error>> {
         Box::pin(async move {
             let mut source = String::new();
             reader.read_to_string(&mut source).await?;
@@ -80,7 +81,7 @@ impl AssetLoader for GlslShadercCompiler {
         reader: &'a mut bevy::asset::io::Reader,
         _settings: &'a Self::Settings,
         ctx: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<Self::Asset, Self::Error>> {
+    ) -> impl ConditionalSendFuture + Future<Output = Result<Self::Asset, Self::Error>> {
         use shaderc::ShaderKind;
         let kind = if let Some(ext) = ctx.asset_path().get_full_extension() {
             match ext.as_str() {
@@ -174,11 +175,11 @@ impl AssetSaver for GlslSaver {
         writer: &'a mut bevy::asset::io::Writer,
         asset: SavedAsset<'a, Self::Asset>,
         _settings: &'a Self::Settings,
-    ) -> BoxedFuture<Result<(), std::io::Error>> {
-        Box::pin(async move {
+    ) -> impl ConditionalSendFuture + Future<Output = Result<(), Self::Error>> {
+        async move {
             writer.write_all(asset.source.as_bytes()).await?;
             Ok(())
-        })
+        }
     }
 }
 
@@ -304,7 +305,7 @@ impl AssetLoader for PlayoutGlslLoader {
         reader: &'a mut bevy::asset::io::Reader,
         _settings: &'a Self::Settings,
         _load_context: &'a mut LoadContext,
-    ) -> BoxedFuture<'a, Result<Self::Asset, Self::Error>> {
+    ) -> impl ConditionalSendFuture + Future<Output = Result<Self::Asset, Self::Error>> {
         Box::pin(async move {
             let mut source = String::new();
             reader.read_to_string(&mut source).await?;

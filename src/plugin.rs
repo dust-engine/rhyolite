@@ -420,8 +420,7 @@ impl RhyoliteApp for App {
         else {
             panic!("Device extensions may only be added after the instance was created. Add RhyolitePlugin before all device plugins.")
         };
-        if let Some(v) = extension_settings.available_extensions.get(extension) {
-            let v = *v;
+        if let Some(_v) = extension_settings.available_extensions.get(extension) {
             extension_settings.enabled_extensions.insert(extension);
             extension_settings
                 .extension_builders
@@ -444,8 +443,7 @@ impl RhyoliteApp for App {
                 self.world_mut().resource_mut::<InstanceExtensions>()
             }
         };
-        if let Some(v) = extension_settings.available_extensions.get(extension) {
-            let v = *v;
+        if let Some(_v) = extension_settings.available_extensions.get(extension) {
             extension_settings
                 .enabled_extensions
                 .insert(extension, None);

@@ -1,6 +1,5 @@
 #![feature(associated_type_defaults)]
 #![feature(generic_const_exprs)]
-#![feature(non_null_convenience)]
 #![feature(get_mut_unchecked)]
 #![feature(noop_waker)]
 #![feature(ptr_metadata)]

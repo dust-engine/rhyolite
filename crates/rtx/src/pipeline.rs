@@ -736,7 +736,6 @@ pub struct SbtHandles {
     data: Box<[u8]>,
     hitgroup_handle_map: Vec<u32>,
     handle_layout: Layout,
-    group_base_alignment: u32,
     num_raygen: u8,
     num_miss: u8,
     num_callable: u8,
@@ -810,7 +809,6 @@ impl SbtHandles {
                 rtx_properties.shader_group_handle_alignment as usize,
             )
             .unwrap(),
-            group_base_alignment: rtx_properties.shader_group_base_alignment,
             num_raygen: num_raygen,
             num_miss: num_miss,
             num_callable: num_callable,

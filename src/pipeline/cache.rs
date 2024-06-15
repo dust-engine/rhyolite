@@ -228,7 +228,7 @@ impl Default for PipelineCachePlugin {
 }
 
 impl Plugin for PipelineCachePlugin {
-    fn build(&self, app: &mut bevy::prelude::App) {}
+    fn build(&self, _app: &mut bevy::prelude::App) {}
     fn finish(&self, app: &mut bevy::app::App) {
         let cache = PipelineCache {
             device: app.world().resource::<Device>().clone(),

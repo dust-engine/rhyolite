@@ -5,16 +5,16 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{ArchetypeFilter, Changed, Or, QueryFilter, QueryItem, ReadOnlyQueryData, Without},
+        query::{ArchetypeFilter, QueryFilter, QueryItem, ReadOnlyQueryData, Without},
         removal_detection::RemovedComponents,
         schedule::{IntoSystemConfigs, SystemSet},
         system::{
-            Commands, In, ParamSet, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
+            Commands, In, Query, Res, ResMut, Resource, StaticSystemParam, SystemParam,
             SystemParamItem,
         },
     },
     math::UVec3,
-    prelude::{DetectChanges, Mut, Ref},
+    prelude::Mut,
     utils::tracing,
 };
 use bytemuck::NoUninit;

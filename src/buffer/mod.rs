@@ -6,10 +6,7 @@ use std::{
     ops::{Deref, DerefMut, Index, IndexMut, RangeBounds},
 };
 
-use ash::{
-    prelude::VkResult,
-    vk::{self, Handle},
-};
+use ash::{prelude::VkResult, vk};
 
 use crate::{
     commands::TransferCommands, utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel,

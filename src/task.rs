@@ -124,17 +124,15 @@ impl AsyncTaskPool {
         semaphore
             .wait_blocked(task.semaphore_wait_value, !0)
             .unwrap();
-        unsafe {
-            self.semaphores.push(semaphore);
+        self.semaphores.push(semaphore);
 
-            self.compute_command_pool.free(&task.compute_cmd_buf);
-            if let Some(transfer_command_pool) = &mut self.transfer_command_pool {
-                transfer_command_pool.free(&task.transfer_cmd_buf);
-            } else {
-                assert!(task.transfer_cmd_buf.is_empty());
-            }
-            std::mem::forget(task.drop_marker);
+        self.compute_command_pool.free(&task.compute_cmd_buf);
+        if let Some(transfer_command_pool) = &mut self.transfer_command_pool {
+            transfer_command_pool.free(&task.transfer_cmd_buf);
+        } else {
+            assert!(task.transfer_cmd_buf.is_empty());
         }
+        std::mem::forget(task.drop_marker);
         task.result
     }
 }
@@ -214,6 +212,7 @@ impl<'a, const Q: char> AsyncCommandRecorder<'a, Q> {
                 let wait_semaphore_infos = [vk::SemaphoreSubmitInfo {
                     semaphore: semaphore.raw(),
                     value: self.semaphore_wait_value,
+                    stage_mask: wait_stages,
                     ..Default::default()
                 }];
                 self.task_pool
