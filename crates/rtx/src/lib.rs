@@ -18,7 +18,10 @@ use rhyolite::ash::vk;
 pub use sbt::*;
 pub use tlas::*;
 
-use bevy::app::{App, Plugin};
+use bevy::{
+    app::{App, Plugin, PostUpdate},
+    prelude::IntoSystemConfigs,
+};
 pub struct RtxPlugin;
 impl Plugin for RtxPlugin {
     fn build(&self, app: &mut App) {
@@ -53,5 +56,14 @@ impl Plugin for RtxPlugin {
         {
             tracing::info!("Acceleration structure host commands enabled");
         }
+
+        app.add_systems(
+            PostUpdate,
+            (
+                blas::blas_compaction_system,
+                blas::blas_compaction_system_schedule.after(blas::blas_compaction_system),
+            ),
+        );
+        app.init_resource::<blas::BLASCompactionTask>();
     }
 }

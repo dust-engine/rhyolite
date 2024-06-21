@@ -10,13 +10,17 @@ use bevy::{
             Commands, Local, Query, Res, ResMut, StaticSystemParam, SystemParam, SystemParamItem,
         },
     },
+    prelude::{FromWorld, IntoSystemConfigs, Resource, Without},
+    utils::tracing,
 };
 use rhyolite::{
     ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk},
     commands::{ComputeCommands, TransferCommands},
     debug::DebugObject,
+    dispose::RenderObject,
+    ecs::RenderCommands,
     task::{AsyncComputeTask, AsyncTaskPool},
-    Allocator, Buffer, BufferLike, Device, HasDevice,
+    Allocator, Buffer, BufferLike, Device, HasDevice, QueryPool,
 };
 
 use crate::AccelStruct;
@@ -384,6 +388,150 @@ impl<T: BLASBuilder> Default for BLASBuilderPlugin<T> {
 
 impl<T: BLASBuilder> Plugin for BLASBuilderPlugin<T> {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, build_blas_system::<T>);
+        app.add_systems(
+            PostUpdate,
+            build_blas_system::<T>.before(blas_compaction_system),
+        );
     }
+}
+
+#[derive(Component)]
+pub struct BLASCompacted;
+
+#[derive(Component)]
+pub struct BLASProperties {
+    compacted_size: vk::DeviceSize,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct BLASCompactionTask {
+    /// Array of (Entity, original_size) pairs
+    queried_entities: Vec<(Entity, u64)>,
+    query_pool: Option<RenderObject<QueryPool>>,
+    compacted_entities: Vec<(Entity, AccelStruct)>,
+    task: Option<AsyncComputeTask<()>>,
+}
+pub(crate) fn blas_compaction_system(
+    mut commands: Commands,
+    mut task_pool: ResMut<AsyncTaskPool>,
+    mut pending_query_task: ResMut<BLASCompactionTask>,
+    mut existing_blas: Query<&mut BLAS>,
+    // mut render_commands: RenderCommands<'c'>,
+) {
+    if let Some(pending_task) = pending_query_task.task.as_ref() {
+        // Has pending task
+        if !pending_task.is_finished() {
+            return;
+        }
+        // Pending task finished
+        let pending_task = pending_query_task.task.take().unwrap();
+        task_pool.wait_blocked(pending_task);
+
+        // Insert all compacted BLAS
+        for (entity, accel_struct) in pending_query_task.compacted_entities.drain(..) {
+            commands.entity(entity).insert(BLASCompacted);
+            let old_blas = std::mem::replace(
+                &mut existing_blas.get_mut(entity).unwrap().accel_struct,
+                accel_struct,
+            );
+            //RenderObject::new(old_blas).use_on(&mut render_commands); // Defer dropping the BLAS until after the current frame finishes
+        }
+
+        // If did query, get query results
+        if let Some(pool) = pending_query_task.query_pool.take() {
+            assert!(!pending_query_task.queried_entities.is_empty());
+            let mut results = vec![0_u64; pending_query_task.queried_entities.len()];
+            pool.get().get_results_u64(0, &mut results).unwrap();
+            for ((entity, original_size), compacted_size) in
+                pending_query_task.queried_entities.drain(..).zip(results)
+            {
+                commands
+                    .entity(entity)
+                    .insert(BLASProperties { compacted_size });
+            }
+        }
+    }
+}
+
+pub(crate) fn blas_compaction_system_schedule(
+    mut commands: Commands,
+    query_candidates: Query<(Entity, &BLAS), Without<BLASProperties>>,
+    copy_candidates: Query<(Entity, &BLAS, &BLASProperties), Without<BLASCompacted>>,
+    mut task_pool: ResMut<AsyncTaskPool>,
+    device: Res<Device>,
+    allocator: Res<Allocator>,
+    mut pending_query_task: ResMut<BLASCompactionTask>,
+) {
+    if pending_query_task.task.is_some() {
+        return;
+    }
+    if query_candidates.is_empty() && copy_candidates.is_empty() {
+        return;
+    }
+    let mut task = task_pool.spawn_compute();
+
+    let query_accel_structs = query_candidates
+        .iter()
+        .map(|x| x.1.accel_struct.raw)
+        .collect::<Vec<_>>();
+    let query_pool = if !query_accel_structs.is_empty() {
+        let pool = QueryPool::new(
+            device.clone(),
+            vk::QueryType::ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+            query_accel_structs.len() as u32,
+        )
+        .unwrap();
+        let mut pool = RenderObject::new(pool);
+        task.reset_query_pool(&mut pool, ..);
+        task.write_acceleration_structures_properties(&query_accel_structs, &mut pool, 0);
+        Some(pool)
+    } else {
+        None
+    };
+
+    assert!(pending_query_task.compacted_entities.is_empty());
+
+    pending_query_task.compacted_entities = copy_candidates
+        .iter()
+        .filter_map(|(entity, blas, blas_properties)| {
+            if blas.size() * 9 / 10 <= blas_properties.compacted_size {
+                tracing::debug!(
+                    "Skipped BLAS compaction for {:?}: {} -> {}",
+                    entity,
+                    blas.size(),
+                    blas_properties.compacted_size
+                );
+                commands.entity(entity).insert(BLASCompacted);
+                return None;
+            }
+            let compacted_blas = AccelStruct::new(
+                allocator.clone(),
+                blas_properties.compacted_size,
+                vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            )
+            .unwrap();
+            task.copy_acceleration_structure(&vk::CopyAccelerationStructureInfoKHR {
+                src: blas.raw,
+                dst: compacted_blas.raw,
+                mode: vk::CopyAccelerationStructureModeKHR::COMPACT,
+                ..Default::default()
+            });
+            tracing::debug!(
+                "Compacted BLAS for {:?}: {} -> {}",
+                entity,
+                blas.size(),
+                compacted_blas.size()
+            );
+            Some((entity, compacted_blas))
+        })
+        .collect();
+
+    pending_query_task
+        .task
+        .replace(task.finish((), vk::PipelineStageFlags2::empty()));
+    pending_query_task.query_pool = query_pool;
+    pending_query_task.queried_entities = query_candidates
+        .iter()
+        .map(|(entity, blas)| (entity, blas.size()))
+        .collect();
 }

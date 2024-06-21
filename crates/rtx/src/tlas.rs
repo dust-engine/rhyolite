@@ -827,7 +827,8 @@ impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
                     prepare_tlas::<T::TLASType>,
                     (build_tlas::<T::TLASType>)
                         .with_barriers(build_tlas_barrier::<T::TLASType>)
-                        .after(prepare_tlas::<T::TLASType>),
+                        .after(prepare_tlas::<T::TLASType>)
+                        .after(crate::blas_compaction_system),
                 )
                     .in_set(TLASBuilderSet),
             );
@@ -839,7 +840,8 @@ impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
                 extract_input::<T>
                     .with_barriers(extract_input_barrier::<T>)
                     .after(resize_buffer::<T::TLASType>)
-                    .before(prepare_tlas::<T::TLASType>),
+                    .before(prepare_tlas::<T::TLASType>)
+                    .after(crate::blas_compaction_system),
                 assign_index::<T>.before(resize_buffer::<T::TLASType>),
             )
                 .in_set(TLASBuilderSet),

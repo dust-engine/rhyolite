@@ -1,7 +1,7 @@
 use ash::vk::{self};
 use bevy::math::UVec3;
 
-use crate::{ecs::queue_cap::IsComputeQueueCap, BufferLike};
+use crate::{dispose::RenderObject, ecs::queue_cap::IsComputeQueueCap, BufferLike, QueryPool};
 
 use super::CommandRecorder;
 
@@ -84,6 +84,65 @@ pub trait ComputeCommands: Sized + CommandRecorder {
                     indirect_strides,
                     max_primitive_counts,
                 );
+        }
+    }
+
+    fn copy_acceleration_structure(&mut self, info: &vk::CopyAccelerationStructureInfoKHR<'_>) {
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .extension::<ash::khr::acceleration_structure::Meta>()
+                .cmd_copy_acceleration_structure(cmd_buf, info);
+        }
+    }
+
+    fn write_acceleration_structures_properties(
+        &mut self,
+        accel_structs: &[vk::AccelerationStructureKHR],
+        pool: &mut RenderObject<QueryPool>,
+        first_query: u32,
+    ) {
+        let pool = pool.use_on(self.semaphore_signal());
+        debug_assert!(first_query + accel_structs.len() as u32 <= pool.count());
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .extension::<ash::khr::acceleration_structure::Meta>()
+                .cmd_write_acceleration_structures_properties(
+                    cmd_buf,
+                    accel_structs,
+                    pool.query_type(),
+                    pool.raw(),
+                    first_query,
+                );
+        }
+    }
+
+    fn reset_query_pool(
+        &mut self,
+        pool: &mut RenderObject<QueryPool>,
+        range: impl std::ops::RangeBounds<u32>,
+    ) {
+        let pool = pool.use_on(self.semaphore_signal());
+
+        let first_query = match range.start_bound() {
+            std::ops::Bound::Included(&n) => n,
+            std::ops::Bound::Excluded(&n) => n + 1,
+            std::ops::Bound::Unbounded => 0,
+        };
+        let last_query = match range.end_bound() {
+            std::ops::Bound::Included(&n) => n,
+            std::ops::Bound::Excluded(&n) => n - 1,
+            std::ops::Bound::Unbounded => pool.count() - 1,
+        };
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device().cmd_reset_query_pool(
+                cmd_buf,
+                pool.raw(),
+                first_query,
+                last_query + 1 - first_query,
+            );
         }
     }
 }
