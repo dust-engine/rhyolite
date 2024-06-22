@@ -11,7 +11,7 @@ default_features = false
 features = ["manage_clipboard", "open_url", "default_fonts"]
 
 [dependencies]
-bevy = { version = "0.14.0-dev", default-features = false }
+bevy = { version = "0.14.0-rc.3", default-features = false }
 rhyolite = { path = "../../" }
 playout_macro = { path = "../../../playout/macro" }
 bytemuck = "1.15"
