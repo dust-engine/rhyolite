@@ -24,13 +24,14 @@ fn main() {
 
     app.add_systems(Update, ui_example_system);
 
-    let primary_window = app
-        .world
-        .query_filtered::<Entity, With<PrimaryWindow>>()
-        .iter(&app.world)
+    let mut primary_window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>();
+    let primary_window = primary_window
+        .iter(app.world())
         .next()
         .unwrap();
-    app.world
+    app.world_mut()
         .entity_mut(primary_window)
         .insert(SwapchainConfig {
             image_usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT,

@@ -841,7 +841,8 @@ impl<T: TLASBuilder> Plugin for TLASBuilderPlugin<T> {
                     .with_barriers(extract_input_barrier::<T>)
                     .after(resize_buffer::<T::TLASType>)
                     .before(prepare_tlas::<T::TLASType>)
-                    .after(crate::blas_compaction_system),
+                    .after(crate::blas_compaction_system)
+                    .after(bevy::transform::TransformSystem::TransformPropagate),
                 assign_index::<T>.before(resize_buffer::<T::TLASType>),
             )
                 .in_set(TLASBuilderSet),

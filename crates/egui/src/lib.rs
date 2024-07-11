@@ -540,7 +540,7 @@ fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
         let image_offset = image_delta.pos.unwrap_or([0, 0]);
         let buffer_size_needed = image_delta.image.size().iter().product::<usize>()
             * image_delta.image.bytes_per_pixel();
-        let mut staging_buffer = staging_allocator.allocate_buffer(buffer_size_needed as u64, 1);
+        let mut staging_buffer = staging_allocator.allocate_buffer(buffer_size_needed as u64);
         match &image_delta.image {
             egui::epaint::ImageData::Color(image) => {
                 let slice = bytemuck::cast_slice(image.pixels.as_slice());
