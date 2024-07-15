@@ -857,9 +857,8 @@ impl System for InsertPipelineBarrier {
             );
         }
     }
-    
-    fn queue_deferred(&mut self, world: bevy::ecs::world::DeferredWorld) {
-    }
+
+    fn queue_deferred(&mut self, world: bevy::ecs::world::DeferredWorld) {}
 }
 
 pub(crate) struct BarrierProducerOutConfig {

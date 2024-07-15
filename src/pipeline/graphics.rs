@@ -12,7 +12,7 @@ use crate::{
     Device,
 };
 
-use super::PipelineInner;
+use super::{PipelineInner, PipelineLayout};
 
 #[derive(Clone)]
 pub struct GraphicsPipeline(Arc<PipelineInner>);
@@ -39,30 +39,26 @@ impl super::Pipeline for GraphicsPipeline {
 pub struct Builder<'a> {
     device: &'a Device,
     cache: vk::PipelineCache,
-    info: vk::GraphicsPipelineCreateInfo<'a>,
-}
-impl<'a> Deref for Builder<'a> {
-    type Target = vk::GraphicsPipelineCreateInfo<'a>;
-    fn deref(&self) -> &Self::Target {
-        &self.info
-    }
-}
-impl<'a> DerefMut for Builder<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.info
-    }
+    stages: &'a [vk::PipelineShaderStageCreateInfo<'a>],
+    layout: &'a PipelineLayout,
 }
 
 pub struct BuilderResult(VkResult<vk::Pipeline>);
 impl<'a> Builder<'a> {
-    pub fn build(&mut self) -> BuilderResult {
+    /// All fields except `stages` and `layout` of the [`vk::GraphicsPipelineCreateInfo`] are required to be configured
+    /// as specified in [the Vulkan specification](https://vkdoc.net/man/VkGraphicsPipelineCreateInfo).
+    /// `stages` and `layout` will be automatically filled with [`Self::stages`] and [`Self::layout`] respectively.
+    #[must_use]
+    #[inline]
+    pub fn build(self, info: vk::GraphicsPipelineCreateInfo<'a>) -> BuilderResult {
         let mut pipeline = vk::Pipeline::null();
+        let info = info.stages(&self.stages).layout(self.layout.raw());
         let result = unsafe {
             (self.device.fp_v1_0().create_graphics_pipelines)(
                 self.device.handle(),
                 self.cache,
                 1,
-                &self.info,
+                &info,
                 std::ptr::null(),
                 &mut pipeline,
             )
@@ -73,17 +69,25 @@ impl<'a> Builder<'a> {
 
 pub struct GraphicsPipelineBuildInfo<F>
 where
-    F: for<'a> Fn(Builder<'a>) -> BuilderResult,
+    F: for<'a> Fn(Builder<'a>) -> BuilderResult + Send + Sync,
 {
     pub device: Device,
     pub stages: Vec<SpecializedShader>,
+    /// The builder function that will be called asynchronously to create the pipeline.
+    /// 
+    /// This function is expected to call [`Builder::build`] with a [`vk::GraphicsPipelineCreateInfo`].
+    /// All fields except `stages` and `layout` of the [`vk::GraphicsPipelineCreateInfo`] are required to be configured
+    /// as specified in [the Vulkan specification](https://vkdoc.net/man/VkGraphicsPipelineCreateInfo).
+    /// `stages` and `layout` will be automatically filled with [`Self::stages`] and [`Self::layout`] respectively.
     pub builder: F,
+    pub layout: Arc<PipelineLayout>,
 }
 
 pub struct BoxedGraphicsPipelineBuildInfo {
     pub device: Device,
     pub stages: Vec<SpecializedShader>,
     pub builder: Arc<dyn for<'a> Fn(Builder<'a>) -> BuilderResult + Send + Sync>,
+    pub layout: Arc<PipelineLayout>,
 }
 
 impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
@@ -103,6 +107,7 @@ impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
             .map(|shader| assets.get(&shader.shader).map(|s| s.raw()))
             .collect::<Option<Vec<_>>>()?;
         let stages = self.stages.clone();
+        let layout = self.layout.clone();
         Some(pool.schedule(move || {
             let raw_specialization_info = stages
                 .iter()
@@ -121,11 +126,11 @@ impl super::PipelineBuildInfo for BoxedGraphicsPipelineBuildInfo {
                         .specialization_info(specialization_info)
                 })
                 .collect::<Vec<_>>();
-            let info = vk::GraphicsPipelineCreateInfo::default().stages(&stages);
             let result = builder(Builder {
                 device: &device,
                 cache,
-                info,
+                stages: &stages,
+                layout: &layout,
             })
             .0?;
             drop(stages);

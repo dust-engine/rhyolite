@@ -100,6 +100,7 @@ impl PipelineCache {
             device: build_info.device,
             stages: build_info.stages,
             builder: Arc::new(build_info.builder),
+            layout: build_info.layout,
         };
         self.create::<RenderObject<GraphicsPipeline>>(boxed)
     }

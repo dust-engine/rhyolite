@@ -27,10 +27,7 @@ fn main() {
     let mut primary_window = app
         .world_mut()
         .query_filtered::<Entity, With<PrimaryWindow>>();
-    let primary_window = primary_window
-        .iter(app.world())
-        .next()
-        .unwrap();
+    let primary_window = primary_window.iter(app.world()).next().unwrap();
     app.world_mut()
         .entity_mut(primary_window)
         .insert(SwapchainConfig {

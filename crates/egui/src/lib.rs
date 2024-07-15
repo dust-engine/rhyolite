@@ -138,9 +138,9 @@ fn initialize_pipelines(
     )
     .unwrap();
     let layout = Arc::new(layout);
-    let layout2 = layout.clone();
     let pipeline_create_info = GraphicsPipelineBuildInfo {
         device: device.clone(),
+        layout: layout.clone(),
         stages: vec![
             SpecializedShader {
                 stage: vk::ShaderStageFlags::VERTEX,
@@ -153,118 +153,100 @@ fn initialize_pipelines(
                 ..Default::default()
             },
         ],
-        builder: move |mut builder| {
-            let input_bindings = vk::VertexInputBindingDescription {
-                binding: 0,
-                stride: std::mem::size_of::<egui::epaint::Vertex>() as u32,
-                input_rate: vk::VertexInputRate::VERTEX,
-            };
-            let input_attributes = [
-                vk::VertexInputAttributeDescription {
-                    binding: 0,
-                    location: 0,
-                    format: vk::Format::R32G32_SFLOAT,
-                    offset: 0,
-                }, // pos
-                vk::VertexInputAttributeDescription {
-                    binding: 0,
-                    location: 1,
-                    format: vk::Format::R32G32_SFLOAT,
-                    offset: std::mem::size_of::<[f32; 2]>() as u32,
-                }, // uv
-                vk::VertexInputAttributeDescription {
-                    binding: 0,
-                    location: 2,
-                    format: vk::Format::R8G8B8A8_UNORM,
-                    offset: std::mem::size_of::<[f32; 4]>() as u32,
-                }, // color
-            ];
-            let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
-                vertex_binding_description_count: 1,
-                p_vertex_binding_descriptions: &input_bindings,
-                vertex_attribute_description_count: input_attributes.len() as u32,
-                p_vertex_attribute_descriptions: input_attributes.as_ptr(),
-                ..Default::default()
-            };
-            let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
-                topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                primitive_restart_enable: vk::FALSE,
-                ..Default::default()
-            };
-            let viewport = vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: 2560.0,
-                height: 1440.0,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            };
-            let scisser = vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: vk::Extent2D {
-                    width: 2560,
-                    height: 1440,
-                },
-            };
-            let viewport_state = vk::PipelineViewportStateCreateInfo {
-                viewport_count: 1,
-                p_viewports: &viewport,
-                scissor_count: 1,
-                p_scissors: &scisser,
-                ..Default::default()
-            };
-            let rasterization_state = vk::PipelineRasterizationStateCreateInfo {
-                polygon_mode: vk::PolygonMode::FILL,
-                cull_mode: vk::CullModeFlags::NONE,
-                line_width: 1.0,
-                ..Default::default()
-            };
-            let multisample_state = vk::PipelineMultisampleStateCreateInfo {
-                rasterization_samples: vk::SampleCountFlags::TYPE_1,
-                sample_shading_enable: vk::FALSE,
-                ..Default::default()
-            };
-            let color_blend_attachment_state = vk::PipelineColorBlendAttachmentState {
-                color_write_mask: vk::ColorComponentFlags::R
-                    | vk::ColorComponentFlags::G
-                    | vk::ColorComponentFlags::B
-                    | vk::ColorComponentFlags::A,
-                src_color_blend_factor: vk::BlendFactor::ONE,
-                dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-                color_blend_op: vk::BlendOp::ADD,
-                src_alpha_blend_factor: vk::BlendFactor::ONE,
-                dst_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-                alpha_blend_op: vk::BlendOp::ADD,
-                blend_enable: vk::TRUE,
-                ..Default::default()
-            };
-            let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
-                attachment_count: 1,
-                p_attachments: &color_blend_attachment_state,
-                ..Default::default()
-            };
-            let dynamic_rendering_format = vk::Format::B8G8R8A8_SRGB;
-            let dynamic_rendering_info = vk::PipelineRenderingCreateInfo {
-                color_attachment_count: 1,
-                p_color_attachment_formats: &dynamic_rendering_format,
-                ..Default::default()
-            };
-            let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-            let dynamic_state = vk::PipelineDynamicStateCreateInfo {
-                dynamic_state_count: dynamic_states.len() as u32,
-                p_dynamic_states: dynamic_states.as_ptr(),
-                ..Default::default()
-            };
-            builder.p_vertex_input_state = &vertex_input_state;
-            builder.p_input_assembly_state = &input_assembly_state;
-            builder.p_viewport_state = &viewport_state;
-            builder.p_rasterization_state = &rasterization_state;
-            builder.p_multisample_state = &multisample_state;
-            builder.p_color_blend_state = &color_blend_state;
-            builder.p_dynamic_state = &dynamic_state;
-            builder.p_next = &dynamic_rendering_info as *const _ as *const c_void;
-            builder.layout = layout2.raw();
-            builder.build()
+        builder: move |builder: rhyolite::pipeline::Builder| {
+            builder.build(
+                vk::GraphicsPipelineCreateInfo::default()
+                    .input_assembly_state(&vk::PipelineInputAssemblyStateCreateInfo {
+                        topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                        primitive_restart_enable: vk::FALSE,
+                        ..Default::default()
+                    })
+                    .vertex_input_state(
+                        &vk::PipelineVertexInputStateCreateInfo::default()
+                            .vertex_binding_descriptions(&[vk::VertexInputBindingDescription {
+                                binding: 0,
+                                stride: std::mem::size_of::<egui::epaint::Vertex>() as u32,
+                                input_rate: vk::VertexInputRate::VERTEX,
+                            }])
+                            .vertex_attribute_descriptions(&[
+                                vk::VertexInputAttributeDescription {
+                                    binding: 0,
+                                    location: 0,
+                                    format: vk::Format::R32G32_SFLOAT,
+                                    offset: 0,
+                                }, // pos
+                                vk::VertexInputAttributeDescription {
+                                    binding: 0,
+                                    location: 1,
+                                    format: vk::Format::R32G32_SFLOAT,
+                                    offset: std::mem::size_of::<[f32; 2]>() as u32,
+                                }, // uv
+                                vk::VertexInputAttributeDescription {
+                                    binding: 0,
+                                    location: 2,
+                                    format: vk::Format::R8G8B8A8_UNORM,
+                                    offset: std::mem::size_of::<[f32; 4]>() as u32,
+                                }, // color
+                            ]),
+                    )
+                    .viewport_state(
+                        &vk::PipelineViewportStateCreateInfo::default()
+                            .scissors(&[vk::Rect2D {
+                                offset: vk::Offset2D { x: 0, y: 0 },
+                                extent: vk::Extent2D {
+                                    width: 2560,
+                                    height: 1440,
+                                },
+                            }])
+                            .viewports(&[vk::Viewport {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 2560.0,
+                                height: 1440.0,
+                                min_depth: 0.0,
+                                max_depth: 1.0,
+                            }]),
+                    )
+                    .rasterization_state(&vk::PipelineRasterizationStateCreateInfo {
+                        polygon_mode: vk::PolygonMode::FILL,
+                        cull_mode: vk::CullModeFlags::NONE,
+                        line_width: 1.0,
+                        ..Default::default()
+                    })
+                    .multisample_state(&vk::PipelineMultisampleStateCreateInfo {
+                        rasterization_samples: vk::SampleCountFlags::TYPE_1,
+                        sample_shading_enable: vk::FALSE,
+                        ..Default::default()
+                    })
+                    .color_blend_state(
+                        &vk::PipelineColorBlendStateCreateInfo::default().attachments(&[
+                            vk::PipelineColorBlendAttachmentState {
+                                color_write_mask: vk::ColorComponentFlags::R
+                                    | vk::ColorComponentFlags::G
+                                    | vk::ColorComponentFlags::B
+                                    | vk::ColorComponentFlags::A,
+                                src_color_blend_factor: vk::BlendFactor::ONE,
+                                dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                                color_blend_op: vk::BlendOp::ADD,
+                                src_alpha_blend_factor: vk::BlendFactor::ONE,
+                                dst_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                                alpha_blend_op: vk::BlendOp::ADD,
+                                blend_enable: vk::TRUE,
+                                ..Default::default()
+                            },
+                        ]),
+                    )
+                    .dynamic_state(
+                        &vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&[
+                            vk::DynamicState::VIEWPORT,
+                            vk::DynamicState::SCISSOR,
+                        ]),
+                    )
+                    .push_next(
+                        &mut vk::PipelineRenderingCreateInfo::default()
+                            .color_attachment_formats(&[vk::Format::B8G8R8A8_SRGB]),
+                    ),
+            )
         },
     };
     let pipeline = pipeline_cache.create_graphics(pipeline_create_info);
