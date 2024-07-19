@@ -50,7 +50,7 @@ use crate::{
 };
 
 use super::{
-    BarrierProducerCell, BarriersPrevStage, BoxedBarrierProducer, PerFrame, PerFrameResource,
+    BarrierProducerCell, BarriersPrevStage, BoxedBarrierProducer, PerFrame, PerFrameReset,
     RenderSystemConfig, ResInstanceMut,
 };
 use crate::Access;
@@ -90,18 +90,15 @@ impl DefaultCommandPool {
         }
         current
     }
-}
-impl PerFrameResource for DefaultCommandPool {
-    type Param<'a> = (&'a Device, u32);
 
-    fn create((device, queue_family_index): Self::Param<'_>) -> Self {
-        let pool = ManagedCommandPool::new(device.clone(), queue_family_index).unwrap();
-        DefaultCommandPool {
-            pool,
-            buffer: vk::CommandBuffer::null(),
-        }
+    pub fn new(device: Device, queue_family_index: u32) -> Self {
+        let pool = ManagedCommandPool::new(device, queue_family_index).unwrap();
+        Self { pool, buffer: vk::CommandBuffer::null() }
+        
     }
-    fn reset(&mut self, _: Self::Param<'_>) {
+}
+impl PerFrameReset for DefaultCommandPool {
+    fn reset(&mut self) {
         self.pool.reset();
         self.buffer = vk::CommandBuffer::null();
     }
@@ -370,11 +367,8 @@ where
                 change_tick,
             );
         let default_cmd_pool: &'world mut _ = default_cmd_pool.into_inner();
-        let default_cmd_pool = default_cmd_pool.on_frame_index(
-            current_frame_index,
-            state.submission_info.as_ref().unwrap(),
-            (&state.device, state.queue.family),
-        );
+        let default_cmd_pool = default_cmd_pool
+            .on_frame_index(current_frame_index, state.submission_info.as_ref().unwrap());
 
         let mut this = RenderCommands {
             queue: state.queue,
@@ -467,11 +461,7 @@ pub(crate) fn flush_system_graph(
     submission_info: SubmissionInfo,
     device: Res<Device>,
 ) {
-    let default_cmd_pool = default_cmd_pool.on_frame_index(
-        frame_index.0,
-        submission_info.info,
-        (&device, submission_info.queue.family),
-    );
+    let default_cmd_pool = default_cmd_pool.on_frame_index(frame_index.0, submission_info.info);
 
     let mut submission_info = submission_info.info.lock().unwrap();
     if default_cmd_pool.buffer != vk::CommandBuffer::null() {
@@ -491,11 +481,7 @@ pub(crate) fn submit_system_graph(
     device: Res<Device>,
     frame_index: Res<FrameCount>,
 ) {
-    let default_cmd_pool = default_cmd_pool.on_frame_index(
-        frame_index.0,
-        submission_info.info,
-        (&device, submission_info.queue.family),
-    );
+    let default_cmd_pool = default_cmd_pool.on_frame_index(frame_index.0, submission_info.info);
     let queue = submission_info.queue;
     let mut submission_info = submission_info.info.lock().unwrap();
     // Record the trailing pipeline barrier

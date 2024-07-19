@@ -54,7 +54,10 @@ enum QueueSharing {
 #[derive(Resource, Clone)]
 pub struct Queues(Arc<QueuesInner>);
 struct QueuesInner {
-    queues: Vec<QueueSharing>,
+    /// Indexed by [`QueueRef::index`]
+    queues: Vec<(QueueRef, QueueSharing)>,
+
+    /// Ordered in decreasing order of capabilities
     queue_refs: Vec<QueueRef>,
 }
 
@@ -87,7 +90,7 @@ impl<'a> Deref for QueueGuard<'a> {
 
 impl Queues {
     pub fn get(&self, r: QueueRef) -> QueueGuard {
-        match &self.0.queues[r.index as usize] {
+        match &self.0.queues[r.index as usize].1 {
             QueueSharing::Shared(q) => QueueGuard::Shared(q.lock().unwrap()),
             QueueSharing::Exclusive { queue, marker } => {
                 assert!(
@@ -184,7 +187,7 @@ impl Queues {
                         r.caps |= QUEUE_FLAGS_ASYNC;
                         QueueSharing::Shared(Mutex::new(queue))
                     };
-                    (sharing, r)
+                    ((r, sharing), r)
                 })
             })
             .unzip();
@@ -194,6 +197,14 @@ impl Queues {
             .for_each(|(i, r)| r.index = i as u32);
         queue_refs.sort_by_cached_key(|i| i.caps.as_raw().count_ones());
         Self(Arc::new(QueuesInner { queues, queue_refs }))
+    }
+}
+
+impl std::ops::Index<u32> for Queues {
+    type Output = QueueRef;
+
+    fn index(&self, index: u32) -> &Self::Output {
+        &self.0.queues[index as usize].0
     }
 }
 

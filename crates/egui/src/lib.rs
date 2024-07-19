@@ -30,7 +30,7 @@ use rhyolite::{
         GraphicsCommands, RenderPassCommands, ResourceTransitionCommands, TransferCommands,
     },
     ecs::{BarrierProducerOut, Barriers, IntoRenderSystemConfigs},
-    ecs::{PerFrame, PerFrameResource, RenderCommands, RenderImage, RenderRes},
+    ecs::{PerFrame, RenderCommands, RenderImage, RenderRes},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
         PipelineCache, PipelineLayout,
@@ -76,7 +76,6 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
                     .before(present),
             ),
         );
-        app.init_resource::<PerFrame<EguiHostBuffer<Filter>>>();
         app.add_systems(Startup, initialize_pipelines);
         app.add_device_extension::<dynamic_rendering::Meta>()
             .unwrap();
@@ -88,8 +87,21 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
-        let device = app.world().resource::<Device>();
-        if device
+        let allocator = app.world().resource::<Allocator>().clone();
+        app.insert_resource(PerFrame::<EguiHostBuffer<Filter>>::new(|_| {
+            EguiHostBuffer {
+                index_buffer: BufferArray::new_upload(
+                    allocator.clone(),
+                    vk::BufferUsageFlags::INDEX_BUFFER,
+                ),
+                vertex_buffer: BufferArray::new_upload(
+                    allocator.clone(),
+                    vk::BufferUsageFlags::VERTEX_BUFFER,
+                ),
+                marker: Default::default(),
+            }
+        }));
+        if allocator
             .physical_device()
             .properties()
             .memory_model
@@ -258,22 +270,6 @@ pub struct EguiHostBuffer<Filter: QueryFilter> {
     vertex_buffer: BufferArray<egui::epaint::Vertex>,
     marker: std::marker::PhantomData<Filter>,
 }
-impl<Filter: QueryFilter + Send + Sync + 'static> PerFrameResource for EguiHostBuffer<Filter> {
-    type Param<'s> = &'s Allocator;
-    fn create(allocator: &Allocator) -> Self {
-        Self {
-            index_buffer: BufferArray::new_upload(
-                allocator.clone(),
-                vk::BufferUsageFlags::INDEX_BUFFER,
-            ),
-            vertex_buffer: BufferArray::new_upload(
-                allocator.clone(),
-                vk::BufferUsageFlags::VERTEX_BUFFER,
-            ),
-            marker: Default::default(),
-        }
-    }
-}
 #[derive(Resource)]
 pub struct EguiDeviceBuffer<Filter: QueryFilter> {
     total_indices_count: usize,
@@ -319,13 +315,12 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
     commands: RenderCommands<'t'>,
-    allocator: Res<Allocator>,
 ) {
     let Ok(output) = egui_render_output.get_single_mut() else {
         return;
     };
 
-    let host_buffers = host_buffers.on_frame(&commands, &allocator);
+    let host_buffers = host_buffers.on_frame(&commands);
 
     let device_buffers = &mut *device_buffers;
     let mut total_indices_count: usize = 0;
@@ -633,9 +628,8 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     mut commands: RenderCommands<'t'>,
     mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
-    allocator: Res<Allocator>,
 ) {
-    let host_buffers = host_buffers.on_frame(&commands, &allocator);
+    let host_buffers = host_buffers.on_frame(&commands);
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
     if device_buffers.total_vertices_count > 0 {
         commands.copy_buffer(
@@ -751,7 +745,6 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
 
     assets: Res<Assets<ShaderModule>>,
     task_pool: Res<DeferredOperationTaskPool>,
-    allocator: Res<Allocator>,
 ) {
     let Some(pipeline) = pipeline_cache.retrieve(&mut egui_pipeline.pipeline, &assets, &task_pool)
     else {
@@ -765,7 +758,7 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
         Err(QuerySingleError::NoEntities(_)) => return,
         Err(QuerySingleError::MultipleEntities(_)) => panic!(),
     };
-    let host_buffers = host_buffers.on_frame(&commands, &allocator);
+    let host_buffers = host_buffers.on_frame(&commands);
     let mut pass = commands.begin_rendering(&vk::RenderingInfo {
         flags: vk::RenderingFlags::empty(),
         render_area: vk::Rect2D {

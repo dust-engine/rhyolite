@@ -118,7 +118,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         }
         let mut render_graph_meta: Vec<Option<RenderGraphNodeMeta>> =
             (0..graph.systems.len()).map(|_| None).collect();
-        let queue_router = world.resource::<Queues>();
+        let queue_router = world.resource::<Queues>().clone();
 
         // Step 1: Queue coloring.
         // Step 1.1: Generate render graph
@@ -305,7 +305,7 @@ impl ScheduleBuildPass for RenderSystemPass {
         let mut queue_graph_nodes = Vec::<QueueGraphNodeMeta>::new();
 
         // Flush all colors
-        let device = world.resource::<Device>();
+        let device = world.resource::<Device>().clone();
         for (queue_node_buffer, stages) in queue_op_colors.iter_mut() {
             if let Some(a) = queue_node_buffer.take() {
                 // Flush remaining nodes
@@ -353,7 +353,6 @@ impl ScheduleBuildPass for RenderSystemPass {
             }
             for stage in stages.iter_mut() {
                 let mut queue_graph_node_info: Option<QueueGraphNode> = None;
-                let mut force_binary_semaphore = false;
                 let queue_graph_node = queue_graph_nodes.len() as u32;
                 queue_graph.add_node(queue_graph_node);
 
@@ -369,7 +368,6 @@ impl ScheduleBuildPass for RenderSystemPass {
                         stage_index: meta.stage_index,
                         queue: meta.selected_queue,
                     });
-                    force_binary_semaphore |= meta.force_binary_semaphore;
                 }
                 if let Some(queue_graph_node_info) = queue_graph_node_info {
                     queue_graph_nodes.push(QueueGraphNodeMeta {
@@ -401,7 +399,7 @@ impl ScheduleBuildPass for RenderSystemPass {
             }
         }
         // queue graph connectivity
-        for (from, to, edge) in render_graph.all_edges() {
+        for (from, to, _) in render_graph.all_edges() {
             let from_meta = render_graph_meta[from].as_ref().unwrap();
             let to_meta = render_graph_meta[to].as_ref().unwrap();
 
@@ -427,7 +425,10 @@ impl ScheduleBuildPass for RenderSystemPass {
         let queue_id_to_component_id = (0..num_queues)
             .map(|i| unsafe {
                 let id = world.init_instanced_resource::<PerFrame<DefaultCommandPool>>();
-                OwningPtr::make(PerFrame::<DefaultCommandPool>::default(), |value| {
+                let queue = &queue_router[i];
+                OwningPtr::make(PerFrame::<DefaultCommandPool>::new(|_| {
+                    DefaultCommandPool::new(device.clone(), queue.family)
+                }), |value| {
                     world.insert_resource_by_id(id, value);
                 });
                 id
