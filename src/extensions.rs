@@ -66,6 +66,24 @@ impl Extension for ash::khr::maintenance4::Meta {
     }
 }
 
+impl Extension for ash::ext::extended_dynamic_state::Meta {
+    fn promote_device(device: &mut ash::Device, ext: &Self::Device) {
+        let device = ExposedDevice::new(device);
+        device.device_fn_1_3.cmd_set_cull_mode = ext.fp().cmd_set_cull_mode_ext;
+        device.device_fn_1_3.cmd_set_front_face = ext.fp().cmd_set_front_face_ext;
+        device.device_fn_1_3.cmd_set_primitive_topology = ext.fp().cmd_set_primitive_topology_ext;
+        device.device_fn_1_3.cmd_set_viewport_with_count = ext.fp().cmd_set_viewport_with_count_ext;
+        device.device_fn_1_3.cmd_set_scissor_with_count = ext.fp().cmd_set_scissor_with_count_ext;
+        device.device_fn_1_3.cmd_bind_vertex_buffers2 = ext.fp().cmd_bind_vertex_buffers2_ext;
+        device.device_fn_1_3.cmd_set_depth_test_enable = ext.fp().cmd_set_depth_test_enable_ext;
+        device.device_fn_1_3.cmd_set_depth_write_enable = ext.fp().cmd_set_depth_write_enable_ext;
+        device.device_fn_1_3.cmd_set_depth_compare_op = ext.fp().cmd_set_depth_compare_op_ext;
+        device.device_fn_1_3.cmd_set_depth_bounds_test_enable = ext.fp().cmd_set_depth_bounds_test_enable_ext;
+        device.device_fn_1_3.cmd_set_stencil_test_enable = ext.fp().cmd_set_stencil_test_enable_ext;
+        device.device_fn_1_3.cmd_set_stencil_op = ext.fp().cmd_set_stencil_op_ext;
+    }
+}
+
 pub struct ExposedDevice {
     pub handle: vk::Device,
     pub device_fn_1_0: ash::DeviceFnV1_0,

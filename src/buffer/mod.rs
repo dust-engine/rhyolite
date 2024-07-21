@@ -1,3 +1,4 @@
+pub mod immediate_buffer_transfer;
 pub mod staging;
 
 use std::{

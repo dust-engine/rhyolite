@@ -2,9 +2,7 @@ use crate::{utils::VkTaggedObject, Version};
 
 use super::Instance;
 use ash::{
-    khr, nv,
-    prelude::VkResult,
-    vk::{self, ExtendsPhysicalDeviceProperties2, ExtensionMeta, PromotionStatus, TaggedStructure},
+    ext, khr, nv, prelude::VkResult, vk::{self, ExtendsPhysicalDeviceProperties2, ExtensionMeta, PromotionStatus, TaggedStructure}
 };
 use bevy::ecs::system::Resource;
 use core::ffi::c_void;
@@ -450,4 +448,17 @@ impl_feature_for_ext!(
 impl_feature_for_ext!(
     vk::PhysicalDeviceShaderFloat16Int8Features<'_>,
     khr::shader_float16_int8::Meta
+);
+impl_feature_for_ext!(
+    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT<'_>,
+    ext::extended_dynamic_state::Meta
+);
+
+impl_feature_for_ext!(
+    vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT<'_>,
+    ext::extended_dynamic_state2::Meta
+);
+impl_feature_for_ext!(
+    vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT<'_>,
+    ext::extended_dynamic_state3::Meta
 );

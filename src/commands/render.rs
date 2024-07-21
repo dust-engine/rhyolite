@@ -229,6 +229,20 @@ pub trait RenderPassCommands: CommandRecorder {
                 .cmd_set_scissor(cmd_buf, first_scissor, scissors);
         }
     }
+    fn set_line_width(&mut self, line_width: f32) {
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .cmd_set_line_width(cmd_buf, line_width);
+        }
+    }
+    fn set_primitive_topology(&mut self, topology: vk::PrimitiveTopology) {
+        unsafe {
+            let cmd_buf = self.cmd_buf();
+            self.device()
+                .cmd_set_primitive_topology(cmd_buf, topology);
+        }
+    }
 }
 
 impl<T> HasDevice for DynamicRenderPass<'_, T>

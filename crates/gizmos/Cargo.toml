@@ -1,0 +1,8 @@
+[package]
+name = "rhyolite_gizmos"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { version = "0.14.0", default-features = false, features = ["bevy_gizmos"] }
+rhyolite = { path = "../../" }
