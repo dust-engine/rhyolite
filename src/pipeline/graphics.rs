@@ -74,7 +74,7 @@ where
     pub device: Device,
     pub stages: Vec<SpecializedShader>,
     /// The builder function that will be called asynchronously to create the pipeline.
-    /// 
+    ///
     /// This function is expected to call [`Builder::build`] with a [`vk::GraphicsPipelineCreateInfo`].
     /// All fields except `stages` and `layout` of the [`vk::GraphicsPipelineCreateInfo`] are required to be configured
     /// as specified in [the Vulkan specification](https://vkdoc.net/man/VkGraphicsPipelineCreateInfo).

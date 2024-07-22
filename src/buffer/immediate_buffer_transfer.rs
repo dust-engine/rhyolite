@@ -9,7 +9,10 @@ use bevy::{
 use crate::{
     buffer::BufferLike,
     commands::{ResourceTransitionCommands, TrackedResource, TransferCommands},
-    ecs::{queue_cap::IsQueueCap, Barriers, IntoRenderSystemConfigs, PerFrame, RenderCommands, RenderRes},
+    ecs::{
+        queue_cap::IsQueueCap, Barriers, IntoRenderSystemConfigs, PerFrame, RenderCommands,
+        RenderRes,
+    },
     Access, Allocator, BufferArray, Device, HasDevice,
 };
 
@@ -102,7 +105,9 @@ impl<Manager: ImmediateBufferTransferManager + FromWorld> Plugin
             app.add_systems(
                 PostUpdate,
                 (
-                    resize_device_buffers::<Manager>.after(collect_outputs::<Manager>).in_set(ImmediateBufferTransferSet::<Manager>::default()),
+                    resize_device_buffers::<Manager>
+                        .after(collect_outputs::<Manager>)
+                        .in_set(ImmediateBufferTransferSet::<Manager>::default()),
                     copy_buffers::<Manager>
                         .after(resize_device_buffers::<Manager>)
                         .with_barriers(copy_buffers_barrier::<Manager>)
@@ -161,7 +166,13 @@ pub struct ImmediateBuffers<Manager: ImmediateBufferTransferManager> {
     usage_flags: vk::BufferUsageFlags,
 }
 impl<Manager: ImmediateBufferTransferManager> ImmediateBuffers<Manager> {
-    pub fn device_buffer<const Q: char>(&mut self, commands: &RenderCommands<Q> ) -> &BufferArray<Manager::Data> where (): IsQueueCap<Q> {
+    pub fn device_buffer<const Q: char>(
+        &mut self,
+        commands: &RenderCommands<Q>,
+    ) -> &BufferArray<Manager::Data>
+    where
+        (): IsQueueCap<Q>,
+    {
         if let Some(device_buffers) = self.device_buffers.as_ref() {
             device_buffers
         } else {

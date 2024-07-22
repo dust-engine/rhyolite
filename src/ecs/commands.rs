@@ -93,8 +93,10 @@ impl DefaultCommandPool {
 
     pub fn new(device: Device, queue_family_index: u32) -> Self {
         let pool = ManagedCommandPool::new(device, queue_family_index).unwrap();
-        Self { pool, buffer: vk::CommandBuffer::null() }
-        
+        Self {
+            pool,
+            buffer: vk::CommandBuffer::null(),
+        }
     }
 }
 impl PerFrameReset for DefaultCommandPool {

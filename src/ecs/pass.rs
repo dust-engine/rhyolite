@@ -426,11 +426,14 @@ impl ScheduleBuildPass for RenderSystemPass {
             .map(|i| unsafe {
                 let id = world.init_instanced_resource::<PerFrame<DefaultCommandPool>>();
                 let queue = &queue_router[i];
-                OwningPtr::make(PerFrame::<DefaultCommandPool>::new(|_| {
-                    DefaultCommandPool::new(device.clone(), queue.family)
-                }), |value| {
-                    world.insert_resource_by_id(id, value);
-                });
+                OwningPtr::make(
+                    PerFrame::<DefaultCommandPool>::new(|_| {
+                        DefaultCommandPool::new(device.clone(), queue.family)
+                    }),
+                    |value| {
+                        world.insert_resource_by_id(id, value);
+                    },
+                );
                 id
             })
             .collect::<Vec<_>>();

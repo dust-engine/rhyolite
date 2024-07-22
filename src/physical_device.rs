@@ -2,7 +2,9 @@ use crate::{utils::VkTaggedObject, Version};
 
 use super::Instance;
 use ash::{
-    ext, khr, nv, prelude::VkResult, vk::{self, ExtendsPhysicalDeviceProperties2, ExtensionMeta, PromotionStatus, TaggedStructure}
+    ext, khr, nv,
+    prelude::VkResult,
+    vk::{self, ExtendsPhysicalDeviceProperties2, ExtensionMeta, PromotionStatus, TaggedStructure},
 };
 use bevy::ecs::system::Resource;
 use core::ffi::c_void;

@@ -78,7 +78,8 @@ impl Extension for ash::ext::extended_dynamic_state::Meta {
         device.device_fn_1_3.cmd_set_depth_test_enable = ext.fp().cmd_set_depth_test_enable_ext;
         device.device_fn_1_3.cmd_set_depth_write_enable = ext.fp().cmd_set_depth_write_enable_ext;
         device.device_fn_1_3.cmd_set_depth_compare_op = ext.fp().cmd_set_depth_compare_op_ext;
-        device.device_fn_1_3.cmd_set_depth_bounds_test_enable = ext.fp().cmd_set_depth_bounds_test_enable_ext;
+        device.device_fn_1_3.cmd_set_depth_bounds_test_enable =
+            ext.fp().cmd_set_depth_bounds_test_enable_ext;
         device.device_fn_1_3.cmd_set_stencil_test_enable = ext.fp().cmd_set_stencil_test_enable_ext;
         device.device_fn_1_3.cmd_set_stencil_op = ext.fp().cmd_set_stencil_op_ext;
     }

@@ -6,7 +6,9 @@ use bevy::ecs::query::QuerySingleError;
 use bevy::gizmos::LineGizmo;
 use bevy::window::PrimaryWindow;
 use bevy::{ecs::system::SystemParamItem, prelude::*};
-use rhyolite::commands::{CommonCommands, GraphicsCommands, RenderPassCommands, ResourceTransitionCommands};
+use rhyolite::commands::{
+    CommonCommands, GraphicsCommands, RenderPassCommands, ResourceTransitionCommands,
+};
 use rhyolite::dispose::RenderObject;
 use rhyolite::ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands};
 use rhyolite::immediate_buffer_transfer::{ImmediateBufferTransferSet, ImmediateBuffers};
@@ -15,13 +17,16 @@ use rhyolite::pipeline::{
 };
 use rhyolite::shader::{ShaderModule, SpecializedShader};
 use rhyolite::{
-    ImageLike, ImageViewLike,
+    acquire_swapchain_image, present, Access, BufferLike, DeferredOperationTaskPool, Device,
+    RhyoliteApp, SwapchainImage,
+};
+use rhyolite::{
     ash::vk,
     buffer::immediate_buffer_transfer::{
         ImmediateBufferTransferManager, ImmediateBufferTransferPlugin,
     },
+    ImageLike, ImageViewLike,
 };
-use rhyolite::{acquire_swapchain_image, present, Access, BufferLike, DeferredOperationTaskPool, Device, RhyoliteApp, SwapchainImage};
 pub struct GizmosPlugin;
 
 impl Plugin for GizmosPlugin {
@@ -32,20 +37,30 @@ impl Plugin for GizmosPlugin {
         ));
 
         app.add_systems(Startup, initialize_pipelines);
-        app.add_systems(PostUpdate, draw
-            .with_barriers(draw_barriers)
-            .after(acquire_swapchain_image::<With<PrimaryWindow>>)
-            .before(present)
-            .after(ImmediateBufferTransferSet::<GizmosBufferManager>::default())
+        app.add_systems(
+            PostUpdate,
+            draw.with_barriers(draw_barriers)
+                .after(acquire_swapchain_image::<With<PrimaryWindow>>)
+                .before(present)
+                .after(ImmediateBufferTransferSet::<GizmosBufferManager>::default()),
         );
 
-        app.add_device_extension::<rhyolite::ash::khr::dynamic_rendering::Meta>().unwrap();
-        app.add_device_extension::<rhyolite::ash::ext::extended_dynamic_state::Meta>().unwrap();
+        app.add_device_extension::<rhyolite::ash::khr::dynamic_rendering::Meta>()
+            .unwrap();
+        app.add_device_extension::<rhyolite::ash::ext::extended_dynamic_state::Meta>()
+            .unwrap();
 
-        app.enable_feature::<vk::PhysicalDeviceDynamicRenderingFeatures>(|x| &mut x.dynamic_rendering).unwrap();
-        app.enable_feature::<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>(|x| &mut x.extended_dynamic_state).unwrap();
+        app.enable_feature::<vk::PhysicalDeviceDynamicRenderingFeatures>(|x| {
+            &mut x.dynamic_rendering
+        })
+        .unwrap();
+        app.enable_feature::<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>(|x| {
+            &mut x.extended_dynamic_state
+        })
+        .unwrap();
 
-        app.enable_feature::<vk::PhysicalDeviceFeatures>(|x| &mut x.wide_lines).unwrap();
+        app.enable_feature::<vk::PhysicalDeviceFeatures>(|x| &mut x.wide_lines)
+            .unwrap();
     }
 }
 
@@ -202,12 +217,14 @@ fn initialize_pipelines(
                             },
                         ]),
                     )
-                    .dynamic_state(&vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&[
-                        vk::DynamicState::PRIMITIVE_TOPOLOGY,
-                        vk::DynamicState::LINE_WIDTH,
-                        vk::DynamicState::VIEWPORT,
-                        vk::DynamicState::SCISSOR,
-                    ]))
+                    .dynamic_state(
+                        &vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&[
+                            vk::DynamicState::PRIMITIVE_TOPOLOGY,
+                            vk::DynamicState::LINE_WIDTH,
+                            vk::DynamicState::VIEWPORT,
+                            vk::DynamicState::SCISSOR,
+                        ]),
+                    )
                     .push_next(
                         &mut vk::PipelineRenderingCreateInfo::default()
                             .color_attachment_formats(&[vk::Format::B8G8R8A8_UNORM]),
@@ -267,20 +284,20 @@ fn draw(
     };
     let swapchain_image = primary_window.single();
 
-
     let vertex_buffer = buffers.device_buffer(&render_commands);
-    let mut render_pass = render_commands.begin_rendering(&vk::RenderingInfo {
-        render_area: vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-                width: swapchain_image.extent().x,
-                height: swapchain_image.extent().y,
+    let mut render_pass = render_commands.begin_rendering(
+        &vk::RenderingInfo {
+            render_area: vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: swapchain_image.extent().x,
+                    height: swapchain_image.extent().y,
+                },
             },
-        },
-        layer_count: 1,
-        ..Default::default()
-    }.color_attachments(&[
-        vk::RenderingAttachmentInfo {
+            layer_count: 1,
+            ..Default::default()
+        }
+        .color_attachments(&[vk::RenderingAttachmentInfo {
             image_view: swapchain_image.raw_image_view(),
             image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             load_op: vk::AttachmentLoadOp::CLEAR,
@@ -291,8 +308,8 @@ fn draw(
                 },
             },
             ..Default::default()
-        }
-    ]));
+        }]),
+    );
 
     render_pass.bind_pipeline(pipeline);
 
@@ -312,15 +329,16 @@ fn draw(
             max_depth: 1.0,
         }],
     );
-    render_pass.set_scissor(0, &[
-        vk::Rect2D {
+    render_pass.set_scissor(
+        0,
+        &[vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
             extent: vk::Extent2D {
                 width: viewport_physical_size.x as u32,
                 height: viewport_physical_size.y as u32,
             },
-        },
-    ]);
+        }],
+    );
     let mut i = 0;
     for (_, line) in line_gizmos.iter() {
         let Some((config, _)) = config.get_config_dyn(&line.config_ty) else {

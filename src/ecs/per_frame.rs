@@ -1,7 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
-use bevy::{ecs::system::{InstancedResource, Resource}, prelude::FromWorld};
+use bevy::{
+    ecs::system::{InstancedResource, Resource},
+    prelude::FromWorld,
+};
 
 use crate::semaphore::TimelineSemaphore;
 use smallvec::SmallVec;
@@ -39,12 +42,9 @@ impl<T> Drop for PerFrameResourceFrame<T> {
     }
 }
 
-
 impl<T: FromWorld> FromWorld for PerFrame<T> {
     fn from_world(world: &mut bevy::prelude::World) -> Self {
-        Self::new(|_| {
-            T::from_world(world)
-        })
+        Self::new(|_| T::from_world(world))
     }
 }
 impl<T: PerFrameReset> PerFrame<T> {

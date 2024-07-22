@@ -759,7 +759,7 @@ impl TrackedResource for SwapchainImage {
         commands: &mut impl ResourceTransitionCommands,
     ) {
         let image = self
-            .inner 
+            .inner
             .as_mut()
             .expect("SwapchainAcquire must have been called");
 
