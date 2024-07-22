@@ -8,7 +8,7 @@ use bevy::{
 
 use crate::{
     buffer::BufferLike,
-    commands::{ResourceTransitionCommands, TransferCommands},
+    commands::{ResourceTransitionCommands, TrackedResource, TransferCommands},
     ecs::{queue_cap::IsQueueCap, Barriers, IntoRenderSystemConfigs, PerFrame, RenderCommands, RenderRes},
     Access, Allocator, BufferArray, Device, HasDevice,
 };
@@ -102,10 +102,11 @@ impl<Manager: ImmediateBufferTransferManager + FromWorld> Plugin
             app.add_systems(
                 PostUpdate,
                 (
-                    resize_device_buffers::<Manager>.after(collect_outputs::<Manager>),
+                    resize_device_buffers::<Manager>.after(collect_outputs::<Manager>).in_set(ImmediateBufferTransferSet::<Manager>::default()),
                     copy_buffers::<Manager>
                         .after(resize_device_buffers::<Manager>)
-                        .with_barriers(copy_buffers_barrier::<Manager>),
+                        .with_barriers(copy_buffers_barrier::<Manager>)
+                        .in_set(ImmediateBufferTransferSet::<Manager>::default()),
                 ),
             );
             device_buffers = Some(RenderRes::new(BufferArray::new_resource(
@@ -165,6 +166,28 @@ impl<Manager: ImmediateBufferTransferManager> ImmediateBuffers<Manager> {
             device_buffers
         } else {
             self.host_buffers.on_frame(commands)
+        }
+    }
+}
+
+impl<Manager: ImmediateBufferTransferManager> TrackedResource for ImmediateBuffers<Manager> {
+    type State = ();
+
+    fn transition(
+        &mut self,
+        access: Access,
+        retain_data: bool,
+        next_state: Self::State,
+        commands: &mut impl ResourceTransitionCommands,
+    ) {
+        if let Some(device_buffers) = self.device_buffers.as_mut() {
+            commands.transition(device_buffers, access, retain_data, next_state);
+        }
+    }
+
+    fn current_state(&self) -> Self::State {
+        if let Some(device_buffers) = self.device_buffers.as_ref() {
+            device_buffers.current_state()
         }
     }
 }

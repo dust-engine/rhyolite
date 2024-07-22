@@ -1,13 +1,15 @@
 use std::mem::{offset_of, MaybeUninit};
+use std::ops::DerefMut;
 use std::sync::Arc;
 
+use bevy::ecs::query::QuerySingleError;
 use bevy::gizmos::LineGizmo;
 use bevy::window::PrimaryWindow;
 use bevy::{ecs::system::SystemParamItem, prelude::*};
-use rhyolite::commands::{CommonCommands, GraphicsCommands, RenderPassCommands};
+use rhyolite::commands::{CommonCommands, GraphicsCommands, RenderPassCommands, ResourceTransitionCommands};
 use rhyolite::dispose::RenderObject;
-use rhyolite::ecs::RenderCommands;
-use rhyolite::immediate_buffer_transfer::ImmediateBuffers;
+use rhyolite::ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands};
+use rhyolite::immediate_buffer_transfer::{ImmediateBufferTransferSet, ImmediateBuffers};
 use rhyolite::pipeline::{
     CachedPipeline, GraphicsPipeline, GraphicsPipelineBuildInfo, PipelineCache, PipelineLayout,
 };
@@ -19,7 +21,7 @@ use rhyolite::{
         ImmediateBufferTransferManager, ImmediateBufferTransferPlugin,
     },
 };
-use rhyolite::{acquire_swapchain_image, BufferLike, DeferredOperationTaskPool, Device, RhyoliteApp, SwapchainImage, present};
+use rhyolite::{acquire_swapchain_image, present, Access, BufferLike, DeferredOperationTaskPool, Device, RhyoliteApp, SwapchainImage};
 pub struct GizmosPlugin;
 
 impl Plugin for GizmosPlugin {
@@ -30,7 +32,12 @@ impl Plugin for GizmosPlugin {
         ));
 
         app.add_systems(Startup, initialize_pipelines);
-        app.add_systems(PostUpdate, draw.after(acquire_swapchain_image::<With<PrimaryWindow>>).before(present));
+        app.add_systems(PostUpdate, draw
+            .with_barriers(draw_barriers)
+            .after(acquire_swapchain_image::<With<PrimaryWindow>>)
+            .before(present)
+            .after(ImmediateBufferTransferSet::<GizmosBufferManager>::default())
+        );
 
         app.add_device_extension::<rhyolite::ash::khr::dynamic_rendering::Meta>().unwrap();
         app.add_device_extension::<rhyolite::ash::ext::extended_dynamic_state::Meta>().unwrap();
@@ -212,6 +219,37 @@ fn initialize_pipelines(
     commands.insert_resource(GizmoPipelines { pipeline, layout });
 }
 // endregion
+
+fn draw_barriers(
+    mut barriers: In<Barriers>,
+    mut buffers: ResMut<ImmediateBuffers<GizmosBufferManager>>,
+    mut output_images: Query<(&mut SwapchainImage), With<PrimaryWindow>>,
+) {
+    let swapchain_image = match output_images.get_single_mut() {
+        Ok(r) => r,
+        Err(QuerySingleError::NoEntities(_)) => return (),
+        Err(QuerySingleError::MultipleEntities(_)) => panic!(),
+    };
+    barriers.transition(
+        swapchain_image.into_inner().deref_mut(),
+        Access {
+            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+        },
+        false,
+        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    );
+
+    barriers.transition(
+        &mut *buffers,
+        Access {
+            stage: vk::PipelineStageFlags2::VERTEX_INPUT,
+            access: vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
+        },
+        true,
+        (),
+    );
+}
 
 fn draw(
     mut render_commands: RenderCommands<'g'>,

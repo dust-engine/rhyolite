@@ -136,7 +136,7 @@ impl<S: HasDevice> Drop for ImmediateTransitions<'_, S> {
     }
 }
 
-pub trait TrackedResource: Deref {
+pub trait TrackedResource {
     type State = ();
     fn transition(
         &mut self,

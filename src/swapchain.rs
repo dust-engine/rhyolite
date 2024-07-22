@@ -759,11 +759,11 @@ impl TrackedResource for SwapchainImage {
         commands: &mut impl ResourceTransitionCommands,
     ) {
         let image = self
-            .inner
+            .inner 
             .as_mut()
             .expect("SwapchainAcquire must have been called");
 
-        if image.res.state.write_semaphore.is_none() || image.res.state.read_semaphores.is_empty() {
+        if self.acquire_semaphore != vk::Semaphore::null() {
             assert!(self.acquire_semaphore != vk::Semaphore::null());
             commands
                 .wait_binary_semaphore(std::mem::take(&mut self.acquire_semaphore), access.stage);

@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use ash::vk::{self};
 use bevy::math::IVec3;
 
@@ -11,8 +13,8 @@ use super::{CommandRecorder, SemaphoreSignalCommands, TrackedResource};
 pub trait GraphicsCommands: Sized + CommandRecorder {
     fn blit_image<S: ImageLike, D: ImageLike>(
         &mut self,
-        src: &impl TrackedResource<State = vk::ImageLayout, Target = S>,
-        dst: &impl TrackedResource<State = vk::ImageLayout, Target = D>,
+        src: &(impl TrackedResource<State = vk::ImageLayout> + Deref<Target = S>),
+        dst: &(impl TrackedResource<State = vk::ImageLayout> + Deref<Target = D>),
         filter: vk::Filter,
     ) {
         unsafe {
