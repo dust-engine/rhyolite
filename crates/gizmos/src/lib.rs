@@ -16,9 +16,11 @@ use rhyolite::dispose::RenderObject;
 use rhyolite::ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands};
 use rhyolite::immediate_buffer_transfer::{ImmediateBufferTransferSet, ImmediateBuffers};
 use rhyolite::pipeline::{
-    CachedPipeline, GraphicsPipeline, GraphicsPipelineBuildInfo, PipelineCache, PipelineLayout,
+    CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
+    PipelineCache, PipelineLayout,
 };
 use rhyolite::shader::{ShaderModule, SpecializedShader};
+use rhyolite::staging::UniformBelt;
 use rhyolite::{
     acquire_swapchain_image, present, Access, BufferLike, DeferredOperationTaskPool, Device,
     RhyoliteApp, SwapchainImage,
@@ -34,8 +36,11 @@ pub struct GizmosPlugin;
 
 pub trait GizmosDrawDelegate: 'static + Send + Sync {
     type Params: SystemParam;
-    fn get_view_transform(params: &mut SystemParamItem<Self::Params>) -> Mat4;
+    fn get_view_transform(params: &mut SystemParamItem<Self::Params>, aspect_ratio: f32) -> Mat4;
 }
+
+#[derive(SystemSet, Hash, Debug, Clone, Eq, PartialEq)]
+pub struct GizmoSystemSet;
 
 pub fn add_draw_delegate<Delegate>(app: &mut App)
 where
@@ -47,7 +52,8 @@ where
             .with_barriers(draw_barriers)
             .after(acquire_swapchain_image::<With<PrimaryWindow>>)
             .before(present)
-            .after(ImmediateBufferTransferSet::<GizmosBufferManager>::default()),
+            .after(ImmediateBufferTransferSet::<GizmosBufferManager>::default())
+            .in_set(GizmoSystemSet),
     );
 }
 
@@ -132,7 +138,20 @@ fn initialize_pipelines(
 ) {
     let layout = PipelineLayout::new(
         device.clone(),
-        vec![],
+        vec![Arc::new(
+            DescriptorSetLayout::new(
+                device.clone(),
+                &[vk::DescriptorSetLayoutBinding {
+                    binding: 0,
+                    descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+                    descriptor_count: 1,
+                    stage_flags: vk::ShaderStageFlags::VERTEX,
+                    ..Default::default()
+                }],
+                vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR,
+            )
+            .unwrap(),
+        )],
         &[vk::PushConstantRange {
             offset: 0,
             size: std::mem::size_of::<[f32; 2]>() as u32,
@@ -299,13 +318,20 @@ fn draw_gizmos<D: GizmosDrawDelegate>(
     config: Res<GizmoConfigStore>,
 
     mut params: StaticSystemParam<D::Params>,
+
+    mut uniform_belt: ResMut<UniformBelt>,
 ) {
     let Some(pipeline) = pipeline_cache.retrieve(&mut pipelines.pipeline, &assets, &pool) else {
         return;
     };
-    let swapchain_image = primary_window.single();
+    let Ok(swapchain_image) = primary_window.get_single() else {
+        return;
+    };
+    let aspect_ratio = swapchain_image.extent().x as f32 / swapchain_image.extent().y as f32;
 
-    let mat = D::get_view_transform(&mut params);
+    let mat = D::get_view_transform(&mut params, aspect_ratio);
+    let mut uniform_belt = uniform_belt.start(&mut render_commands);
+    let camera_uniform = uniform_belt.push_item(&mat);
 
     let vertex_buffer = buffers.device_buffer(&render_commands);
     let mut render_pass = render_commands.begin_rendering(
@@ -323,18 +349,28 @@ fn draw_gizmos<D: GizmosDrawDelegate>(
         .color_attachments(&[vk::RenderingAttachmentInfo {
             image_view: swapchain_image.raw_image_view(),
             image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            load_op: vk::AttachmentLoadOp::CLEAR,
+            load_op: vk::AttachmentLoadOp::LOAD,
             store_op: vk::AttachmentStoreOp::STORE,
-            clear_value: vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, 0.1, 0.0, 0.0],
-                },
-            },
             ..Default::default()
         }]),
     );
 
     render_pass.bind_pipeline(pipeline);
+    render_pass.push_descriptor_set(
+        &pipelines.layout,
+        0,
+        &[vk::WriteDescriptorSet {
+            dst_binding: 0,
+            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+            ..Default::default()
+        }
+        .buffer_info(&[vk::DescriptorBufferInfo {
+            buffer: camera_uniform.buffer,
+            offset: camera_uniform.offset,
+            range: camera_uniform.size,
+        }])],
+        vk::PipelineBindPoint::GRAPHICS,
+    );
 
     render_pass.bind_vertex_buffers(0, &[vertex_buffer.raw_buffer()], &[0]);
     let viewport_physical_size = Vec2::new(
@@ -345,9 +381,9 @@ fn draw_gizmos<D: GizmosDrawDelegate>(
         0,
         &[vk::Viewport {
             x: 0.0,
-            y: 0.0,
+            y: viewport_physical_size.y,
             width: viewport_physical_size.x,
-            height: viewport_physical_size.y,
+            height: -viewport_physical_size.y,
             min_depth: 0.0,
             max_depth: 1.0,
         }],

@@ -10,3 +10,5 @@ rhyolite = { path = "../../" }
 [[bin]]
 name = "process-assets"
 path = "src/process_assets.rs"
+required-features = ["bevy/asset_processor"]
+
