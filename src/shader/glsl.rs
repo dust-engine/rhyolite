@@ -183,17 +183,18 @@ impl AssetSaver for GlslSaver {
     }
 }
 
-pub struct GlslPlugin;
+pub struct GlslPlugin {
+    pub target_vk_version: Version,
+}
 impl Plugin for GlslPlugin {
     fn build(&self, app: &mut App) {
         use super::loader::SpirvSaver;
-        let target_vk_version = app.world().resource::<Instance>().api_version();
         app.init_asset::<GlslShaderSource>()
             .register_asset_loader(GlslSourceLoader)
             .register_asset_loader(PlayoutGlslLoader)
             .register_asset_loader(GlslShadercCompiler {
                 target_spirv: SpirvVersion::V1_5,
-                target_vk_version: target_vk_version,
+                target_vk_version: self.target_vk_version,
             });
         if let Some(processor) = app
             .world()

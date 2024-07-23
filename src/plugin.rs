@@ -252,7 +252,9 @@ impl Plugin for RhyolitePlugin {
             .ok();
 
         #[cfg(feature = "glsl")]
-        app.add_plugins(crate::shader::loader::GlslPlugin);
+        app.add_plugins(crate::shader::loader::GlslPlugin {
+            target_vk_version: self.api_version,
+        });
 
         app.add_plugins(crate::staging::StagingBeltPlugin);
         app.add_plugins(crate::dispose::DisposerPlugin);

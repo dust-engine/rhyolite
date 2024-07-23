@@ -2,7 +2,10 @@ use std::mem::{offset_of, MaybeUninit};
 use std::ops::DerefMut;
 use std::sync::Arc;
 
+use bevy::asset::{embedded_asset, embedded_path};
 use bevy::ecs::query::QuerySingleError;
+use bevy::ecs::schedule::NodeConfigs;
+use bevy::ecs::system::{StaticSystemParam, SystemParam};
 use bevy::gizmos::LineGizmo;
 use bevy::window::PrimaryWindow;
 use bevy::{ecs::system::SystemParamItem, prelude::*};
@@ -29,21 +32,35 @@ use rhyolite::{
 };
 pub struct GizmosPlugin;
 
+pub trait GizmosDrawDelegate: 'static + Send + Sync {
+    type Params: SystemParam;
+    fn get_view_transform(params: &mut SystemParamItem<Self::Params>) -> Mat4;
+}
+
+pub fn add_draw_delegate<Delegate>(app: &mut App)
+where
+    Delegate: GizmosDrawDelegate,
+{
+    app.add_systems(
+        PostUpdate,
+        draw_gizmos::<Delegate>
+            .with_barriers(draw_barriers)
+            .after(acquire_swapchain_image::<With<PrimaryWindow>>)
+            .before(present)
+            .after(ImmediateBufferTransferSet::<GizmosBufferManager>::default()),
+    );
+}
+
 impl Plugin for GizmosPlugin {
     fn build(&self, app: &mut App) {
+        embedded_asset!(app, "../imported_assets/Default/gizmo.frag");
+        embedded_asset!(app, "../imported_assets/Default/gizmo.vert");
         app.add_plugins(ImmediateBufferTransferPlugin::<GizmosBufferManager>::new(
             vk::BufferUsageFlags::VERTEX_BUFFER,
             4,
         ));
 
         app.add_systems(Startup, initialize_pipelines);
-        app.add_systems(
-            PostUpdate,
-            draw.with_barriers(draw_barriers)
-                .after(acquire_swapchain_image::<With<PrimaryWindow>>)
-                .before(present)
-                .after(ImmediateBufferTransferSet::<GizmosBufferManager>::default()),
-        );
 
         app.add_device_extension::<rhyolite::ash::khr::dynamic_rendering::Meta>()
             .unwrap();
@@ -131,12 +148,14 @@ fn initialize_pipelines(
         stages: vec![
             SpecializedShader {
                 stage: vk::ShaderStageFlags::VERTEX,
-                shader: assets.load("shaders/gizmo.vert"),
+                shader: assets
+                    .load("embedded://rhyolite_gizmos/../imported_assets/Default/gizmo.vert"),
                 ..Default::default()
             },
             SpecializedShader {
                 stage: vk::ShaderStageFlags::FRAGMENT,
-                shader: assets.load("shaders/gizmo.frag"),
+                shader: assets
+                    .load("embedded://rhyolite_gizmos/../imported_assets/Default/gizmo.frag"),
                 ..Default::default()
             },
         ],
@@ -268,7 +287,7 @@ fn draw_barriers(
     );
 }
 
-fn draw(
+fn draw_gizmos<D: GizmosDrawDelegate>(
     mut render_commands: RenderCommands<'g'>,
     mut pipelines: ResMut<GizmoPipelines>,
     pipeline_cache: Res<PipelineCache>,
@@ -278,11 +297,15 @@ fn draw(
     primary_window: Query<&mut SwapchainImage, With<PrimaryWindow>>,
     line_gizmos: Res<Assets<LineGizmo>>,
     config: Res<GizmoConfigStore>,
+
+    mut params: StaticSystemParam<D::Params>,
 ) {
     let Some(pipeline) = pipeline_cache.retrieve(&mut pipelines.pipeline, &assets, &pool) else {
         return;
     };
     let swapchain_image = primary_window.single();
+
+    let mat = D::get_view_transform(&mut params);
 
     let vertex_buffer = buffers.device_buffer(&render_commands);
     let mut render_pass = render_commands.begin_rendering(
