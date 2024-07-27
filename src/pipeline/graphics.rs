@@ -1,7 +1,4 @@
-use std::{
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use ash::{prelude::VkResult, vk};
 use bevy::asset::{AssetId, Assets};

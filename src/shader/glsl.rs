@@ -12,7 +12,7 @@ use bevy::utils::ConditionalSendFuture;
 use shaderc::ResolvedInclude;
 use thiserror::Error;
 
-use crate::{Instance, Version};
+use crate::Version;
 
 use super::spirv::SpirvShaderSource;
 

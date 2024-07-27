@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, mem::MaybeUninit, ops::DerefMut};
+use std::{fmt::Debug, hash::Hash, mem::MaybeUninit};
 
 use ash::vk;
 use bevy::{
@@ -13,7 +13,7 @@ use crate::{
         queue_cap::IsQueueCap, Barriers, IntoRenderSystemConfigs, PerFrame, RenderCommands,
         RenderRes,
     },
-    Access, Allocator, BufferArray, Device, HasDevice,
+    Access, Allocator, BufferArray, HasDevice,
 };
 
 /// A plugin that transfers buffer data immediately.
@@ -208,7 +208,6 @@ impl<Manager: ImmediateBufferTransferManager> TrackedResource for ImmediateBuffe
 fn collect_outputs<Manager: ImmediateBufferTransferManager>(
     mut manager: ResMut<Manager>,
     commands: RenderCommands<'t'>,
-    allocator: Res<Allocator>,
     mut buffers: ResMut<ImmediateBuffers<Manager>>,
     mut params: StaticSystemParam<Manager::Params>,
 ) {
@@ -260,7 +259,6 @@ fn copy_buffers_barrier<Manager: ImmediateBufferTransferManager>(
 fn copy_buffers<Manager: ImmediateBufferTransferManager>(
     mut buffers: ResMut<ImmediateBuffers<Manager>>,
     mut commands: RenderCommands<'t'>,
-    allocator: Res<Allocator>,
 ) {
     if buffers.size > 0 {
         let host_buffers = buffers.host_buffers.on_frame(&commands);

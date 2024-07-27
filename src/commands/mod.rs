@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ops::Deref, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 
 use ash::{khr, vk};
 use smallvec::SmallVec;
@@ -489,15 +489,15 @@ impl<T: SemaphoreSignalCommands> ResourceTransitionCommands for ImmediateTransit
     }
     fn add_image_barrier_prev_stage(
         &mut self,
-        barrier: vk::ImageMemoryBarrier2,
-        queue_type: QueueRef,
+        _barrier: vk::ImageMemoryBarrier2,
+        _queue_type: QueueRef,
     ) -> &mut Self {
         panic!()
     }
     fn add_buffer_barrier_prev_stage(
         &mut self,
-        barrier: vk::BufferMemoryBarrier2,
-        queue_type: QueueRef,
+        _barrier: vk::BufferMemoryBarrier2,
+        _queue_type: QueueRef,
     ) -> &mut Self {
         panic!()
     }

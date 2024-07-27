@@ -259,25 +259,24 @@ where
 
     fn signal_binary_semaphore_prev_stage(
         &mut self,
-        semaphore: vk::Semaphore,
-        stage: vk::PipelineStageFlags2,
-        prev_queue: QueueRef,
+        _semaphore: vk::Semaphore,
+        _stage: vk::PipelineStageFlags2,
+        _prev_queue: QueueRef,
     ) {
         todo!()
     }
 
     fn wait_binary_semaphore_prev_stage(
         &mut self,
-        semaphore: vk::Semaphore,
-        stage: vk::PipelineStageFlags2,
-        prev_queue: QueueRef,
+        _semaphore: vk::Semaphore,
+        _stage: vk::PipelineStageFlags2,
+        _prev_queue: QueueRef,
     ) {
         todo!()
     }
 }
 
 pub struct RenderCommandState {
-    device: Device,
     default_cmd_pool_state: Option<ComponentId>,
     submission_info: Option<Arc<Mutex<QueueSubmissionInfo>>>,
     prev_stage_submission_info: SmallVec<[Option<Arc<Mutex<QueueSubmissionInfo>>>; 4]>,
@@ -301,7 +300,6 @@ where
             ResInstanceMut::<PerFrame<DefaultCommandPool>>::init_state(world, system_meta);
         let frame_index_state = Res::<FrameCount>::init_state(world, system_meta);
         RenderCommandState {
-            device: world.resource::<Device>().clone(),
             default_cmd_pool_state,
             submission_info: None,
             prev_stage_submission_info: SmallVec::new(),
@@ -461,7 +459,6 @@ pub(crate) fn flush_system_graph(
     mut default_cmd_pool: ResInstanceMut<PerFrame<DefaultCommandPool>>,
     frame_index: Res<FrameCount>,
     submission_info: SubmissionInfo,
-    device: Res<Device>,
 ) {
     let default_cmd_pool = default_cmd_pool.on_frame_index(frame_index.0, submission_info.info);
 
@@ -846,7 +843,7 @@ impl System for InsertPipelineBarrier {
         }
     }
 
-    fn queue_deferred(&mut self, world: bevy::ecs::world::DeferredWorld) {}
+    fn queue_deferred(&mut self, _world: bevy::ecs::world::DeferredWorld) {}
 }
 
 pub(crate) struct BarrierProducerOutConfig {
