@@ -15,3 +15,9 @@ bevy = { version = "0.14.0", default-features = false }
 rhyolite = { path = "../../" }
 playout_macro = { version = "0.1" }
 bytemuck = "1.15"
+
+
+[[bin]]
+name = "process-assets"
+path = "src/process_assets.rs"
+required-features = ["bevy/asset_processor"]

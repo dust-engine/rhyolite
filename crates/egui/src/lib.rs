@@ -57,9 +57,22 @@ pub enum RenderUiSystem {
     ExtractNode,
 }
 
+// Common behavior shared between all instances of EguiPlugin
+struct EguiBasePlugin;
+impl Plugin for EguiBasePlugin {
+    fn build(&self, app: &mut App) {
+        use bevy::asset::embedded_asset;
+        embedded_asset!(app, "../imported_assets/Default/egui.vert");
+        embedded_asset!(app, "../imported_assets/Default/egui.frag");
+    }
+}
+
 impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> {
     fn build(&self, app: &mut App) {
-        app.add_plugins(bevy_egui::EguiPlugin);
+        app.add_plugins((
+            EguiBasePlugin,
+            bevy_egui::EguiPlugin,
+        ));
         app.add_systems(
             PostUpdate,
             (
@@ -134,7 +147,7 @@ fn initialize_pipelines(
 ) {
     let desc0 = DescriptorSetLayout::new(
         device.clone(),
-        &playout_macro::layout!("../assets/shaders/draw.playout", 0),
+        &playout_macro::layout!("../assets/draw.playout", 0),
         vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR,
     )
     .unwrap();
@@ -156,12 +169,12 @@ fn initialize_pipelines(
         stages: vec![
             SpecializedShader {
                 stage: vk::ShaderStageFlags::VERTEX,
-                shader: assets.load("shaders/egui.vert"),
+                shader: assets.load("embedded://rhyolite_egui/../imported_assets/Default/egui.vert"),
                 ..Default::default()
             },
             SpecializedShader {
                 stage: vk::ShaderStageFlags::FRAGMENT,
-                shader: assets.load("shaders/egui.frag"),
+                shader: assets.load("embedded://rhyolite_egui/../imported_assets/Default/egui.frag"),
                 ..Default::default()
             },
         ],
