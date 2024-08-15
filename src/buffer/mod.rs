@@ -1,5 +1,6 @@
 pub mod immediate_buffer_transfer;
 pub mod staging;
+mod managed;
 
 use std::{
     alloc::Layout,
@@ -15,6 +16,7 @@ use crate::{
 use vk_mem::Alloc;
 
 use self::staging::StagingBelt;
+pub use managed::ManagedBuffer;
 
 pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;

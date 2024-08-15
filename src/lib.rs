@@ -41,6 +41,7 @@ pub mod utils;
 pub use access::*;
 pub use alloc::Allocator;
 pub use ash;
+pub use vk_mem;
 pub use buffer::*;
 pub use cstr::cstr;
 pub use deferred::*;
