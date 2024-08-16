@@ -1,6 +1,6 @@
 pub mod immediate_buffer_transfer;
-pub mod staging;
 mod managed;
+pub mod staging;
 
 use std::{
     alloc::Layout,

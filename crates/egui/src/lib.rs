@@ -69,10 +69,7 @@ impl Plugin for EguiBasePlugin {
 
 impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            EguiBasePlugin,
-            bevy_egui::EguiPlugin,
-        ));
+        app.add_plugins((EguiBasePlugin, bevy_egui::EguiPlugin));
         app.add_systems(
             PostUpdate,
             (
@@ -169,12 +166,14 @@ fn initialize_pipelines(
         stages: vec![
             SpecializedShader {
                 stage: vk::ShaderStageFlags::VERTEX,
-                shader: assets.load("embedded://rhyolite_egui/../imported_assets/Default/egui.vert"),
+                shader: assets
+                    .load("embedded://rhyolite_egui/../imported_assets/Default/egui.vert"),
                 ..Default::default()
             },
             SpecializedShader {
                 stage: vk::ShaderStageFlags::FRAGMENT,
-                shader: assets.load("embedded://rhyolite_egui/../imported_assets/Default/egui.frag"),
+                shader: assets
+                    .load("embedded://rhyolite_egui/../imported_assets/Default/egui.frag"),
                 ..Default::default()
             },
         ],
