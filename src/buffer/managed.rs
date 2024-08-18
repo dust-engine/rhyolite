@@ -30,6 +30,7 @@ pub struct ManagedBuffer {
     mode: ManagedBufferMode,
     host_coherent: bool,
     ptr: NonNull<[u8]>,
+    device_address: vk::DeviceAddress,
 }
 impl Drop for ManagedBuffer {
     fn drop(&mut self) {
@@ -72,6 +73,9 @@ impl BufferLike for ManagedBuffer {
             ManagedBufferMode::Shared { buffer, .. } => *buffer,
         }
     }
+    fn device_address(&self) -> vk::DeviceAddress {
+        self.device_address
+    }
 }
 
 impl ManagedBuffer {
@@ -104,6 +108,7 @@ impl ManagedBuffer {
                         &vk_mem::AllocationCreateInfo {
                             usage: vk_mem::MemoryUsage::AutoPreferHost,
                             required_flags: vk::MemoryPropertyFlags::HOST_CACHED,
+                            flags: vk_mem::AllocationCreateFlags::MAPPED,
                             ..Default::default()
                         },
                     )?;
@@ -113,7 +118,14 @@ impl ManagedBuffer {
                         .property_flags
                         .contains(vk::MemoryPropertyFlags::HOST_COHERENT);
                     Ok(Self {
-                        allocator,
+                        device_address: if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+                            allocator.device().get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                                buffer: device_buffer,
+                                ..Default::default()
+                            })
+                        } else {
+                            0
+                        },
                         ptr: NonNull::new(std::ptr::from_raw_parts_mut(
                             allocation_info.mapped_data as *mut u8,
                             size as usize,
@@ -128,6 +140,7 @@ impl ManagedBuffer {
                             invalidated_ranges: Vec::new(),
                         },
                         host_coherent,
+                        allocator,
                     })
                 }
                 Unified | BiasedUnified => {
@@ -140,6 +153,7 @@ impl ManagedBuffer {
                         &vk_mem::AllocationCreateInfo {
                             usage: vk_mem::MemoryUsage::AutoPreferHost,
                             required_flags: vk::MemoryPropertyFlags::HOST_CACHED,
+                            flags: vk_mem::AllocationCreateFlags::MAPPED,
                             ..Default::default()
                         },
                     )?;
@@ -149,7 +163,14 @@ impl ManagedBuffer {
                         .property_flags
                         .contains(vk::MemoryPropertyFlags::HOST_COHERENT);
                     Ok(Self {
-                        allocator,
+                        device_address: if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+                            allocator.device().get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                                buffer,
+                                ..Default::default()
+                            })
+                        } else {
+                            0
+                        },
                         ptr: NonNull::new(std::ptr::from_raw_parts_mut(
                             allocation_info.mapped_data as *mut u8,
                             size as usize,
@@ -157,6 +178,7 @@ impl ManagedBuffer {
                         .unwrap(),
                         mode: ManagedBufferMode::Shared { buffer, allocation },
                         host_coherent,
+                        allocator,
                     })
                 }
             }
