@@ -18,6 +18,12 @@ enum ManagedBufferMode {
         flushed_ranges: Vec<vk::BufferCopy>,
         invalidated_ranges: Vec<vk::BufferCopy>,
     },
+    DirectWrite {
+        device_buffer: vk::Buffer,
+        device_allocation: vk_mem::Allocation,
+        device_ptr: NonNull<[u8]>,
+        host_data: Box<[u8]>,
+    },
     Shared {
         buffer: vk::Buffer,
         allocation: vk_mem::Allocation,
@@ -47,7 +53,12 @@ impl Drop for ManagedBuffer {
                         .destroy_buffer(*device_buffer, device_allocation);
                     self.allocator.destroy_buffer(*host_buffer, host_allocation);
                 }
-                ManagedBufferMode::Shared { buffer, allocation } => {
+                ManagedBufferMode::Shared { buffer, allocation }
+                | ManagedBufferMode::DirectWrite {
+                    device_buffer: buffer,
+                    device_allocation: allocation,
+                    ..
+                } => {
                     self.allocator.destroy_buffer(*buffer, allocation);
                 }
             }
@@ -69,8 +80,15 @@ impl DerefMut for ManagedBuffer {
 impl BufferLike for ManagedBuffer {
     fn raw_buffer(&self) -> vk::Buffer {
         match &self.mode {
-            ManagedBufferMode::Syncronized { device_buffer, .. } => *device_buffer,
-            ManagedBufferMode::Shared { buffer, .. } => *buffer,
+            ManagedBufferMode::Syncronized {
+                device_buffer: buffer,
+                ..
+            }
+            | ManagedBufferMode::DirectWrite {
+                device_buffer: buffer,
+                ..
+            }
+            | ManagedBufferMode::Shared { buffer, .. } => *buffer,
         }
     }
     fn device_address(&self) -> vk::DeviceAddress {
@@ -85,7 +103,61 @@ impl ManagedBuffer {
             use crate::PhysicalDeviceMemoryModel::*;
             let memory_model = allocator.physical_device().properties().memory_model;
             match memory_model {
-                Discrete | Bar | ReBar => {
+                ReBar => {
+                    let (device_buffer, device_allocation) = allocator.create_buffer(
+                        &vk::BufferCreateInfo {
+                            size,
+                            usage,
+                            ..Default::default()
+                        },
+                        &vk_mem::AllocationCreateInfo {
+                            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+                            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL
+                                | vk::MemoryPropertyFlags::HOST_VISIBLE,
+                            flags: vk_mem::AllocationCreateFlags::MAPPED,
+                            preferred_flags: vk::MemoryPropertyFlags::HOST_COHERENT,
+                            ..Default::default()
+                        },
+                    )?;
+                    let allocation_info = allocator.get_allocation_info(&device_allocation);
+                    let host_coherent = allocator.physical_device().properties().memory_types()
+                        [allocation_info.memory_type as usize]
+                        .property_flags
+                        .contains(vk::MemoryPropertyFlags::HOST_COHERENT);
+                    let mut host_data = vec![0; size as usize].into_boxed_slice();
+                    Ok(Self {
+                        device_address: if usage
+                            .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+                        {
+                            allocator.device().get_buffer_device_address(
+                                &vk::BufferDeviceAddressInfo {
+                                    buffer: device_buffer,
+                                    ..Default::default()
+                                },
+                            )
+                        } else {
+                            0
+                        },
+                        ptr: NonNull::new(std::ptr::from_raw_parts_mut(
+                            host_data.as_mut_ptr(),
+                            size as usize,
+                        ))
+                        .unwrap(),
+                        mode: ManagedBufferMode::DirectWrite {
+                            device_buffer,
+                            device_allocation,
+                            device_ptr: NonNull::new(std::ptr::from_raw_parts_mut(
+                                allocation_info.mapped_data as *mut u8,
+                                size as usize,
+                            ))
+                            .unwrap(),
+                            host_data,
+                        },
+                        allocator,
+                        host_coherent,
+                    })
+                }
+                Discrete | Bar => {
                     let (device_buffer, device_allocation) = allocator.create_buffer(
                         &vk::BufferCreateInfo {
                             size,
@@ -107,7 +179,8 @@ impl ManagedBuffer {
                         },
                         &vk_mem::AllocationCreateInfo {
                             usage: vk_mem::MemoryUsage::AutoPreferHost,
-                            required_flags: vk::MemoryPropertyFlags::HOST_CACHED,
+                            required_flags: vk::MemoryPropertyFlags::HOST_CACHED
+                                | vk::MemoryPropertyFlags::HOST_VISIBLE,
                             flags: vk_mem::AllocationCreateFlags::MAPPED,
                             ..Default::default()
                         },
@@ -118,11 +191,15 @@ impl ManagedBuffer {
                         .property_flags
                         .contains(vk::MemoryPropertyFlags::HOST_COHERENT);
                     Ok(Self {
-                        device_address: if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
-                            allocator.device().get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-                                buffer: device_buffer,
-                                ..Default::default()
-                            })
+                        device_address: if usage
+                            .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+                        {
+                            allocator.device().get_buffer_device_address(
+                                &vk::BufferDeviceAddressInfo {
+                                    buffer: device_buffer,
+                                    ..Default::default()
+                                },
+                            )
                         } else {
                             0
                         },
@@ -152,7 +229,8 @@ impl ManagedBuffer {
                         },
                         &vk_mem::AllocationCreateInfo {
                             usage: vk_mem::MemoryUsage::AutoPreferHost,
-                            required_flags: vk::MemoryPropertyFlags::HOST_CACHED,
+                            required_flags: vk::MemoryPropertyFlags::HOST_CACHED
+                                | vk::MemoryPropertyFlags::HOST_VISIBLE,
                             flags: vk_mem::AllocationCreateFlags::MAPPED,
                             ..Default::default()
                         },
@@ -163,11 +241,15 @@ impl ManagedBuffer {
                         .property_flags
                         .contains(vk::MemoryPropertyFlags::HOST_COHERENT);
                     Ok(Self {
-                        device_address: if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
-                            allocator.device().get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-                                buffer,
-                                ..Default::default()
-                            })
+                        device_address: if usage
+                            .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+                        {
+                            allocator.device().get_buffer_device_address(
+                                &vk::BufferDeviceAddressInfo {
+                                    buffer,
+                                    ..Default::default()
+                                },
+                            )
                         } else {
                             0
                         },
@@ -196,7 +278,7 @@ impl ManagedBuffer {
         let size = match range.end_bound() {
             std::ops::Bound::Included(&end) => end + 1 - start,
             std::ops::Bound::Excluded(&end) => end - start,
-            std::ops::Bound::Unbounded => vk::WHOLE_SIZE,
+            std::ops::Bound::Unbounded => self.len() as u64 - start,
         };
 
         match &mut self.mode {
@@ -207,6 +289,20 @@ impl ManagedBuffer {
                     size,
                 });
             }
+            ManagedBufferMode::DirectWrite {
+                device_ptr,
+                host_data,
+                device_allocation,
+                ..
+            } => unsafe {
+                let range = start as usize..(start + size) as usize;
+                device_ptr.as_mut()[range.clone()].copy_from_slice(&host_data[range]);
+                if !self.host_coherent {
+                    self.allocator
+                        .flush_allocation(device_allocation, start, size)
+                        .unwrap();
+                }
+            },
             ManagedBufferMode::Shared { allocation, .. } => {
                 if self.host_coherent {
                     return;
@@ -245,8 +341,13 @@ impl ManagedBuffer {
                     .invalidate_allocation(allocation, start, size)
                     .unwrap();
             }
+            ManagedBufferMode::DirectWrite { .. } => {
+                todo!()
+            }
         }
     }
+
+    /// Required to be called on Discrete or Bar architectures
     pub fn sync(&mut self, command_encoder: &mut impl TransferCommands) {
         match &mut self.mode {
             ManagedBufferMode::Syncronized {
@@ -261,7 +362,7 @@ impl ManagedBuffer {
                 flushed_ranges.clear();
                 invalidated_ranges.clear();
             }
-            ManagedBufferMode::Shared { .. } => {}
+            _ => {}
         }
     }
 }
