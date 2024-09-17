@@ -170,8 +170,7 @@ impl Plugin for RhyolitePlugin {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
-            app.add_instance_extension_named(ash::vk::KhrPortabilityEnumerationFn::name())
-                .unwrap();
+            app.add_instance_extension_named(ash::khr::portability_enumeration::NAME).unwrap();
         }
         let mut instance_extensions = app.world_mut().remove_resource::<InstanceExtensions>();
         let instance_layers = app.world_mut().remove_resource::<InstanceLayers>();

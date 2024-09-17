@@ -244,7 +244,10 @@ unsafe fn create_surface(
                 Layer::Existing(layer) | Layer::Allocated(layer) => layer as *mut _,
             };
 
-            let surface_desc = vk::MetalSurfaceCreateInfoEXT::builder().layer(&*layer);
+            let surface_desc = vk::MetalSurfaceCreateInfoEXT {
+                p_layer: &*layer,
+                ..Default::default()
+            };
             instance
                 .extension::<ash::ext::metal_surface::Meta>()
                 .create_metal_surface(&surface_desc, None)
