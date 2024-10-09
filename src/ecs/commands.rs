@@ -108,17 +108,17 @@ impl PerFrameReset for DefaultCommandPool {
 
 #[derive(Default)]
 pub struct QueueSubmissionInfo {
-    pub(crate) cmd_bufs: SmallVec<[vk::CommandBuffer; 4]>,
-    pub(crate) last_buf_open: bool,
-    pub(crate) trailing_buffer_barriers: Vec<vk::BufferMemoryBarrier2<'static>>,
-    pub(crate) trailing_image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
+    pub cmd_bufs: SmallVec<[vk::CommandBuffer; 4]>,
+    pub last_buf_open: bool,
+    pub trailing_buffer_barriers: Vec<vk::BufferMemoryBarrier2<'static>>,
+    pub trailing_image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
 
-    pub(crate) signal_semaphore: Option<Arc<TimelineSemaphore>>,
-    pub(crate) signal_semaphore_value: u64,
-    pub(crate) signal_binary_semaphore: vk::Semaphore,
-    pub(crate) wait_semaphores:
+    pub signal_semaphore: Option<Arc<TimelineSemaphore>>,
+    pub signal_semaphore_value: u64,
+    pub signal_binary_semaphore: vk::Semaphore,
+    pub wait_semaphores:
         SmallVec<[(vk::PipelineStageFlags2, Arc<TimelineSemaphore>, u64); 4]>,
-    pub(crate) wait_binary_semaphore: vk::Semaphore,
+    pub wait_binary_semaphore: vk::Semaphore,
 }
 unsafe impl Send for QueueSubmissionInfo {}
 unsafe impl Sync for QueueSubmissionInfo {}
@@ -397,8 +397,8 @@ where
 }
 
 pub struct SubmissionInfo<'s> {
-    info: &'s Mutex<QueueSubmissionInfo>,
-    queue: QueueRef,
+    pub info: &'s Mutex<QueueSubmissionInfo>,
+    pub queue: QueueRef,
 }
 
 unsafe impl<'s> SystemParam for SubmissionInfo<'s> {

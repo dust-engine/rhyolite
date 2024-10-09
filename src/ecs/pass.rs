@@ -443,6 +443,19 @@ impl ScheduleBuildPass for RenderSystemPass {
                 assert!(queue_node.nodes.len() == 1);
                 queue_node.queue_node_index = queue_node.nodes[0];
                 queue_node.flush_node_index = queue_node.nodes[0];
+
+                
+                let node = &mut graph.systems[queue_node.queue_node_index as usize];
+                node.get_mut().unwrap().configurate(
+                    &mut RenderSystemInitialState {
+                        queue: queue_node.selected_queue,
+                        queue_submission_info: queue_node.submission_info.clone(),
+                        prev_stage_queue_submission_info: queue_node
+                            .prev_stage_submission_info
+                            .clone(),
+                    },
+                    world,
+                );
                 continue;
             }
             let id_num = graph.systems.len();

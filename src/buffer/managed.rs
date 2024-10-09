@@ -114,7 +114,7 @@ impl ManagedBuffer {
                             usage: vk_mem::MemoryUsage::AutoPreferDevice,
                             required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL
                                 | vk::MemoryPropertyFlags::HOST_VISIBLE,
-                            flags: vk_mem::AllocationCreateFlags::MAPPED,
+                            flags: vk_mem::AllocationCreateFlags::MAPPED | vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
                             preferred_flags: vk::MemoryPropertyFlags::HOST_COHERENT,
                             ..Default::default()
                         },
@@ -181,7 +181,7 @@ impl ManagedBuffer {
                             usage: vk_mem::MemoryUsage::AutoPreferHost,
                             required_flags: vk::MemoryPropertyFlags::HOST_CACHED
                                 | vk::MemoryPropertyFlags::HOST_VISIBLE,
-                            flags: vk_mem::AllocationCreateFlags::MAPPED,
+                            flags: vk_mem::AllocationCreateFlags::MAPPED | vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
                             ..Default::default()
                         },
                     )?;
@@ -231,7 +231,7 @@ impl ManagedBuffer {
                             usage: vk_mem::MemoryUsage::AutoPreferHost,
                             required_flags: vk::MemoryPropertyFlags::HOST_CACHED
                                 | vk::MemoryPropertyFlags::HOST_VISIBLE,
-                            flags: vk_mem::AllocationCreateFlags::MAPPED,
+                            flags: vk_mem::AllocationCreateFlags::MAPPED | vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
                             ..Default::default()
                         },
                     )?;
