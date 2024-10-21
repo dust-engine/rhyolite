@@ -408,6 +408,18 @@ unsafe impl Feature for vk::PhysicalDeviceFeatures {
     const STRUCTURE_TYPE: Option<vk::StructureType> = None;
 }
 impl_feature_for_ext!(
+    vk::PhysicalDeviceVulkan11Features<'_>,
+    khr::synchronization2::Meta
+);
+impl_feature_for_ext!(
+    vk::PhysicalDeviceVulkan12Features<'_>,
+    khr::synchronization2::Meta
+);
+impl_feature_for_ext!(
+    vk::PhysicalDeviceVulkan13Features<'_>,
+    khr::synchronization2::Meta
+);
+impl_feature_for_ext!(
     vk::PhysicalDeviceSynchronization2FeaturesKHR<'_>,
     khr::synchronization2::Meta
 );
@@ -449,6 +461,10 @@ impl_feature_for_ext!(
 );
 impl_feature_for_ext!(
     vk::PhysicalDeviceShaderFloat16Int8Features<'_>,
+    khr::shader_float16_int8::Meta
+);
+impl_feature_for_ext!(
+    vk::PhysicalDeviceScalarBlockLayoutFeatures<'_>,
     khr::shader_float16_int8::Meta
 );
 impl_feature_for_ext!(

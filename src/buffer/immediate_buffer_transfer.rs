@@ -179,6 +179,9 @@ impl<Manager: ImmediateBufferTransferManager> ImmediateBuffers<Manager> {
             self.host_buffers.on_frame(commands)
         }
     }
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
+    }
 }
 
 impl<Manager: ImmediateBufferTransferManager> TrackedResource for ImmediateBuffers<Manager> {

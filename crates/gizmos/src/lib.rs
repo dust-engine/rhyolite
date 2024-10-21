@@ -280,6 +280,9 @@ fn draw_barriers(
     mut buffers: ResMut<ImmediateBuffers<GizmosBufferManager>>,
     mut output_images: Query<(&mut SwapchainImage), With<PrimaryWindow>>,
 ) {
+    if buffers.is_empty() {
+        return;
+    }
     let swapchain_image = match output_images.get_single_mut() {
         Ok(r) => r,
         Err(QuerySingleError::NoEntities(_)) => return (),
@@ -327,6 +330,9 @@ fn draw_gizmos<D: GizmosDrawDelegate>(
     let Ok(swapchain_image) = primary_window.get_single() else {
         return;
     };
+    if buffers.is_empty() {
+        return;
+    }
     let aspect_ratio = swapchain_image.extent().x as f32 / swapchain_image.extent().y as f32;
 
     let mat = D::get_view_transform(&mut params, aspect_ratio);

@@ -357,8 +357,12 @@ impl ManagedBuffer {
                 host_buffer,
                 ..
             } => {
-                command_encoder.copy_buffer(*host_buffer, *device_buffer, &flushed_ranges);
-                command_encoder.copy_buffer(*device_buffer, *host_buffer, &invalidated_ranges);
+                if !flushed_ranges.is_empty() {
+                    command_encoder.copy_buffer(*host_buffer, *device_buffer, &flushed_ranges);
+                }
+                if !invalidated_ranges.is_empty() {
+                    command_encoder.copy_buffer(*device_buffer, *host_buffer, &invalidated_ranges);
+                }
                 flushed_ranges.clear();
                 invalidated_ranges.clear();
             }
