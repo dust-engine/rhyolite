@@ -13,7 +13,7 @@ use std::{
 
 use crate::extensions::{Extension, ExtensionNotFoundError};
 use crate::{
-    ecs::RenderSystemPass, Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeaturesSetup,
+    Device, Feature, Instance, PhysicalDevice, PhysicalDeviceFeaturesSetup,
     Version,
 };
 use cstr::cstr;
@@ -222,11 +222,13 @@ impl Plugin for RhyolitePlugin {
             .init_asset::<crate::shader::ShaderModule>()
             .init_asset::<crate::shader::loader::SpirvShaderSource>();
         // Add build pass
+        /*
         app.get_schedule_mut(PostUpdate)
             .as_mut()
             .unwrap()
             .add_build_pass(RenderSystemPass::new())
             .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
+        */
 
         // Required features
         app.enable_feature::<vk::PhysicalDeviceTimelineSemaphoreFeatures>(|f| {
@@ -255,9 +257,8 @@ impl Plugin for RhyolitePlugin {
             target_vk_version: self.api_version,
         });
 
-        app.add_plugins(crate::staging::StagingBeltPlugin);
-        app.add_plugins(crate::dispose::DisposerPlugin);
-        app.add_plugins(crate::pipeline::PipelineCachePlugin::default());
+        //app.add_plugins(crate::staging::StagingBeltPlugin);
+        //app.add_plugins(crate::pipeline::PipelineCachePlugin::default());
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions = app
@@ -269,21 +270,20 @@ impl Plugin for RhyolitePlugin {
             .remove_resource::<PhysicalDeviceFeaturesSetup>()
             .unwrap()
             .finalize();
-        let physical_device: &PhysicalDevice = app.world().resource();
-        let (device, queues) = Device::create(
+        let physical_device: PhysicalDevice = app.world().resource::<PhysicalDevice>().clone();
+        Device::create_in_world(
+            app.world_mut(),
             physical_device.clone(),
             features,
             extension_settings.enabled_extensions,
             extension_settings.extension_builders,
         )
         .unwrap();
-        app.insert_resource(device);
-        app.insert_resource(queues);
 
         // Add allocator
         app.world_mut().init_resource::<crate::Allocator>();
-        app.world_mut()
-            .init_resource::<crate::task::AsyncTaskPool>();
+        //app.world_mut()
+        //    .init_resource::<crate::task::AsyncTaskPool>();
         app.world_mut()
             .init_resource::<crate::DeferredOperationTaskPool>();
         app.init_asset_loader::<crate::shader::loader::SpirvLoader>();

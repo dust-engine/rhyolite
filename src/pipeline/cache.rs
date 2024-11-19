@@ -10,7 +10,6 @@ use bevy::ecs::{
 };
 
 use crate::deferred::{DeferredOperationTaskPool, Task};
-use crate::dispose::RenderObject;
 use crate::shader::ShaderModule;
 use crate::Device;
 

@@ -1,14 +1,16 @@
 use crate::extensions::ExtensionNotFoundError;
+use crate::find_default_queue_create_info;
 use crate::plugin::DeviceMetaBuilder;
 use crate::Feature;
 use crate::FeatureMap;
 use crate::Instance;
 use crate::PhysicalDevice;
-use crate::Queues;
+use crate::QueueConfiguration;
 use ash::prelude::VkResult;
 use ash::vk;
 use ash::vk::ExtensionMeta;
 use bevy::ecs::system::Resource;
+use bevy::prelude::World;
 use bevy::utils::hashbrown::HashMap;
 use bevy::utils::HashSet;
 
@@ -29,6 +31,13 @@ pub trait HasDevice {
 
 #[derive(Clone, Resource)]
 pub struct Device(Arc<DeviceInner>);
+impl PartialEq for Device {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Device {
+}
 
 pub struct DeviceInner {
     physical_device: PhysicalDevice,
@@ -38,12 +47,13 @@ pub struct DeviceInner {
 }
 
 impl Device {
-    pub(crate) fn create(
+    pub(crate) fn create_in_world(
+        world: &mut World,
         physical_device: PhysicalDevice,
         mut features: FeatureMap,
         extension_names: HashSet<&'static CStr>,
         extensions: HashMap<&'static CStr, Option<DeviceMetaBuilder>>,
-    ) -> VkResult<(Self, Queues)> {
+    ) -> VkResult<()> {
         let mut available_queue_family = physical_device.get_queue_family_properties();
         available_queue_family.iter_mut().for_each(|props| {
             if props.queue_flags.contains(vk::QueueFlags::COMPUTE)
@@ -52,7 +62,7 @@ impl Device {
                 props.queue_flags |= vk::QueueFlags::TRANSFER;
             }
         });
-        let queue_create_infos = Queues::find_with_queue_family_properties(&available_queue_family);
+        let queue_create_infos = find_default_queue_create_info(&available_queue_family);
         let mut pdevice_features2 = features.as_physical_device_features();
         let extension_names = extension_names
             .into_iter()
@@ -76,16 +86,20 @@ impl Device {
                 );
             })
             .collect();
-        let queues = Queues::create(&device, &queue_create_infos, &available_queue_family);
-        Ok((
-            Self(Arc::new(DeviceInner {
-                physical_device,
-                device,
-                extensions,
-                features,
-            })),
-            queues,
-        ))
+
+
+        let device = Self(Arc::new(DeviceInner {
+            physical_device,
+            device,
+            extensions,
+            features,
+        }));
+
+        world.insert_resource(device);
+        unsafe {
+            QueueConfiguration::create_in_world(world, &queue_create_infos, &available_queue_family);
+        }
+        Ok(())
     }
     pub fn instance(&self) -> &Instance {
         self.0.physical_device.instance()

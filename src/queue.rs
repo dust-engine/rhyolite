@@ -1,213 +1,304 @@
 use std::{
-    ops::Deref,
-    sync::{
-        atomic::{AtomicBool, Ordering},
+    collections::BTreeMap, marker::PhantomData, ops::{Deref, DerefMut}, sync::{
+        atomic::AtomicBool,
         Arc, Mutex, MutexGuard,
-    },
+    }
 };
 
 use ash::vk;
-use bevy::ecs::system::Resource;
-use std::fmt::Debug;
-
-/// Index of a created queue
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct QueueRef {
-    pub(crate) index: u32,
-    pub(crate) family: u32,
-    pub(crate) caps: vk::QueueFlags,
-}
-impl Debug for QueueRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "Queue(#{} on family {}, {:?})",
-            self.index, self.family, self.caps
-        ))
-    }
-}
-impl QueueRef {
-    pub fn null() -> Self {
-        QueueRef {
-            index: 0,
-            family: 0,
-            caps: vk::QueueFlags::empty(),
-        }
-    }
-    pub fn is_null(&self) -> bool {
-        self.index == u32::MAX
-    }
-}
-impl Default for QueueRef {
-    fn default() -> Self {
-        Self::null()
-    }
-}
-
-enum QueueSharing {
-    Shared(Mutex<vk::Queue>),
-    Exclusive {
-        queue: vk::Queue,
-        marker: AtomicBool,
-    },
-}
-
-#[derive(Resource, Clone)]
-pub struct Queues(Arc<QueuesInner>);
-struct QueuesInner {
-    /// Indexed by [`QueueRef::index`]
-    queues: Vec<(QueueRef, QueueSharing)>,
-
-    /// Ordered in decreasing order of capabilities
-    queue_refs: Vec<QueueRef>,
-}
-
-pub(crate) const QUEUE_FLAGS_ASYNC: vk::QueueFlags = vk::QueueFlags::from_raw(1 << 31);
-
-pub enum QueueGuard<'a> {
-    Exclusive {
-        queue: vk::Queue,
-        marker: &'a AtomicBool,
-    },
-    Shared(MutexGuard<'a, vk::Queue>),
-}
-impl<'a> Drop for QueueGuard<'a> {
-    fn drop(&mut self) {
-        match self {
-            QueueGuard::Exclusive { marker, .. } => marker.store(false, Ordering::Relaxed),
-            QueueGuard::Shared(_) => {}
-        }
-    }
-}
-impl<'a> Deref for QueueGuard<'a> {
-    type Target = vk::Queue;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            QueueGuard::Exclusive { queue, .. } => queue,
-            QueueGuard::Shared(q) => &*q,
-        }
-    }
-}
-
-impl Queues {
-    pub fn get(&self, r: QueueRef) -> QueueGuard {
-        match &self.0.queues[r.index as usize].1 {
-            QueueSharing::Shared(q) => QueueGuard::Shared(q.lock().unwrap()),
-            QueueSharing::Exclusive { queue, marker } => {
-                assert!(
-                    marker.load(Ordering::Relaxed) == false,
-                    "Queue is already in use"
-                );
-                marker.store(true, Ordering::Relaxed);
-                QueueGuard::Exclusive {
-                    queue: *queue,
-                    marker,
-                }
-            }
-        }
-    }
-    pub fn with_caps(
-        &self,
-        required_caps: vk::QueueFlags,
-        preferred_caps: vk::QueueFlags,
-    ) -> Option<QueueRef> {
-        if !preferred_caps.is_empty() {
-            return self
-                .0
-                .queue_refs
-                .iter()
-                .find(|r| r.caps.contains(required_caps | preferred_caps))
-                .map(|r| *r);
-        }
-
-        return self
-            .0
-            .queue_refs
-            .iter()
-            .find(|r| r.caps.contains(required_caps))
-            .map(|r| *r);
-    }
-    pub(crate) fn find_with_queue_family_properties(
-        available_queue_family: &[vk::QueueFamilyProperties],
-    ) -> Vec<vk::DeviceQueueCreateInfo> {
-        // Create 2 of each queue family
-        available_queue_family
-            .iter()
-            .enumerate()
-            .take(3)
-            .map(|(queue_family_index, props)| {
-                let priority: &'static [f32] =
-                    if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                        &PRIORITY_HIGH
-                    } else if props.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                        &PRIORITY_MEDIUM
-                    } else {
-                        &PRIORITY_LOW
-                    };
-                let queue_count = if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                    1
-                } else {
-                    props.queue_count.min(2)
-                };
-                vk::DeviceQueueCreateInfo {
-                    queue_family_index: queue_family_index as u32,
-                    queue_count,
-                    p_queue_priorities: priority.as_ptr(),
-                    ..Default::default()
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-    pub(crate) fn create(
-        device: &ash::Device,
-        create_info: &[vk::DeviceQueueCreateInfo],
-        available_queue_family: &[vk::QueueFamilyProperties],
-    ) -> Self {
-        let (queues, mut queue_refs): (Vec<_>, Vec<_>) = create_info
-            .iter()
-            .flat_map(|info| {
-                let queue_family = &available_queue_family[info.queue_family_index as usize];
-                (0..info.queue_count).map(|i| {
-                    let queue = unsafe { device.get_device_queue(info.queue_family_index, i) };
-                    let mut r = QueueRef {
-                        index: 0,
-                        family: info.queue_family_index,
-                        caps: queue_family.queue_flags,
-                    };
-                    let sharing = if info.queue_count >= 2 {
-                        if i == 1 {
-                            // The second queue created is exclusive async
-                            r.caps |= QUEUE_FLAGS_ASYNC;
-                        }
-                        QueueSharing::Exclusive {
-                            queue,
-                            marker: AtomicBool::new(false),
-                        }
-                    } else {
-                        // The only queue created is shared and async
-                        r.caps |= QUEUE_FLAGS_ASYNC;
-                        QueueSharing::Shared(Mutex::new(queue))
-                    };
-                    ((r, sharing), r)
-                })
-            })
-            .unzip();
-        queue_refs
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, r)| r.index = i as u32);
-        queue_refs.sort_by_cached_key(|i| i.caps.as_raw().count_ones());
-        Self(Arc::new(QueuesInner { queues, queue_refs }))
-    }
-}
-
-impl std::ops::Index<u32> for Queues {
-    type Output = QueueRef;
-
-    fn index(&self, index: u32) -> &Self::Output {
-        &self.0.queues[index as usize].0
-    }
-}
+use bevy::{ecs::{component::{ComponentId, Tick}, system::{SystemMeta, SystemParam}, world::unsafe_world_cell::UnsafeWorldCell}, prelude::{FromWorld, ResMut, Resource, World}};
+use crate::{Device, PhysicalDevice};
 
 const PRIORITY_HIGH: [f32; 2] = [1.0, 0.1];
 const PRIORITY_MEDIUM: [f32; 2] = [0.5, 0.1];
 const PRIORITY_LOW: [f32; 2] = [0.0, 0.0];
+
+
+pub struct QueueInner {
+    pub device: Device,
+    pub queue: vk::Queue,
+    pub queue_family: u32,
+}
+
+
+/// Returns a good queue creation strategies for many interactive applications.
+/// 
+/// We attempts to create two queues for the first three queue families.
+pub(crate) fn find_default_queue_create_info(available_queue_family: &[vk::QueueFamilyProperties]) -> Vec<vk::DeviceQueueCreateInfo>  {
+    // Create 2 of each queue family
+    available_queue_family
+        .iter()
+        .enumerate()
+        .take(3)
+        .map(|(queue_family_index, props)| {
+            let priority: &'static [f32] =
+                if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                    &PRIORITY_HIGH
+                } else if props.queue_flags.contains(vk::QueueFlags::COMPUTE) {
+                    &PRIORITY_MEDIUM
+                } else {
+                    &PRIORITY_LOW
+                };
+            let queue_count = if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                1
+            } else {
+                props.queue_count.min(2)
+            };
+            vk::DeviceQueueCreateInfo {
+                queue_family_index: queue_family_index as u32,
+                queue_count,
+                p_queue_priorities: priority.as_ptr(),
+                ..Default::default()
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
+#[derive(Resource)]
+pub struct QueueConfiguration {
+    families: Vec<QueueConfigurationFamily>
+}
+struct QueueConfigurationFamily {
+    /// Pointing to a QueueInner
+    queues: smallvec::SmallVec<[ComponentId; 2]>,
+    flags: vk::QueueFlags,
+}
+
+impl QueueConfiguration {
+    /// Safety: must only be called once per device, otherwise we end up with multiple copies of the same queue,
+    /// violating assumptions on exclusive queue references.
+    pub(crate) unsafe fn create_in_world(
+        world: &mut World,
+        queue_create_info: &[vk::DeviceQueueCreateInfo],
+        queue_family_info: &[vk::QueueFamilyProperties],
+    ) {
+        use bevy::ecs::component::ComponentDescriptor;
+        use bevy::ptr::OwningPtr;
+        use smallvec::SmallVec;
+        let device = world.resource::<Device>().clone();
+
+        let mut this = QueueConfiguration {
+            families: queue_family_info.iter().map(|info| QueueConfigurationFamily {
+                flags: info.queue_flags,
+                queues: SmallVec::new(),
+            }).collect()
+        };
+
+        for vk::DeviceQueueCreateInfo { queue_count, queue_family_index, ..} in queue_create_info.iter() {
+            for queue_index in 0..*queue_count {
+                let queue = unsafe {
+                    device.get_device_queue(*queue_family_index, queue_index)
+                };
+                let component_id = world.init_component_with_descriptor(ComponentDescriptor::new_resource::<QueueInner>());
+                let queue_inner = QueueInner {
+                    device: device.clone(),
+                    queue,
+                    queue_family: *queue_family_index
+                };
+                OwningPtr::make(queue_inner, |ptr| unsafe {
+                    // SAFETY: component_id was just initialized and corresponds to resource of type R.
+                    world.insert_resource_by_id(component_id, ptr);
+                });
+                this.families[*queue_family_index as usize].queues.push(component_id);
+            }
+        }
+        world.insert_resource(this);
+    }
+}
+
+
+
+pub trait QueueSelector {
+    fn component_id(config: &QueueConfiguration) -> ComponentId;
+}
+pub struct Queue<'a, T: QueueSelector> {
+    queue: &'a mut QueueInner,
+    _marker: PhantomData<T>
+}
+impl<'a, T: QueueSelector> Deref for Queue<'a, T> {
+    type Target = QueueInner;
+
+    fn deref(&self) -> &Self::Target {
+        self.queue
+    }
+}
+impl<'a, T: QueueSelector> DerefMut for Queue<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.queue
+    }
+}
+unsafe impl<'a, T: QueueSelector> SystemParam for Queue<'a, T> {
+    type State = ComponentId;
+
+    type Item<'world, 'state> = Queue<'world, T>;
+
+    fn init_state(world: &mut World, system_meta: &mut SystemMeta) -> Self::State {
+        let config = world.resource::<QueueConfiguration>();
+        let component_id = T::component_id(config);
+
+        let combined_access = system_meta.component_access_set.combined_access();
+        if combined_access.has_write(component_id) {
+            panic!(
+                "error[B0002]: ResMut<{}> in system {} conflicts with a previous ResMut<{0}> access. Consider removing the duplicate access. See: https://bevyengine.org/learn/errors/#b0002",
+                std::any::type_name::<Self>(), system_meta.name);
+        } else if combined_access.has_read(component_id) {
+            panic!(
+                "error[B0002]: ResMut<{}> in system {} conflicts with a previous Res<{0}> access. Consider removing the duplicate access. See: https://bevyengine.org/learn/errors/#b0002",
+                std::any::type_name::<Self>(), system_meta.name);
+        }
+        system_meta
+            .component_access_set
+            .add_unfiltered_write(component_id);
+
+        let archetype_component_id = world
+            .get_resource_archetype_component_id(component_id)
+            .unwrap();
+        system_meta
+            .archetype_component_access
+            .add_write(archetype_component_id);
+        component_id
+    }
+
+    unsafe fn get_param<'world, 'state>(
+        state: &'state mut Self::State,
+        system_meta: &SystemMeta,
+        world: UnsafeWorldCell<'world>,
+        _change_tick: Tick,
+    ) -> Self::Item<'world, 'state> {
+        let value = world
+            .get_resource_mut_by_id(*state)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Resource requested by {} does not exist: {}",
+                    system_meta.name,
+                    std::any::type_name::<T>()
+                )
+            });
+        Queue {
+            queue: value.value.deref_mut::<QueueInner>(),
+            _marker: PhantomData
+        }
+    }
+}
+
+
+pub mod selectors {
+    use ash::vk;
+
+    use super::{QueueSelector, QueueConfiguration, ComponentId};
+
+    macro_rules! return_queue {
+        ($family: expr) => {
+            if ASYNC {
+                if $family.queues.len() >= 2 {
+                    return $family.queues[1];
+                } else {
+                    return $family.queues[0];
+                }
+            } else {
+                return $family.queues[0];
+            }
+        };
+    }
+
+    /// Selects the first queue with [`vk::QueueFlags::GRAPHICS`]
+    /// If ASYNC is set to true, when multiple queues are available for the target queue family, this will select the secondary queue.
+    pub struct Graphics<const ASYNC: bool = false>;
+    impl<const ASYNC: bool> QueueSelector for Graphics<ASYNC> {
+        fn component_id(config: &QueueConfiguration) -> ComponentId {
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+            panic!("Cannot find Render queue!")
+        }
+    }
+
+
+    /// Selects the queue with both [`vk::QueueFlags::GRAPHICS`] and [`vk::QueueFlags::COMPUTE`].
+    /// If no such queue exists, select any queue with [`vk::QueueFlags::COMPUTE`].
+    pub struct UniversalCompute<const ASYNC: bool = false>;
+    impl<const ASYNC: bool> QueueSelector for UniversalCompute<ASYNC> {
+        fn component_id(config: &QueueConfiguration) -> ComponentId {
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::GRAPHICS) && family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+            panic!("Cannot find Compute queue!")
+        }
+    }
+
+    /// Selects the first queue with dedicated [`vk::QueueFlags::COMPUTE`] flag. If no such queue exists, returns any queue with compute capabilities.
+    pub struct DedicatedCompute<const ASYNC: bool = false>;
+
+    impl<const ASYNC: bool> QueueSelector for DedicatedCompute<ASYNC> {
+        fn component_id(config: &QueueConfiguration) -> ComponentId {
+            // Find the dedicated compute queue with no graphics capabilities.
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+
+            // Find any queue with compute capabilities.
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+            panic!("Cannot find dedicated compute queue!")
+        }
+    }
+
+    /// Selects the first queue with dedicated [`vk::QueueFlags::TRANSFER`] flag. If no such queue exists, returns any queue with transfer capabilities.
+    pub struct DedicatedTransfer<const ASYNC: bool = false>;
+
+    impl<const ASYNC: bool> QueueSelector for DedicatedTransfer<ASYNC> {
+        fn component_id(config: &QueueConfiguration) -> ComponentId {
+            // Find the dedicated compute queue with no graphics or compute capabilities.
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::TRANSFER) && !family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+
+            // Find queue with no graphics capabilities. Prefer compute-based transfers.
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::TRANSFER) && !family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+            // Find any queue with the transfer flag set.
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::TRANSFER) || !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+            // Find any queue with compute flag.
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::COMPUTE) || !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+            // Find any queue with graphics flag.
+            for family in config.families.iter() {
+                if family.flags.contains(vk::QueueFlags::GRAPHICS) || !family.queues.is_empty(){
+                    return_queue!(family);
+                }
+            }
+            panic!("Cannot find dedicated transfer queue!")
+        }
+    }
+
+    pub type AsyncGraphics = Graphics<true>;
+    pub type AsyncCompute = DedicatedCompute<true>;
+    pub type AsyncTransfer = DedicatedTransfer<true>;
+
+}

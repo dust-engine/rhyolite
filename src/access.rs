@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ash::vk;
 use smallvec::SmallVec;
 
-use crate::{access::utils::compare_pipeline_stages, semaphore::TimelineSemaphore, QueueRef};
+use crate::{access::utils::compare_pipeline_stages, semaphore::TimelineSemaphore};
 
 #[derive(Debug, Clone, Default, Copy)]
 pub struct Access {

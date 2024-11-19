@@ -5,7 +5,6 @@ use std::ffi::CStr;
 
 use std::sync::RwLock;
 
-use crate::commands::CommandRecorder;
 use crate::plugin::RhyoliteApp;
 use crate::{Device, Instance};
 use ash::ext::debug_utils::Meta as DebugUtilsExt;

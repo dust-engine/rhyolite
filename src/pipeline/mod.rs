@@ -3,17 +3,16 @@ use bevy::asset::{AssetId, Assets};
 
 use crate::{
     deferred::{DeferredOperationTaskPool, Task},
-    dispose::RenderObject,
     shader::ShaderModule,
     Device, HasDevice,
 };
 
-mod cache;
+//mod cache;
 mod compute;
 mod graphics;
 mod layout;
 
-pub use cache::*;
+//pub use cache::*;
 pub use compute::*;
 pub use graphics::*;
 pub use layout::*;
@@ -37,20 +36,6 @@ pub trait Pipeline: Sized + Send + Sync + 'static {
     }
 
     fn as_raw(&self) -> vk::Pipeline;
-}
-
-impl<T: Pipeline> Pipeline for RenderObject<T> {
-    type BuildInfo = T::BuildInfo;
-    const TYPE: vk::PipelineBindPoint = T::TYPE;
-    fn as_raw(&self) -> vk::Pipeline {
-        T::as_raw(self.get())
-    }
-    fn from_built(
-        info: &mut Self::BuildInfo,
-        item: <Self::BuildInfo as PipelineBuildInfo>::Pipeline,
-    ) -> Self {
-        RenderObject::new(T::from_built(info, item))
-    }
 }
 
 pub trait PipelineBuildInfo {
