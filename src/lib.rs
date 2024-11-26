@@ -11,17 +11,18 @@
 #![feature(specialization)]
 #![feature(context_ext)]
 #![feature(local_waker)]
+#![feature(debug_closure_helpers)]
 
 mod alloc;
 //pub mod buffer;
-mod command;
+pub mod command;
 //pub mod commands;
-//pub mod debug;
+pub mod debug;
 pub mod deferred;
 mod device;
 //pub mod ecs;
 pub mod extensions;
-mod future;
+pub mod future;
 mod image;
 mod instance;
 mod physical_device;
@@ -33,7 +34,7 @@ mod sampler;
 mod semaphore;
 pub mod shader;
 mod surface;
-//mod swapchain;
+pub mod swapchain;
 //pub mod task;
 
 pub mod utils;
@@ -43,7 +44,6 @@ pub use ash;
 pub use cstr::cstr;
 pub use deferred::*;
 pub use device::*;
-pub use future::*;
 pub use image::*;
 pub use instance::*;
 pub use physical_device::*;
@@ -53,3 +53,5 @@ pub use queue::*;
 pub use sampler::Sampler;
 pub use surface::*;
 pub use vk_mem;
+
+extern crate self as rhyolite;

@@ -31,7 +31,7 @@ pub fn gpu_future(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             let __returned_values = {
                 #(#stmts)*
             };
-            GPUFutureBlockReturnValue {
+            rhyolite::future::GPUFutureBlockReturnValue {
                 output: __returned_values,
                 retained_values: unsafe{__retained_values.assume_init()},
             }
@@ -57,7 +57,7 @@ impl GPUFutureTraverser{
                 unsafe {
                     let r = &mut __retained_values.assume_init_mut().#count;
                     Vec::<_>::push(r, #tokens);
-                    GPURetained::__retain(r.last_mut().unwrap())
+                    GPUOwnedResource::__retain(r.last_mut().unwrap())
                 }
             }
         } else if self.is_in_divergent_control_flow {
@@ -66,7 +66,7 @@ impl GPUFutureTraverser{
                     let r = &mut __retained_values.assume_init_mut().#count;
                     let old = std::mem::replace(r, Some(#tokens));
                     assert!(old.is_none());
-                    GPURetained::__retain(r.as_mut().unwrap())
+                    GPUOwnedResource::__retain(r.as_mut().unwrap())
                 }
             }
         } else {
@@ -74,7 +74,7 @@ impl GPUFutureTraverser{
                 unsafe{
                     let r = maybe_uninit_new(&mut __retained_values.assume_init_mut().#count);
                     r.write(#tokens);
-                    GPURetained::__retain(r.assume_init_mut())
+                    GPUOwnedResource::__retain(r.assume_init_mut())
                 }
             }
         }
@@ -112,7 +112,7 @@ impl VisitMut for GPUFutureTraverser {
                 if self.is_in_loop {
                     *i = syn::Expr::Verbatim(quote::quote_spanned! { inner.span() =>
                         {
-                            let GPUFutureBlockReturnValue { output, retained_values } = #inner;
+                            let rhyolite::future::GPUFutureBlockReturnValue { output, retained_values } = #inner;
                             Vec::<_>::push(
                                 unsafe{&mut (&mut (*__retained_values.as_mut_ptr())).#count},
                                 retained_values
@@ -123,7 +123,7 @@ impl VisitMut for GPUFutureTraverser {
                 } else if self.is_in_divergent_control_flow {
                     *i = syn::Expr::Verbatim(quote::quote_spanned! { inner.span() =>
                         {
-                            let GPUFutureBlockReturnValue { output, retained_values } = #inner;
+                            let rhyolite::future::GPUFutureBlockReturnValue { output, retained_values } = #inner;
                             unsafe{(&mut (*__retained_values.as_mut_ptr())).#count = Some(retained_values)};
                             output
                         }
@@ -131,7 +131,7 @@ impl VisitMut for GPUFutureTraverser {
                 } else {
                     *i = syn::Expr::Verbatim(quote::quote_spanned! { inner.span() =>
                         {
-                            let GPUFutureBlockReturnValue { output, retained_values } = #inner;
+                            let rhyolite::future::GPUFutureBlockReturnValue { output, retained_values } = #inner;
                             unsafe{(&mut (*__retained_values.as_mut_ptr())).#count = retained_values};
                             output
                         }

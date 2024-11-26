@@ -1,15 +1,10 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Deref};
 
 use ash::vk;
 
 use crate::{Device, ImageLike};
 
-use super::res::{ResourceState, TrackedResource};
-
-struct ResourceId {
-    id: u32,
-    parent: u32,
-}
+use super::{res::{ResourceState, ResourceStateTable}, GPUResource};
 
 
 struct GlobalResourceContext {
@@ -21,14 +16,14 @@ pub struct BarrierContext<'a> {
     memory_barrier: &'a mut vk::MemoryBarrier2<'static>,
     image_barrier: &'a mut Vec<vk::ImageMemoryBarrier2<'static>>,
     // The local resource state table
-    expected_resource_states: &'a mut BTreeMap<ResourceId, ResourceState>,
-    resource_states: &'a mut BTreeMap<ResourceId, ResourceState>
+    expected_resource_states: &'a mut ResourceStateTable,
+    resource_states: &'a mut ResourceStateTable
 }
 impl<'a> BarrierContext<'a> {
-    pub fn use_resource(&mut self, resource: &mut impl TrackedResource, stages: vk::PipelineStageFlags2, access: vk::AccessFlags2) {
+    pub fn use_resource(&mut self, resource: &mut impl GPUResource, stages: vk::PipelineStageFlags2, access: vk::AccessFlags2) {
     }
 
-    pub fn use_image_resource<T: TrackedResource + ImageLike>(
+    pub fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
         &mut self,
         resource: &mut T,
         stages: vk::PipelineStageFlags2,
@@ -51,8 +46,8 @@ pub struct GPUFutureContext {
 
     memory_barrier: vk::MemoryBarrier2<'static>,
     image_barrier: Vec<vk::ImageMemoryBarrier2<'static>>,
-    expected_resource_states: BTreeMap<ResourceId, ResourceState>,
-    resource_states: BTreeMap<ResourceId, ResourceState>
+    expected_resource_states: ResourceStateTable,
+    resource_states: ResourceStateTable
 }
 
 impl GPUFutureContext {

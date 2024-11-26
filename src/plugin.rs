@@ -237,8 +237,8 @@ impl Plugin for RhyolitePlugin {
         .unwrap();
         app.add_device_extension::<khr::synchronization2::Meta>()
             .unwrap();
-        app.add_device_extension::<khr::maintenance4::Meta>()
-            .unwrap();
+        //app.add_device_extension::<khr::maintenance4::Meta>()
+        //    .unwrap();
         app.enable_feature::<vk::PhysicalDeviceSynchronization2Features>(|f| {
             &mut f.synchronization2
         })

@@ -230,57 +230,6 @@ pub trait DebugObject: crate::HasDevice + crate::utils::AsVkHandle {
 }
 impl<T> DebugObject for T where T: crate::HasDevice + crate::utils::AsVkHandle {}
 
-pub trait DebugCommands: CommandRecorder {
-    fn begin_debug_label(&mut self, label: &CStr, color: [f32; 4]) {
-        if self.device().get_extension::<DebugUtilsExt>().is_err() {
-            return;
-        }
-        unsafe {
-            let cmd_buf = self.cmd_buf();
-            self.device()
-                .extension::<DebugUtilsExt>()
-                .cmd_begin_debug_utils_label(
-                    cmd_buf,
-                    &vk::DebugUtilsLabelEXT {
-                        p_label_name: label.as_ptr(),
-                        color,
-                        ..Default::default()
-                    },
-                )
-        }
-    }
-    fn end_debug_label(&mut self) {
-        if self.device().get_extension::<DebugUtilsExt>().is_err() {
-            return;
-        }
-        unsafe {
-            let cmd_buf = self.cmd_buf();
-            self.device()
-                .extension::<DebugUtilsExt>()
-                .cmd_end_debug_utils_label(cmd_buf)
-        }
-    }
-    fn insert_debug_label(&mut self, label: &CStr, color: [f32; 4]) {
-        if self.device().get_extension::<DebugUtilsExt>().is_err() {
-            return;
-        }
-        unsafe {
-            let cmd_buf = self.cmd_buf();
-            self.device()
-                .extension::<DebugUtilsExt>()
-                .cmd_insert_debug_utils_label(
-                    cmd_buf,
-                    &vk::DebugUtilsLabelEXT {
-                        p_label_name: label.as_ptr(),
-                        color,
-                        ..Default::default()
-                    },
-                )
-        }
-    }
-}
-impl<T> DebugCommands for T where T: CommandRecorder {}
-
 impl crate::Device {
     pub fn set_debug_name<T: ash::vk::Handle + Copy>(
         &self,

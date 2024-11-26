@@ -1,4 +1,6 @@
+use ash::vk::{Handle, PhysicalDeviceSwapchainMaintenance1FeaturesEXT, SwapchainKHR};
 use cstr::cstr;
+use std::ops::DerefMut;
 use std::{collections::BTreeSet, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
@@ -13,15 +15,17 @@ use bevy::{
 };
 use smallvec::SmallVec;
 
-use crate::HasDevice;
+use crate::command::QueueDependency;
+use crate::future::{GPUOwnedResource, ResourceId, GPUResource};
+use crate::selectors::Graphics;
+use crate::{HasDevice, Queue};
 use crate::{
-    commands::{ResourceTransitionCommands, SemaphoreSignalCommands, TrackedResource},
-    ecs::{Barriers, IntoRenderSystemConfigs, RenderImage, RenderSystemPass},
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
-    Access, Device, ImageLike, ImageViewLike, PhysicalDevice, Queues, Surface,
+    Device, ImageLike, ImageViewLike, PhysicalDevice, Surface,
 };
 use ash::khr::swapchain::Meta as KhrSwapchain;
+use ash::ext::swapchain_maintenance1::Meta as ExtSwapchainMaintenance1;
 pub struct SwapchainPlugin {
     num_frame_in_flight: u32,
 }
@@ -37,24 +41,15 @@ impl Default for SwapchainPlugin {
 impl Plugin for SwapchainPlugin {
     fn build(&self, app: &mut App) {
         app.add_device_extension::<KhrSwapchain>().unwrap();
+        app.add_device_extension::<ExtSwapchainMaintenance1>().unwrap();
+        app.enable_feature::<vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>(|x| &mut x.swapchain_maintenance1).unwrap();;
 
         app.add_systems(
             PostUpdate,
             (
                 extract_swapchains.after(crate::surface::extract_surfaces),
-                present
-                    .with_option::<RenderSystemPass>(|entry| {
-                        let item = entry.or_default();
-                        item.is_queue_op = true;
-                        item.force_binary_semaphore = true;
-                    })
-                    .with_barriers(present_barriers),
+                present,
                 acquire_swapchain_image::<With<PrimaryWindow>>
-                    .with_option::<RenderSystemPass>(|entry| {
-                        let item = entry.or_default();
-                        item.is_queue_op = true;
-                        item.force_binary_semaphore = true;
-                    })
                     .after(extract_swapchains)
                     .before(present),
             ),
@@ -74,7 +69,7 @@ pub struct Swapchain {
     acquire_semaphore: vk::Semaphore,
     /// An unsignaled fence for the next acquire.
     acquire_fence: vk::Fence,
-    images: SmallVec<[Option<RenderImage<SwapchainImageInner>>; 3]>,
+    images: SmallVec<[Option<SwapchainImageInner>; 3]>,
 }
 
 impl HasDevice for Swapchain {
@@ -87,7 +82,8 @@ impl Drop for Swapchain {
     fn drop(&mut self) {
         unsafe {
             // This semaphore can be immediately deleted because we know it's not in use.
-            // This semaphore is only used for the `next` acquire.
+            // This semaphore is only used for the `next` acquire. It only gets swapped back
+            // after we've waited on it.
             self.inner
                 .device
                 .destroy_semaphore(self.acquire_semaphore, None);
@@ -226,7 +222,16 @@ impl Swapchain {
                                 None,
                             )
                             .unwrap();
-                        let mut img = RenderImage::new(SwapchainImageInner {
+                        let present_fence = device
+                            .create_fence(
+                                &vk::FenceCreateInfo {
+                                    flags: vk::FenceCreateFlags::SIGNALED,
+                                    ..Default::default()
+                                },
+                                None,
+                            )
+                            .unwrap();
+                        let img = SwapchainImageInner {
                             image,
                             indice: i as u32,
                             swapchain: inner.clone(),
@@ -234,12 +239,11 @@ impl Swapchain {
                             present_semaphore,
                             acquire_semaphore,
                             acquire_fence,
-                        });
-                        img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
-                        img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
+                            present_fence,
+                        };
                         Ok(Some(img))
                     })
-                    .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?
+                    .collect::<VkResult<Vec<Option<SwapchainImageInner>>>>()?
                     .into(),
                 inner,
                 acquire_semaphore: {
@@ -376,7 +380,18 @@ impl Swapchain {
                             None,
                         )
                         .unwrap();
-                    let mut img = RenderImage::new(SwapchainImageInner {
+                    let present_fence = self
+                        .inner
+                        .device
+                        .create_fence(
+                            &vk::FenceCreateInfo {
+                                flags: vk::FenceCreateFlags::SIGNALED,
+                                ..Default::default()
+                            },
+                            None,
+                        )
+                        .unwrap();
+                    let img = SwapchainImageInner {
                         image,
                         indice: i as u32,
                         swapchain: self.inner.clone(),
@@ -384,12 +399,11 @@ impl Swapchain {
                         present_semaphore,
                         acquire_semaphore,
                         acquire_fence,
-                    });
-                    img.res.state.read.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
-                    img.res.state.write.stage = vk::PipelineStageFlags2::BOTTOM_OF_PIPE;
+                        present_fence,
+                    };
                     Ok(Some(img))
                 })
-                .collect::<VkResult<Vec<Option<RenderImage<SwapchainImageInner>>>>>()?
+                .collect::<VkResult<Vec<Option<SwapchainImageInner>>>>()?
                 .into();
         }
         Ok(())
@@ -508,6 +522,7 @@ pub(super) fn extract_swapchains(
             recreate_swapchain(&mut swapchain, surface, window, config);
         }
     }
+    let resource_id = ResourceId::new();
     for create_event in window_created_events.read() {
         let (window, config, swapchain, surface) = query.get(create_event.window).unwrap();
         assert!(swapchain.is_none());
@@ -522,8 +537,7 @@ pub(super) fn extract_swapchains(
             .insert(new_swapchain)
             .insert(SwapchainImage {
                 inner: None,
-                acquire_semaphore: vk::Semaphore::null(),
-                present_semaphore: vk::Semaphore::null(),
+                id: resource_id // all swapchain images to use the same resource id. Assuming that one frame cannot use two swapchain images simutaneously.
             });
     }
 }
@@ -733,48 +747,24 @@ fn get_surface_preferred_format(
 
 #[derive(Component)]
 pub struct SwapchainImage {
-    inner: Option<RenderImage<SwapchainImageInner>>,
-
-    /// Semaphore to wait on after acquiring the image. Set to null after vkAcquireNextImageKHR.
-    /// Owned by `SwapchainImageInner`
-    acquire_semaphore: vk::Semaphore,
-    /// Semaphore to wait on before presenting the image. Set to null after call to vkQueueSubmit.
-    /// Owned by `SwapchainImageInner`
-    present_semaphore: vk::Semaphore,
+    id: ResourceId,
+    pub(crate) inner: Option<SwapchainImageInner>,
 }
-impl TrackedResource for SwapchainImage {
-    type State = vk::ImageLayout;
-    fn current_state(&self) -> Self::State {
-        let image = self
-            .inner
-            .as_ref()
-            .expect("SwapchainAcquire must have been called");
-        image.layout
+impl SwapchainImage {
+    pub fn blocking_stages(&self, stages: vk::PipelineStageFlags2) -> QueueDependency {
+        debug_assert!(!self.acquire_semaphore.is_null());
+        QueueDependency(
+            vk::SemaphoreSubmitInfo {
+                stage_mask: stages,
+                semaphore: self.acquire_semaphore,
+                ..Default::default()
+            }
+        )
     }
-    fn transition(
-        &mut self,
-        access: Access,
-        retain_data: bool,
-        next_state: Self::State,
-        commands: &mut impl ResourceTransitionCommands,
-    ) {
-        let image = self
-            .inner
-            .as_mut()
-            .expect("SwapchainAcquire must have been called");
-
-        if self.acquire_semaphore != vk::Semaphore::null() {
-            assert!(self.acquire_semaphore != vk::Semaphore::null());
-            commands
-                .wait_binary_semaphore(std::mem::take(&mut self.acquire_semaphore), access.stage);
-        }
-        <RenderImage<SwapchainImageInner> as TrackedResource>::transition(
-            image,
-            access,
-            retain_data,
-            next_state,
-            commands,
-        );
+}
+unsafe impl<'t> GPUResource for &'t SwapchainImage {
+    fn resource_state<'a>(self, state_table: &'a mut crate::future::ResourceStateTable) -> &'a mut crate::future::ResourceState where Self: 'a {
+        state_table.entry(self.id).or_insert_with(Default::default)
     }
 }
 impl Deref for SwapchainImage {
@@ -796,15 +786,18 @@ pub struct SwapchainImageInner {
     /// The swapchain image was acquired using this semaphore.
     acquire_semaphore: vk::Semaphore,
     acquire_fence: vk::Fence,
-    present_semaphore: vk::Semaphore,
+    pub(crate) present_semaphore: vk::Semaphore,
+    present_fence: vk::Fence,
 }
 impl Drop for SwapchainImageInner {
     fn drop(&mut self) {
         unsafe {
             self.swapchain
                 .device
-                .wait_for_fences(&[self.acquire_fence], true, !0)
+                .wait_for_fences(&[self.acquire_fence, self.present_fence], true, !0)
                 .unwrap();
+            self.swapchain.device.destroy_fence(self.acquire_fence, None);
+            self.swapchain.device.destroy_fence(self.present_fence, None);
             self.swapchain.device.destroy_image_view(self.view, None);
             self.swapchain
                 .device
@@ -812,11 +805,12 @@ impl Drop for SwapchainImageInner {
             self.swapchain
                 .device
                 .destroy_semaphore(self.present_semaphore, None);
+            // It is now ok to destroy the reference to the swapchain. We've waited on the acquire and present fences.
         }
     }
 }
 
-impl ImageLike for SwapchainImageInner {
+impl ImageLike for SwapchainImage {
     fn raw_image(&self) -> vk::Image {
         self.image
     }
@@ -839,7 +833,7 @@ impl ImageLike for SwapchainImageInner {
         self.swapchain.format
     }
 }
-impl ImageViewLike for SwapchainImageInner {
+impl ImageViewLike for SwapchainImage {
     fn raw_image_view(&self) -> vk::ImageView {
         self.view
     }
@@ -906,9 +900,6 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     };
 
     let indice = match unsafe {
-        // Technically, we don't have to do this here. With Swapchain_Maintenance1,
-        // we could do this in the present workflow which should be more correct.
-        // TODO: verify correctness.
         swapchain
             .inner
             .device
@@ -943,106 +934,32 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         "Must present the current image before acquiring a new one"
     );
 
+    // wait on the previous acquire
     unsafe {
         device
             .wait_for_fences(&[image.acquire_fence], true, !0)
             .unwrap();
         device.reset_fences(&[image.acquire_fence]).unwrap();
     }
-    // At this point, we just acquired an image with semaphore 1.
+    // At this point, we just acquired an image with the extra semaphore on swapchain.
     // We can also assume that 2 is now available since we've waited on its fence.
+    // swap them into the image itself so that the extra semaphore on the swapchain remains unsignaled and available.
     std::mem::swap(
         &mut swapchain.acquire_semaphore,                  // 1
-        &mut unsafe { image.get_mut() }.acquire_semaphore, // 2
+        &mut image.acquire_semaphore,                      // 2
     );
     std::mem::swap(
         &mut swapchain.acquire_fence,
-        &mut unsafe { image.get_mut() }.acquire_fence,
+        &mut image.acquire_fence,
     );
-    swapchain_image.acquire_semaphore = image.acquire_semaphore;
-    swapchain_image.present_semaphore = image.present_semaphore;
     swapchain_image.inner = Some(image);
 }
 
-fn present_barriers(
-    In(mut barriers): In<Barriers>,
-    mut query: Query<&mut SwapchainImage>,
-    queues_router: Res<Queues>,
-) {
-    for i in query.iter_mut() {
-        let i = i.into_inner();
-        let image = i.inner.as_mut().unwrap();
-        let barrier = image.res.state.transition(
-            Access {
-                stage: vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
-                access: vk::AccessFlags2::empty(),
-            },
-            true,
-        );
-        if let Some(prev_queue) = image.res.state.queue_family {
-            barriers.add_image_barrier_prev_stage(
-                vk::ImageMemoryBarrier2 {
-                    src_stage_mask: barrier.src_stage_mask,
-                    src_access_mask: barrier.src_access_mask,
-                    dst_stage_mask: barrier.dst_stage_mask,
-                    dst_access_mask: barrier.dst_access_mask,
-                    old_layout: image.layout,
-                    new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                    image: image.raw_image(),
-                    subresource_range: image.subresource_range(),
-                    ..Default::default()
-                },
-                prev_queue,
-            );
-            barriers.signal_binary_semaphore_prev_stage(
-                i.present_semaphore,
-                barrier.dst_stage_mask,
-                prev_queue,
-            );
-        } else {
-            // image was never accessed before! that means nothing within the current frame wrote to the swapchain image.
-            // the present operation still expects the image to be in PRESENT layout tho. So we need to transition its layout.
-            // Here we simply put the transition on the graphics queue. The graphics queue submission will now wait for the
-            // acquire semaphore of the swapchain image.
-            barriers.add_image_barrier_prev_stage(
-                vk::ImageMemoryBarrier2 {
-                    src_stage_mask: barrier.src_stage_mask,
-                    src_access_mask: barrier.src_access_mask,
-                    dst_stage_mask: barrier.dst_stage_mask,
-                    dst_access_mask: barrier.dst_access_mask,
-                    old_layout: image.layout,
-                    new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                    image: image.raw_image(),
-                    subresource_range: image.subresource_range(),
-                    ..Default::default()
-                },
-                queues_router
-                    .with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty())
-                    .unwrap(),
-            );
-            barriers.signal_binary_semaphore_prev_stage(
-                i.present_semaphore,
-                barrier.dst_stage_mask,
-                queues_router
-                    .with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty())
-                    .unwrap(),
-            );
-            // This previous queue now needs to wait for the swapchain acquire semaphore, since nobody else is waiting on it.
-            barriers.wait_binary_semaphore_prev_stage(
-                i.acquire_semaphore,
-                barrier.src_stage_mask,
-                queues_router
-                    .with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty())
-                    .unwrap(),
-            );
-        }
-        image.layout = vk::ImageLayout::PRESENT_SRC_KHR;
-        image.res.state.queue_family = None;
-    }
-}
 pub fn present(
     device: Res<Device>,
-    queues_router: Res<Queues>,
+    // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
+    // select the best one.
+    queue: Queue<Graphics>,
     mut query: Query<(
         &mut Swapchain,
         &mut SwapchainImage,
@@ -1050,16 +967,31 @@ pub fn present(
         &Window,
         Option<&SwapchainConfig>,
     )>,
+    
+
+
+    mut reused_states: Local<(
+        Vec<vk::SwapchainKHR>,
+        Vec<vk::Semaphore>,
+        Vec<vk::Fence>,
+        Vec<u32>
+    )>
 ) {
-    let mut swapchains: Vec<vk::SwapchainKHR> = Vec::new();
-    let mut semaphores: Vec<vk::Semaphore> = Vec::new();
-    let mut swapchain_image_indices: Vec<u32> = Vec::new();
+    let (ref mut swapchains, ref mut semaphores, ref mut fences, ref mut swapchain_image_indices) = reused_states.deref_mut();
+    swapchains.clear();
+    semaphores.clear();
+    fences.clear();
+    swapchain_image_indices.clear();
+
+
     for (mut swapchain, mut swapchain_image, _, _, _) in query.iter_mut() {
-        let Some(swapchain_image) = swapchain_image.inner.take() else {
+        let Some( swapchain_image) = swapchain_image.inner.take() else {
             continue;
         };
-        swapchains.push(swapchain.inner.inner);
         semaphores.push(swapchain_image.present_semaphore);
+        fences.push(swapchain_image.present_fence);
+
+        swapchains.push(swapchain.inner.inner);
         // Safety: we're only getting the indice of the image and we're not actually reading / writing to it.
         let indice = swapchain_image.indice;
         swapchain_image_indices.push(indice);
@@ -1069,23 +1001,20 @@ pub fn present(
         return;
     }
 
-    // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
-    // select the best one.
-    let present_queue = queues_router
-        .with_caps(vk::QueueFlags::GRAPHICS, vk::QueueFlags::empty())
-        .unwrap();
-    let queue = queues_router.get(present_queue);
     unsafe {
+
+        // Wait for the previous presentations to finish
+        device
+        .wait_for_fences(&fences, true, !0)
+        .unwrap();
+        device.reset_fences(&fences).unwrap();
         match device.extension::<KhrSwapchain>().queue_present(
-            *queue,
-            &vk::PresentInfoKHR {
-                swapchain_count: swapchains.len() as u32,
-                p_swapchains: swapchains.as_ptr(),
-                p_image_indices: swapchain_image_indices.as_ptr(),
-                p_wait_semaphores: semaphores.as_ptr(),
-                wait_semaphore_count: semaphores.len() as u32,
-                ..Default::default()
-            },
+            queue.queue,
+            &vk::PresentInfoKHR::default()
+            .swapchains(&swapchains)
+            .image_indices(&swapchain_image_indices)
+            .wait_semaphores(&semaphores)
+            .push_next(&mut vk::SwapchainPresentFenceInfoEXT::default().fences(&fences)),
         ) {
             Ok(suboptimal) => {
                 if suboptimal {

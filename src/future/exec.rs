@@ -34,16 +34,16 @@ fn gpu_future_poll<T: Future>(gpu_future: Pin<&mut T>, ctx: &mut GPUFutureContex
 
 
 
-pub struct GPUFutureSubmissionStatus<T: GPUFutureBlock> {
-    return_value: <T as GPUFutureBlock>::Output,
-    retained_values: <T as GPUFutureBlock>::Retained,
+pub struct GPUFutureSubmissionStatus<Returned, Retained> {
+    return_value: Returned,
+    retained_values: Retained,
     timeline_semaphore: Arc<TimelineSemaphore>,
     wait_value: u64
 }
 
 impl<'a> CommandEncoder<'a> {
     /// The recorded futures will be executed serially
-    pub fn record<T: GPUFutureBlock>(&mut self, future: T) -> GPUFutureSubmissionStatus<T> {
+    pub fn record<T: GPUFutureBlock>(&mut self, future: T) -> GPUFutureSubmissionStatus<T::Returned, T::Retained> {
         let mut future = std::pin::pin!(future);
         let GPUFutureBlockReturnValue { output, retained_values } = loop {
             match gpu_future_poll(future.as_mut(), &mut self.command_buffer.future_ctx) {

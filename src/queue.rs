@@ -1,13 +1,10 @@
 use std::{
-    collections::BTreeMap, marker::PhantomData, ops::{Deref, DerefMut}, sync::{
-        atomic::AtomicBool,
-        Arc, Mutex, MutexGuard,
-    }
+    marker::PhantomData, ops::{Deref, DerefMut}
 };
 
 use ash::vk;
 use bevy::{ecs::{component::{ComponentId, Tick}, system::{SystemMeta, SystemParam}, world::unsafe_world_cell::UnsafeWorldCell}, prelude::{FromWorld, ResMut, Resource, World}};
-use crate::{Device, PhysicalDevice};
+use crate::{command::CommandPool, Device};
 
 const PRIORITY_HIGH: [f32; 2] = [1.0, 0.1];
 const PRIORITY_MEDIUM: [f32; 2] = [0.5, 0.1];
@@ -61,6 +58,7 @@ pub struct QueueConfiguration {
 struct QueueConfigurationFamily {
     /// Pointing to a QueueInner
     queues: smallvec::SmallVec<[ComponentId; 2]>,
+    shared_command_pool: ComponentId,
     flags: vk::QueueFlags,
 }
 
@@ -80,11 +78,27 @@ impl QueueConfiguration {
         let mut this = QueueConfiguration {
             families: queue_family_info.iter().map(|info| QueueConfigurationFamily {
                 flags: info.queue_flags,
+                shared_command_pool: ComponentId::new(0),
                 queues: SmallVec::new(),
             }).collect()
         };
 
         for vk::DeviceQueueCreateInfo { queue_count, queue_family_index, ..} in queue_create_info.iter() {
+            let family = &mut this.families[*queue_family_index as usize];
+
+
+            assert_eq!(family.shared_command_pool.index(), 0, "Each queue family index inside `queue_create_info` should be unique");
+
+            // Create shared command pool.
+            let command_pool = CommandPool::new(device.clone(), *queue_family_index, vk::CommandPoolCreateFlags::TRANSIENT).unwrap();
+            let component_id = world.init_component_with_descriptor(ComponentDescriptor::new_resource::<CommandPool>());
+            OwningPtr::make(command_pool, |ptr| unsafe {
+                // SAFETY: component_id was just initialized and corresponds to resource of type R.
+                world.insert_resource_by_id(component_id, ptr);
+            });
+            family.shared_command_pool = component_id;
+
+
             for queue_index in 0..*queue_count {
                 let queue = unsafe {
                     device.get_device_queue(*queue_family_index, queue_index)
@@ -99,7 +113,7 @@ impl QueueConfiguration {
                     // SAFETY: component_id was just initialized and corresponds to resource of type R.
                     world.insert_resource_by_id(component_id, ptr);
                 });
-                this.families[*queue_family_index as usize].queues.push(component_id);
+                family.queues.push(component_id);
             }
         }
         world.insert_resource(this);
@@ -109,7 +123,11 @@ impl QueueConfiguration {
 
 
 pub trait QueueSelector {
+    fn family_index(config: &QueueConfiguration) -> u32;
     fn component_id(config: &QueueConfiguration) -> ComponentId;
+    fn shared_command_pool_component_id(config: &QueueConfiguration) -> ComponentId {
+        config.families[Self::family_index(config) as usize].shared_command_pool
+    }
 }
 pub struct Queue<'a, T: QueueSelector> {
     queue: &'a mut QueueInner,
@@ -188,15 +206,17 @@ pub mod selectors {
     use super::{QueueSelector, QueueConfiguration, ComponentId};
 
     macro_rules! return_queue {
-        ($family: expr) => {
+        ($config: expr) => {
+            let family_index = Self::family_index($config);
+            let family = &$config.families[family_index as usize];
             if ASYNC {
-                if $family.queues.len() >= 2 {
-                    return $family.queues[1];
+                if family.queues.len() >= 2 {
+                    return family.queues[1];
                 } else {
-                    return $family.queues[0];
+                    return family.queues[0];
                 }
             } else {
-                return $family.queues[0];
+                return family.queues[0];
             }
         };
     }
@@ -205,13 +225,16 @@ pub mod selectors {
     /// If ASYNC is set to true, when multiple queues are available for the target queue family, this will select the secondary queue.
     pub struct Graphics<const ASYNC: bool = false>;
     impl<const ASYNC: bool> QueueSelector for Graphics<ASYNC> {
-        fn component_id(config: &QueueConfiguration) -> ComponentId {
-            for family in config.families.iter() {
+        fn family_index(config: &QueueConfiguration) -> u32 {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
-            panic!("Cannot find Render queue!")
+            panic!("Cannot find Render queue family!")
+        }
+        fn component_id(config: &QueueConfiguration) -> ComponentId {
+            return_queue!(config);
         }
     }
 
@@ -220,18 +243,21 @@ pub mod selectors {
     /// If no such queue exists, select any queue with [`vk::QueueFlags::COMPUTE`].
     pub struct UniversalCompute<const ASYNC: bool = false>;
     impl<const ASYNC: bool> QueueSelector for UniversalCompute<ASYNC> {
-        fn component_id(config: &QueueConfiguration) -> ComponentId {
-            for family in config.families.iter() {
+        fn family_index(config: &QueueConfiguration) -> u32 {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::GRAPHICS) && family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
-            for family in config.families.iter() {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
             panic!("Cannot find Compute queue!")
+        }
+        fn component_id(config: &QueueConfiguration) -> ComponentId {
+            return_queue!(config);
         }
     }
 
@@ -239,21 +265,24 @@ pub mod selectors {
     pub struct DedicatedCompute<const ASYNC: bool = false>;
 
     impl<const ASYNC: bool> QueueSelector for DedicatedCompute<ASYNC> {
-        fn component_id(config: &QueueConfiguration) -> ComponentId {
+        fn family_index(config: &QueueConfiguration) -> u32 {
             // Find the dedicated compute queue with no graphics capabilities.
-            for family in config.families.iter() {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
 
             // Find any queue with compute capabilities.
-            for family in config.families.iter() {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
             panic!("Cannot find dedicated compute queue!")
+        }
+        fn component_id(config: &QueueConfiguration) -> ComponentId {
+            return_queue!(config);
         }
     }
 
@@ -261,39 +290,43 @@ pub mod selectors {
     pub struct DedicatedTransfer<const ASYNC: bool = false>;
 
     impl<const ASYNC: bool> QueueSelector for DedicatedTransfer<ASYNC> {
-        fn component_id(config: &QueueConfiguration) -> ComponentId {
+        fn family_index(config: &QueueConfiguration) -> u32 {
             // Find the dedicated compute queue with no graphics or compute capabilities.
-            for family in config.families.iter() {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::TRANSFER) && !family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
 
             // Find queue with no graphics capabilities. Prefer compute-based transfers.
-            for family in config.families.iter() {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::TRANSFER) && !family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
             // Find any queue with the transfer flag set.
-            for family in config.families.iter() {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::TRANSFER) || !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
             // Find any queue with compute flag.
-            for family in config.families.iter() {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::COMPUTE) || !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
             // Find any queue with graphics flag.
-            for family in config.families.iter() {
+            for (family_index, family) in config.families.iter().enumerate() {
                 if family.flags.contains(vk::QueueFlags::GRAPHICS) || !family.queues.is_empty(){
-                    return_queue!(family);
+                    return family_index as u32;
                 }
             }
             panic!("Cannot find dedicated transfer queue!")
+        }
+
+        fn component_id(config: &QueueConfiguration) -> ComponentId {
+            return_queue!(config);
         }
     }
 

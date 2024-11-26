@@ -1,11 +1,11 @@
-use std::{fmt::Debug, sync::atomic::AtomicU64};
+use std::{fmt::Debug, sync::{atomic::AtomicU64, Arc}};
 
 use ash::{
     prelude::VkResult,
     vk::{self},
 };
 
-use crate::{utils::AsVkHandle, Device, HasDevice};
+use crate::{command::Timeline, utils::AsVkHandle, Device, HasDevice};
 
 /// A thin wrapper around [Timeline Semaphores](https://www.khronos.org/blog/vulkan-timeline-semaphores).
 /// We additionally cache the timeline semaphore value in an [`AtomicU64`] to reduce the number of API
@@ -121,5 +121,48 @@ impl Drop for TimelineSemaphore {
         unsafe {
             self.device.destroy_semaphore(self.semaphore, None);
         }
+    }
+}
+
+
+struct SemaphoreDeferredValueWait {
+    semaphore: Arc<TimelineSemaphore>,
+    wait_value: u64,
+}
+
+impl Drop for SemaphoreDeferredValueWait {
+    fn drop(&mut self) {
+        self.semaphore.wait_blocked(self.wait_value, !0).unwrap();
+    }
+}
+
+
+/// T protected by a timeline semaphore.
+pub struct SemaphoreDeferredValue<T> {
+    /// This must be defined in this struct before `value`. This ensures that `value` won't be dropped
+    /// until we've awaited on the timeline semaphore.
+    wait: SemaphoreDeferredValueWait,
+    value: T,
+}
+
+impl<T> SemaphoreDeferredValue<T> {
+    pub fn unwrap_blocked(self) -> T {
+        drop(self.wait); // This blocks on the semaphore
+        self.value
+    }
+    pub fn new(semaphore: Arc<TimelineSemaphore>, wait_value: u64, inner_value: T) -> Self {
+        Self {
+            wait: SemaphoreDeferredValueWait {
+                semaphore,
+                wait_value
+            },
+            value: inner_value
+        }
+    }
+    pub fn wait_value(&self) -> u64 {
+        self.wait.wait_value
+    }
+    pub fn current_value(&self) -> u64 {
+        self.wait.semaphore.value()
     }
 }
