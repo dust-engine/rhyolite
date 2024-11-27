@@ -4,23 +4,29 @@ use ash::vk;
 
 use crate::{Device, ImageLike};
 
-use super::{res::{ResourceState, ResourceStateTable}, GPUResource};
-
+use super::{
+    res::{ResourceState, ResourceStateTable},
+    GPUResource,
+};
 
 struct GlobalResourceContext {
     // manages resource id allocator
 }
-
 
 pub struct BarrierContext<'a> {
     memory_barrier: &'a mut vk::MemoryBarrier2<'static>,
     image_barrier: &'a mut Vec<vk::ImageMemoryBarrier2<'static>>,
     // The local resource state table
     expected_resource_states: &'a mut ResourceStateTable,
-    resource_states: &'a mut ResourceStateTable
+    resource_states: &'a mut ResourceStateTable,
 }
 impl<'a> BarrierContext<'a> {
-    pub fn use_resource(&mut self, resource: &mut impl GPUResource, stages: vk::PipelineStageFlags2, access: vk::AccessFlags2) {
+    pub fn use_resource(
+        &mut self,
+        resource: &mut impl GPUResource,
+        stages: vk::PipelineStageFlags2,
+        access: vk::AccessFlags2,
+    ) {
     }
 
     pub fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
@@ -43,11 +49,10 @@ pub struct GPUFutureContext {
     device: Device,
     command_buffer: vk::CommandBuffer,
 
-
     memory_barrier: vk::MemoryBarrier2<'static>,
     image_barrier: Vec<vk::ImageMemoryBarrier2<'static>>,
     expected_resource_states: ResourceStateTable,
-    resource_states: ResourceStateTable
+    resource_states: ResourceStateTable,
 }
 
 impl GPUFutureContext {
@@ -68,9 +73,9 @@ impl GPUFutureContext {
         self.resource_states.clear();
     }
     pub(crate) fn record_ctx(&mut self) -> RecordContext {
-        RecordContext{
+        RecordContext {
             device: &self.device,
-            command_buffer: self.command_buffer
+            command_buffer: self.command_buffer,
         }
     }
     pub(crate) fn barrier_ctx(&mut self) -> BarrierContext {

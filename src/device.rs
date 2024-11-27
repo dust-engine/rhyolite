@@ -36,8 +36,7 @@ impl PartialEq for Device {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
-impl Eq for Device {
-}
+impl Eq for Device {}
 
 pub struct DeviceInner {
     physical_device: PhysicalDevice,
@@ -87,7 +86,6 @@ impl Device {
             })
             .collect();
 
-
         let device = Self(Arc::new(DeviceInner {
             physical_device,
             device,
@@ -97,7 +95,11 @@ impl Device {
 
         world.insert_resource(device);
         unsafe {
-            QueueConfiguration::create_in_world(world, &queue_create_infos, &available_queue_family);
+            QueueConfiguration::create_in_world(
+                world,
+                &queue_create_infos,
+                &available_queue_family,
+            );
         }
         Ok(())
     }
@@ -163,4 +165,68 @@ impl Drop for DeviceInner {
             self.device.destroy_device(None);
         }
     }
+}
+
+pub fn create_system_default_device(entry: ash::Entry) -> Device {
+    let mut instance_create_flags = vk::InstanceCreateFlags::empty();
+    let mut enabled_extensions: HashMap<&'static CStr, Option<crate::plugin::InstanceMetaBuilder>> =
+        Default::default();
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+        enabled_extensions.insert(ash::khr::portability_enumeration::NAME, None);
+    }
+
+    let instance = Instance::create(
+        Arc::new(entry),
+        crate::InstanceCreateInfo {
+            flags: vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
+            application_name: cstr::cstr!("RhyoliteSystemDefault"),
+            application_version: Default::default(),
+            engine_name: Default::default(),
+            engine_version: Default::default(),
+            api_version: crate::Version::V1_3,
+            enabled_layer_names: Default::default(),
+            enabled_extensions,
+        },
+    )
+    .unwrap();
+    // Pick the first pdevice as the default
+    let physical_device = instance
+        .enumerate_physical_devices()
+        .unwrap()
+        .next()
+        .unwrap();
+
+    let device_exts = unsafe {
+        instance
+            .enumerate_device_extension_properties(physical_device.raw())
+            .unwrap()
+    };
+    let names = device_exts
+        .iter()
+        .map(|x| x.extension_name.as_ptr())
+        .collect::<Vec<_>>();
+    let device = unsafe {
+        instance
+            .create_device(
+                physical_device.raw(),
+                &vk::DeviceCreateInfo::default()
+                    .enabled_extension_names(&names)
+                    .queue_create_infos(&[vk::DeviceQueueCreateInfo {
+                        queue_family_index: 0,
+                        queue_count: 1,
+                        p_queue_priorities: &1.0,
+                        ..Default::default()
+                    }]),
+                None,
+            )
+            .unwrap()
+    };
+    Device(Arc::new(DeviceInner {
+        physical_device,
+        device,
+        extensions: Default::default(),
+        features: Default::default(),
+    }))
 }

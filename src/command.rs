@@ -1,153 +1,346 @@
-use std::{marker::PhantomData, ops::{Deref, DerefMut}, sync::{atomic::AtomicU64, Arc}};
+use std::{
+    collections::BTreeMap, marker::PhantomData, mem::ManuallyDrop, ops::{Deref, DerefMut}, sync::{atomic::AtomicU64, Arc}
+};
 
-use ash::{prelude::VkResult, vk::{self, Handle, SwapchainKHR}};
-use bevy::{ecs::{component::ComponentId, system::SystemParam}, prelude::{FromWorld, World}};
+use ash::{
+    prelude::VkResult,
+    vk::{self, Handle, SwapchainKHR},
+};
+use bevy::{
+    ecs::{component::ComponentId, system::SystemParam},
+    prelude::{FromWorld, World},
+};
 
-use crate::{future::GPUFutureContext, semaphore::{SemaphoreDeferredValue, TimelineSemaphore}, swapchain::SwapchainImage, Device, HasDevice, Queue, QueueConfiguration, QueueSelector};
+use crate::{
+    future::{GPUFutureContext, InFlightFrameMananger},
+    semaphore::{SemaphoreDeferredValue, TimelineSemaphore},
+    swapchain::SwapchainImage,
+    Device, HasDevice, Queue, QueueConfiguration, QueueSelector,
+};
 
 pub struct CommandPool {
     device: Device,
-    raw: vk::CommandPool,
+    pub(crate) raw: vk::CommandPool,
     queue_family_index: u32,
     flags: vk::CommandPoolCreateFlags,
-    num_outstanding_buffers: u32,
+    pub(crate) generation: u64,
+
+    semaphore_signals: BTreeMap<vk::CommandBuffer, (Arc<TimelineSemaphore>, u64)>,
+
+    semaphore_signal_raws: Vec<vk::Semaphore>,
+    semaphore_signal_values: Vec<u64>,
+}
+struct CommandPoolTimeline {
+    semaphore: Arc<TimelineSemaphore>,
+    index: usize,
 }
 impl Drop for CommandPool {
     fn drop(&mut self) {
-        assert!(self.num_outstanding_buffers == 0, "Cannot drop the command pool because there are still outstanding command buffers allocated from this pool.");
-        unsafe  {
+        // Wait for semaphore signals to ensure that there's no pending command buffers.
+        self.wait_for_completion();
+        unsafe {
             self.device.destroy_command_pool(self.raw, None);
         }
     }
 }
 
-pub struct CommandEncoder<'a> {
-    pool: &'a mut CommandPool,
-    pub(crate) command_buffer: CommandBuffer,
-}
-pub struct CommandBuffer {
-    raw: vk::CommandBuffer,
-    flags: vk::CommandBufferUsageFlags,
-    pub(crate) timeline_semaphore: Arc<TimelineSemaphore>,
-    pub(crate) wait_value: u64,
-    pub(crate) future_ctx: GPUFutureContext,
-    drop_guard: CommandBufferDropGuard,
-}
-struct CommandBufferDropGuard;
-impl Drop for CommandBufferDropGuard {
-    fn drop(&mut self) {
-        panic!("CommandBuffer must be returned to the CommandPool!");
-    }
-}
-
-
+/// ## Usages
+/// ### Reset the whole command pool
+/// ```rust
+/// use ash::vk;
+/// let device = rhyolite::create_system_default_device(unsafe { ash::Entry::load().unwrap() });
+/// let command_pool = rhyolite::command::CommandPool::new(device.clone(), 0, vk::CommandPoolCreateFlags::TRANSIENT);
+///
+/// let timeline = rhyolite::command::Timeline::new(device.clone());
+/// ```
 impl CommandPool {
-    pub fn new(device: Device, queue_family_index: u32, flags: vk::CommandPoolCreateFlags) -> VkResult<Self> {
+    fn wait_for_completion(&mut self) {
+        self.semaphore_signal_raws
+            .extend(self.semaphore_signals.values().map(|x| x.0.raw()));
+        self.semaphore_signal_values
+            .extend(self.semaphore_signals.values().map(|x| x.1));
         unsafe {
-            let raw = device.create_command_pool(&vk::CommandPoolCreateInfo {
-                queue_family_index,
-                ..Default::default()
-            }, None)?;
+            self.device
+                .wait_semaphores(
+                    &vk::SemaphoreWaitInfo::default()
+                        .semaphores(&self.semaphore_signal_raws)
+                        .values(&self.semaphore_signal_values),
+                    !0,
+                )
+                .unwrap();
+        }
+        self.semaphore_signal_raws.clear();
+        self.semaphore_signal_values.clear();
+        self.semaphore_signals.clear();
+    }
+    pub fn new(
+        device: Device,
+        queue_family_index: u32,
+        flags: vk::CommandPoolCreateFlags,
+    ) -> VkResult<Self> {
+        unsafe {
+            let raw = device.create_command_pool(
+                &vk::CommandPoolCreateInfo {
+                    queue_family_index,
+                    ..Default::default()
+                },
+                None,
+            )?;
             Ok(Self {
                 raw,
                 device,
-                num_outstanding_buffers: 0,
                 queue_family_index,
                 flags,
+                generation: 0,
+                semaphore_signals: BTreeMap::new(),
+                semaphore_signal_raws: Vec::new(),
+                semaphore_signal_values: Vec::new(),
             })
         }
     }
-    pub fn start_encoding(&mut self, on_timeline: &Timeline, flags: vk::CommandBufferUsageFlags) -> VkResult<CommandEncoder> {
-        self.num_outstanding_buffers += 1;
+
+    /// Wait for all outstanding command buffers to complete. Then, reset the command pool.
+    ///
+    /// Safety:
+    /// ## VUID-vkResetCommandPool-commandPool-00040
+    /// All VkCommandBuffer objects allocated from commandPool must not be in the pending state
+    ///
+    /// We enforce this by awaiting on the timeline semaphores signaled.
+    pub fn reset_blocked(&mut self, release_resources: bool) {
+        let reset_flags = if release_resources {
+            vk::CommandPoolResetFlags::RELEASE_RESOURCES
+        } else {
+            vk::CommandPoolResetFlags::empty()
+        };
+        self.wait_for_completion();
+        unsafe {
+            self.device
+                .reset_command_pool(self.raw, reset_flags)
+                .unwrap();
+        }
+        self.generation += 1;
+    }
+    pub fn end(
+        &mut self,
+        command_buffer: CommandBuffer<states::Recording>,
+    ) -> CommandBuffer<states::Executable> {
+        assert_eq!(command_buffer.pool, self.raw);
+        assert_eq!(command_buffer.generation, self.generation, "Command pool has already been reset, and this command buffer is now invaild. Call `update` to restart encoding.");
+
+        self.semaphore_signals.insert(
+            command_buffer.raw,
+            (
+                command_buffer.timeline_semaphore.clone(),
+                command_buffer.signal_value,
+            ),
+        );
+        unsafe {
+            self.device.end_command_buffer(command_buffer.raw);
+            command_buffer.state_transition(states::Executable)
+        }
+    }
+    pub fn allocate(
+        &mut self,
+        on_timeline: &Timeline,
+        flags: vk::CommandBufferUsageFlags,
+    ) -> VkResult<CommandBuffer<states::Recording>> {
         let mut raw = vk::CommandBuffer::null();
-        unsafe  {
-            (self.device.fp_v1_0().allocate_command_buffers)(self.device.handle(), &vk::CommandBufferAllocateInfo {
-                command_pool: self.raw,
-                level: vk::CommandBufferLevel::PRIMARY,
-                command_buffer_count: 1,
-                ..Default::default()
-            }, &mut raw).result()?;
-            self.device.begin_command_buffer(raw, &vk::CommandBufferBeginInfo {
-                flags,
-                ..Default::default()
-            })?;
+        unsafe {
+            (self.device.fp_v1_0().allocate_command_buffers)(
+                self.device.handle(),
+                &vk::CommandBufferAllocateInfo {
+                    command_pool: self.raw,
+                    level: vk::CommandBufferLevel::PRIMARY,
+                    command_buffer_count: 1,
+                    ..Default::default()
+                },
+                &mut raw,
+            )
+            .result()?;
+            self.device.begin_command_buffer(
+                raw,
+                &vk::CommandBufferBeginInfo {
+                    flags,
+                    ..Default::default()
+                },
+            )?;
         }
         let command_buffer = CommandBuffer {
             raw,
+            pool: self.raw,
             flags,
             timeline_semaphore: on_timeline.semaphore.clone(),
-            wait_value: on_timeline.wait_value.load(std::sync::atomic::Ordering::Relaxed),
+            signal_value: on_timeline.increment() + 1,
             future_ctx: GPUFutureContext::new(self.device.clone(), raw),
-            drop_guard: CommandBufferDropGuard,
+            generation: self.generation,
+            _marker: PhantomData
         };
+        Ok(command_buffer)
+    }
 
-        on_timeline.increment();
-        Ok(CommandEncoder {
-            pool: self,
-            command_buffer,
-        })
-    }
-    pub fn restart_encoding(&mut self, mut command_buffer: CommandBuffer, on_timeline: &mut Timeline, release_resources: bool) -> VkResult<CommandEncoder> {
-        assert!(self.flags.contains(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER));
-        let flags = if release_resources {
-            vk::CommandBufferResetFlags::RELEASE_RESOURCES
-        } else {
-            vk::CommandBufferResetFlags::empty()
-        };
-        unsafe {
-            self.device.reset_command_buffer(command_buffer.raw, flags)?;
+    /// This is used in combination with [`CommandPool::reset_blocked`].
+    /// We enforce that [`CommandPool::reset_blocked`] has been called by checking the generation.
+    pub fn update<T>(
+        &mut self,
+        mut command_buffer: CommandBuffer<T>,
+        on_timeline: &Timeline,
+        flags: vk::CommandBufferUsageFlags,
+    ) -> CommandBuffer<states::Recording> {
+        assert!(
+            self.generation > command_buffer.generation,
+            "Must reset the command pool before updating individual command buffers"
+        );
+        assert_eq!(command_buffer.pool, self.raw);
+        command_buffer.generation = self.generation;
+        if !Arc::ptr_eq(&on_timeline.semaphore, &command_buffer.timeline_semaphore) {
+            command_buffer.timeline_semaphore = on_timeline.semaphore.clone();
         }
-        command_buffer.future_ctx.clear();
-        
-        let encoder = CommandEncoder {
-            pool: self,
-            command_buffer,
-        };
-        Ok(encoder)
+        command_buffer.signal_value = on_timeline.increment() + 1;
+
+        unsafe {
+            self.device
+                .begin_command_buffer(
+                    command_buffer.raw,
+                    &vk::CommandBufferBeginInfo {
+                        flags,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        command_buffer.state_transition(states::Recording)
     }
-    pub fn recycle(&mut self, buffer: CommandBuffer) {
+    pub fn free<T: states::NonPending>(&mut self, buffer: CommandBuffer<T>) {
+        self.try_remove_semaphore(&buffer);
+        assert_eq!(buffer.pool, self.raw);
         unsafe {
             self.device.free_command_buffers(self.raw, &[buffer.raw]);
-            self.num_outstanding_buffers -= 1;
-
-            std::mem::forget(buffer.drop_guard);
         }
+        buffer.force_drop();
     }
-    pub fn recycle_many(&mut self, buffers: impl Iterator<Item = CommandBuffer>) {
-        let handles: Vec<_> = buffers.map(|x| {
-            let buf = x.raw;
-            std::mem::forget(x.drop_guard);
-            buf
-        }).collect();
+    pub fn free_many<T: states::NonPending>(
+        &mut self,
+        buffers: impl Iterator<Item = CommandBuffer<T>>,
+    ) {
+        let handles: Vec<_> = buffers
+            .map(|x| {
+                assert_eq!(x.pool, self.raw);
+
+                self.try_remove_semaphore(&x);
+
+                let buf = x.raw;
+
+                x.force_drop();
+                buf
+            })
+            .collect();
         unsafe {
             self.device.free_command_buffers(self.raw, &handles);
-            self.num_outstanding_buffers -= handles.len() as u32;
         }
     }
-}
-
-
-impl<'a> CommandEncoder<'a> {
-    pub fn end(self) -> VkResult<CommandBuffer> {
-        unsafe {
-            self.pool.device.end_command_buffer(self.command_buffer.raw)?;
+    fn try_remove_semaphore<T: states::NonPending>(&mut self, command_buffer: &CommandBuffer<T>) {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Completed>()
+            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Executable>()
+        {
+            if self.generation == command_buffer.generation {
+                self.semaphore_signals.remove(&command_buffer.raw).unwrap();
+            }
+            // if generation is not the same, the command pool has already been resetted. no need to remove semaphore in this case.
         }
-        Ok(self.command_buffer)
     }
-    pub fn reset(&mut self, release_resources: bool) -> VkResult<()> {
-        assert!(self.pool.flags.contains(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER));
-        let flags = if release_resources {
+
+    pub fn reset_command_buffer<T: states::NonPending>(
+        &mut self,
+        mut command_buffer: CommandBuffer<T>,
+        release_resources: bool,
+        flags: vk::CommandBufferUsageFlags,
+        next_timeline: &Timeline,
+    ) -> CommandBuffer<states::Recording> {
+        assert!(self
+            .flags
+            .contains(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER));
+        self.try_remove_semaphore(&command_buffer);
+        assert_eq!(command_buffer.pool, self.raw);
+        let reset_flags = if release_resources {
             vk::CommandBufferResetFlags::RELEASE_RESOURCES
         } else {
             vk::CommandBufferResetFlags::empty()
         };
-        unsafe {
-            self.pool.device.reset_command_buffer(self.command_buffer.raw, flags)?;
+
+        if !Arc::ptr_eq(&next_timeline.semaphore, &command_buffer.timeline_semaphore) {
+            command_buffer.timeline_semaphore = next_timeline.semaphore.clone();
         }
-        Ok(())
+        command_buffer.signal_value = next_timeline.increment() + 1;
+        command_buffer.generation = self.generation;
+        unsafe {
+            self.device
+                .reset_command_buffer(command_buffer.raw, reset_flags)
+                .unwrap();
+            self.device
+                .begin_command_buffer(
+                    command_buffer.raw,
+                    &vk::CommandBufferBeginInfo {
+                        flags,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            command_buffer.state_transition(states::Recording)
+        }
     }
 }
 
+pub mod states {
+    pub trait NonPending: 'static {}
+
+    pub struct Recording;
+    pub struct Pending;
+    pub struct Executable;
+    pub struct Completed;
+    impl NonPending for Recording {}
+    impl NonPending for Executable {}
+    impl NonPending for Completed {}
+}
+pub struct CommandBuffer<STATE: 'static> {
+    raw: vk::CommandBuffer,
+    pub(crate) pool: vk::CommandPool,
+    flags: vk::CommandBufferUsageFlags,
+    pub(crate) timeline_semaphore: Arc<TimelineSemaphore>,
+    // When the command buffer was executed on the GPU, this shall be signaled
+    pub(crate) signal_value: u64,
+    pub(crate) future_ctx: GPUFutureContext,
+    pub(crate) generation: u64,
+    _marker: PhantomData<STATE>,
+}
+impl<STATE> CommandBuffer<STATE> {
+    fn state_transition<NEXT>(self, _next: NEXT) -> CommandBuffer<NEXT> {
+        unsafe { std::mem::transmute(self) }
+    }
+    fn force_drop(self) {
+        self.state_transition(()); // this should be free to drop
+    }
+}
+impl CommandBuffer<states::Pending> {
+    pub fn wait_for_completion(self) -> CommandBuffer<states::Completed> {
+        self.timeline_semaphore
+            .wait_blocked(self.signal_value, !0)
+            .unwrap();
+        self.state_transition(states::Completed)
+    }
+}
+impl<T: 'static> Drop for CommandBuffer<T> {
+    fn drop(&mut self) {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Executable>() ||
+        std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Pending>() {
+            self.timeline_semaphore.signal(self.signal_value);
+            tracing::warn!("CommandBuffer dropped without being submitted");
+        }
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Recording>() || std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Completed>() {
+            tracing::warn!("CommandBuffer dropped without being freed");
+        }
+    }
+}
+// How do we handle simutaneous use and one time submit?
 
 // Each queue system will have one of this.
 // It gets incremented during queue submit.
@@ -159,14 +352,22 @@ impl FromWorld for Timeline {
     fn from_world(world: &mut World) -> Self {
         Self {
             semaphore: Arc::new(
-                TimelineSemaphore::new(world.resource::<Device>().clone(), 0).unwrap()),
+                TimelineSemaphore::new(world.resource::<Device>().clone(), 0).unwrap(),
+            ),
             wait_value: AtomicU64::new(0),
         }
     }
 }
 impl Timeline {
-    pub fn increment(&self) {
-        self.wait_value.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    pub fn new(device: Device) -> VkResult<Self> {
+        Ok(Self {
+            semaphore: Arc::new(TimelineSemaphore::new(device, 0)?),
+            wait_value: AtomicU64::new(0),
+        })
+    }
+    pub fn increment(&self) -> u64 {
+        self.wait_value
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
     pub fn blocking_stages(&self, stages: vk::PipelineStageFlags2) -> QueueDependency {
         QueueDependency(vk::SemaphoreSubmitInfo {
@@ -182,68 +383,86 @@ impl Timeline {
 pub struct QueueDependency<'a>(pub(crate) vk::SemaphoreSubmitInfo<'a>);
 
 impl<'a, T: QueueSelector> Queue<'a, T> {
-    pub fn submit_one(&mut self, command_buffer: CommandBuffer, dependencies: &[QueueDependency]) -> VkResult<SemaphoreDeferredValue<CommandBuffer>> {
+    pub fn submit_one(
+        &mut self,
+        command_buffer: CommandBuffer<states::Executable>,
+        dependencies: &[QueueDependency],
+    ) -> VkResult<CommandBuffer<states::Pending>> {
         // TODO: emit syncronization barrier for command buffer future ctx.
         unsafe {
-            self.device.queue_submit2(self.queue, &[
-                vk::SubmitInfo2 {
+            self.device.queue_submit2(
+                self.queue,
+                &[vk::SubmitInfo2 {
                     ..Default::default()
-                }.command_buffer_infos(&[
-                    vk::CommandBufferSubmitInfo {
-                        command_buffer: command_buffer.raw,
-                        ..Default::default()
-                    }
-                ])
+                }
+                .command_buffer_infos(&[vk::CommandBufferSubmitInfo {
+                    command_buffer: command_buffer.raw,
+                    ..Default::default()
+                }])
                 .wait_semaphore_infos(std::mem::transmute(dependencies))
                 .signal_semaphore_infos(&[vk::SemaphoreSubmitInfo {
                     semaphore: command_buffer.timeline_semaphore.raw(),
-                    value: command_buffer.wait_value + 1,
+                    value: command_buffer.signal_value,
                     // We signal on ALL_COMMANDS because
                     // 1. Timeline semaphore.
                     // 2. Most impl probably cannot take advantage of any other flags.
                     stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
                     ..Default::default()
-                }])
-            ], vk::Fence::null())?;
+                }])],
+                vk::Fence::null(),
+            )?;
         }
-        Ok(SemaphoreDeferredValue::new(command_buffer.timeline_semaphore.clone(), command_buffer.wait_value + 1, command_buffer))
+        Ok(command_buffer.state_transition(states::Pending))
     }
 
-    /// The submitted command buffer should transfer ownership of the swapchain image into the current queue,
-    /// and also do image format transition.
-    pub fn submit_one_and_present(&mut self, command_buffer: CommandBuffer, dependencies: &[QueueDependency], swapchain_image: &SwapchainImage) -> VkResult<SemaphoreDeferredValue<CommandBuffer>> {
+    pub fn submit_one_and_present(
+        &mut self,
+        command_buffer: CommandBuffer<states::Executable>,
+        dependencies: &[QueueDependency],
+        swapchain_image: &SwapchainImage,
+    ) -> VkResult<CommandBuffer<states::Pending>> {
         // TODO: emit syncronization barrier for command buffer future ctx.
 
         unsafe {
-            self.device.queue_submit2(self.queue, &[
-                vk::SubmitInfo2 {
+            self.device.queue_submit2(
+                self.queue,
+                &[vk::SubmitInfo2 {
                     ..Default::default()
-                }.command_buffer_infos(&[
-                    vk::CommandBufferSubmitInfo {
-                        command_buffer: command_buffer.raw,
-                        ..Default::default()
-                    }
-                ])
-                .wait_semaphore_infos(std::mem::transmute(dependencies))
-                .signal_semaphore_infos(&[vk::SemaphoreSubmitInfo {
-                    semaphore: command_buffer.timeline_semaphore.raw(),
-                    value: command_buffer.wait_value + 1,
-                    // We signal on ALL_COMMANDS because
-                    // 1. Timeline semaphore.
-                    // 2. Most impl probably cannot take advantage of any other flags.
-                    stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                    ..Default::default()
-                }, vk::SemaphoreSubmitInfo {
-                    semaphore: swapchain_image.inner.as_ref().unwrap().present_semaphore,
-                    value: 0,
-                    stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                }
+                .command_buffer_infos(&[vk::CommandBufferSubmitInfo {
+                    command_buffer: command_buffer.raw,
                     ..Default::default()
                 }])
-            ], vk::Fence::null())?;
+                .wait_semaphore_infos(std::mem::transmute(dependencies))
+                .signal_semaphore_infos(&[
+                    vk::SemaphoreSubmitInfo {
+                        semaphore: command_buffer.timeline_semaphore.raw(),
+                        value: command_buffer.signal_value,
+                        // We signal on ALL_COMMANDS because
+                        // 1. Timeline semaphore.
+                        // 2. Most impl probably cannot take advantage of any other flags.
+                        stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                        ..Default::default()
+                    },
+                    vk::SemaphoreSubmitInfo {
+                        semaphore: swapchain_image.inner.as_ref().unwrap().present_semaphore,
+                        value: 0,
+                        stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                        ..Default::default()
+                    },
+                ])],
+                vk::Fence::null(),
+            )?;
         }
-        Ok(SemaphoreDeferredValue::new(command_buffer.timeline_semaphore.clone(), command_buffer.wait_value + 1, command_buffer))
+        Ok(command_buffer.state_transition(states::Pending))
     }
 }
+
+
+// TODO: for buffers without one time submit, allow one to retarget them onto a different timeline.
+// TODO: for buffers with simutaneous use, allow one to submit simutaneously.
+
+
 
 
 /// Shared command pool. One for each queue family.
@@ -264,8 +483,10 @@ impl<'a, Q: QueueSelector> DerefMut for SharedCommandPool<'a, Q> {
         self.command_pool
     }
 }
+
+
 unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
-    type State = ComponentId;
+    type State = (ComponentId, u64);
 
     type Item<'world, 'state> = SharedCommandPool<'world, Q>;
 
@@ -293,17 +514,17 @@ unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
         system_meta
             .archetype_component_access
             .add_write(archetype_component_id);
-        component_id
+        (component_id, 0)
     }
 
     unsafe fn get_param<'world, 'state>(
-        state: &'state mut Self::State,
+        (component_id, frame_index): &'state mut Self::State,
         system_meta: &bevy::ecs::system::SystemMeta,
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        change_tick: bevy::ecs::component::Tick,
+        _change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         let value = world
-            .get_resource_mut_by_id(*state)
+            .get_resource_mut_by_id(*component_id)
             .unwrap_or_else(|| {
                 panic!(
                     "Resource requested by {} does not exist: {}",

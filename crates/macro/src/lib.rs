@@ -1,4 +1,10 @@
-use syn::{parse::{Parse, ParseBuffer, ParseStream}, parse_macro_input, visit_mut::VisitMut, Stmt, Token, spanned::Spanned};
+use syn::{
+    parse::{Parse, ParseBuffer, ParseStream},
+    parse_macro_input,
+    spanned::Spanned,
+    visit_mut::VisitMut,
+    Stmt, Token,
+};
 
 struct GPUFutureBlock {
     pub capture: Option<Token![move]>,
@@ -24,7 +30,8 @@ pub fn gpu_future(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         traverser.visit_stmt_mut(stmt);
     }
 
-    let retained_values = (0..traverser.retained_value_count).map(|_| syn::Token![_](proc_macro2::Span::call_site()));
+    let retained_values =
+        (0..traverser.retained_value_count).map(|_| syn::Token![_](proc_macro2::Span::call_site()));
     quote::quote! {
         async #capture {
             let mut __retained_values: ::std::mem::MaybeUninit<(#(#retained_values, )*)> =  ::std::mem::MaybeUninit::zeroed();
@@ -46,7 +53,7 @@ struct GPUFutureTraverser {
     is_in_loop: bool,
 }
 
-impl GPUFutureTraverser{
+impl GPUFutureTraverser {
     fn transform_retain_macro(&mut self, inner: &syn::Macro) -> proc_macro2::TokenStream {
         let count = syn::Index::from(self.retained_value_count);
         self.retained_value_count += 1;
@@ -81,19 +88,17 @@ impl GPUFutureTraverser{
     }
 }
 
-
-
 impl VisitMut for GPUFutureTraverser {
     fn visit_stmt_mut(&mut self, i: &mut syn::Stmt) {
         match i {
             syn::Stmt::Macro(inner) if inner.mac.path.is_ident("retain") => {
                 *i = syn::Stmt::Expr(
                     syn::Expr::Verbatim(self.transform_retain_macro(&inner.mac)),
-                    inner.semi_token
+                    inner.semi_token,
                 );
                 return;
-            },
-            _ => ()
+            }
+            _ => (),
         }
 
         syn::visit_mut::visit_stmt_mut(self, i);
@@ -105,9 +110,7 @@ impl VisitMut for GPUFutureTraverser {
                 return;
             }
             syn::Expr::Await(inner) => {
-
                 let count = syn::Index::from(self.retained_value_count);
-
 
                 if self.is_in_loop {
                     *i = syn::Expr::Verbatim(quote::quote_spanned! { inner.span() =>
@@ -141,14 +144,13 @@ impl VisitMut for GPUFutureTraverser {
                 self.retained_value_count += 1;
                 return;
             }
-            _ => ()
+            _ => (),
         }
         syn::visit_mut::visit_expr_mut(self, i);
     }
     fn visit_expr_await_mut(&mut self, i: &mut syn::ExprAwait) {
         syn::visit_mut::visit_expr_await_mut(self, i);
     }
-
 
     fn visit_expr_if_mut(&mut self, i: &mut syn::ExprIf) {
         let b4 = self.is_in_divergent_control_flow;

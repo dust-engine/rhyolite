@@ -1,16 +1,23 @@
 use core::task::ContextBuilder;
-use std::{cell::Cell, future::Future, ops::{Deref, DerefMut}, pin::Pin, sync::{atomic::AtomicU64, Arc, Mutex, MutexGuard}, task::Poll};
+use std::{
+    future::Future,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    sync::{atomic::AtomicU64, Arc, Mutex, MutexGuard},
+    task::Poll,
+};
 
 use ash::{prelude::VkResult, vk};
 
-use crate::{command::CommandEncoder, semaphore::TimelineSemaphore, Device};
+use crate::{command::{CommandBuffer, CommandPool, states::Recording}, semaphore::TimelineSemaphore, Device};
 
 use super::{GPUFutureBlock, GPUFutureBlockReturnValue, GPUFutureContext};
 
-
-
-fn gpu_future_poll<T: Future>(gpu_future: Pin<&mut T>, ctx: &mut GPUFutureContext) -> Poll<T::Output> {
-    use std::task::{Waker, RawWaker, RawWakerVTable};
+fn gpu_future_poll<T: Future>(
+    gpu_future: Pin<&mut T>,
+    ctx: &mut GPUFutureContext,
+) -> Poll<T::Output> {
+    use std::task::{RawWaker, RawWakerVTable, Waker};
 
     fn null_waker_clone_fn(_ptr: *const ()) -> RawWaker {
         panic!("GPU Futures cannot be executed from regular async executors");
@@ -25,39 +32,44 @@ fn gpu_future_poll<T: Future>(gpu_future: Pin<&mut T>, ctx: &mut GPUFutureContex
         null_waker_fn,
         null_waker_fn,
     );
-    const NULL_WAKER: &'static Waker = unsafe {
-        &Waker::new(std::ptr::null(), NULL_WAKER_VTABLE)
-    };
+    const NULL_WAKER: &'static Waker = unsafe { &Waker::new(std::ptr::null(), NULL_WAKER_VTABLE) };
     let mut ctx = ContextBuilder::from_waker(NULL_WAKER).ext(ctx).build();
     gpu_future.poll(&mut ctx)
 }
-
-
 
 pub struct GPUFutureSubmissionStatus<Returned, Retained> {
     return_value: Returned,
     retained_values: Retained,
     timeline_semaphore: Arc<TimelineSemaphore>,
-    wait_value: u64
+    wait_value: u64,
 }
 
-impl<'a> CommandEncoder<'a> {
+impl CommandPool {
     /// The recorded futures will be executed serially
-    pub fn record<T: GPUFutureBlock>(&mut self, future: T) -> GPUFutureSubmissionStatus<T::Returned, T::Retained> {
+    pub fn record<T: GPUFutureBlock>(
+        &mut self,
+        command_buffer: &mut CommandBuffer<Recording>,
+        future: T,
+    ) -> GPUFutureSubmissionStatus<T::Returned, T::Retained> {
+        assert_eq!(command_buffer.pool, self.raw);
+        assert_eq!(command_buffer.generation, self.generation);
         let mut future = std::pin::pin!(future);
-        let GPUFutureBlockReturnValue { output, retained_values } = loop {
-            match gpu_future_poll(future.as_mut(), &mut self.command_buffer.future_ctx) {
+        let GPUFutureBlockReturnValue {
+            output,
+            retained_values,
+        } = loop {
+            match gpu_future_poll(future.as_mut(), &mut command_buffer.future_ctx) {
                 Poll::Ready(output) => break output,
                 Poll::Pending => {
                     // TODO insert pipeline barrier as needed
-                },
+                }
             }
         };
         GPUFutureSubmissionStatus {
             return_value: output,
             retained_values,
-            timeline_semaphore: self.command_buffer.timeline_semaphore.clone(),
-            wait_value: self.command_buffer.wait_value,
+            timeline_semaphore: command_buffer.timeline_semaphore.clone(),
+            wait_value: command_buffer.signal_value,
         }
     }
 }

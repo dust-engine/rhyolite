@@ -12,6 +12,7 @@
 #![feature(context_ext)]
 #![feature(local_waker)]
 #![feature(debug_closure_helpers)]
+#![feature(adt_const_params)]
 
 mod alloc;
 //pub mod buffer;

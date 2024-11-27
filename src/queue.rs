@@ -1,15 +1,22 @@
 use std::{
-    marker::PhantomData, ops::{Deref, DerefMut}
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
 };
 
-use ash::vk;
-use bevy::{ecs::{component::{ComponentId, Tick}, system::{SystemMeta, SystemParam}, world::unsafe_world_cell::UnsafeWorldCell}, prelude::{FromWorld, ResMut, Resource, World}};
 use crate::{command::CommandPool, Device};
+use ash::vk;
+use bevy::{
+    ecs::{
+        component::{ComponentId, Tick},
+        system::{SystemMeta, SystemParam},
+        world::unsafe_world_cell::UnsafeWorldCell,
+    },
+    prelude::{FromWorld, ResMut, Resource, World},
+};
 
 const PRIORITY_HIGH: [f32; 2] = [1.0, 0.1];
 const PRIORITY_MEDIUM: [f32; 2] = [0.5, 0.1];
 const PRIORITY_LOW: [f32; 2] = [0.0, 0.0];
-
 
 pub struct QueueInner {
     pub device: Device,
@@ -17,25 +24,25 @@ pub struct QueueInner {
     pub queue_family: u32,
 }
 
-
 /// Returns a good queue creation strategies for many interactive applications.
-/// 
+///
 /// We attempts to create two queues for the first three queue families.
-pub(crate) fn find_default_queue_create_info(available_queue_family: &[vk::QueueFamilyProperties]) -> Vec<vk::DeviceQueueCreateInfo>  {
+pub(crate) fn find_default_queue_create_info(
+    available_queue_family: &[vk::QueueFamilyProperties],
+) -> Vec<vk::DeviceQueueCreateInfo> {
     // Create 2 of each queue family
     available_queue_family
         .iter()
         .enumerate()
         .take(3)
         .map(|(queue_family_index, props)| {
-            let priority: &'static [f32] =
-                if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                    &PRIORITY_HIGH
-                } else if props.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                    &PRIORITY_MEDIUM
-                } else {
-                    &PRIORITY_LOW
-                };
+            let priority: &'static [f32] = if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                &PRIORITY_HIGH
+            } else if props.queue_flags.contains(vk::QueueFlags::COMPUTE) {
+                &PRIORITY_MEDIUM
+            } else {
+                &PRIORITY_LOW
+            };
             let queue_count = if props.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
                 1
             } else {
@@ -53,7 +60,7 @@ pub(crate) fn find_default_queue_create_info(available_queue_family: &[vk::Queue
 
 #[derive(Resource)]
 pub struct QueueConfiguration {
-    families: Vec<QueueConfigurationFamily>
+    families: Vec<QueueConfigurationFamily>,
 }
 struct QueueConfigurationFamily {
     /// Pointing to a QueueInner
@@ -76,38 +83,55 @@ impl QueueConfiguration {
         let device = world.resource::<Device>().clone();
 
         let mut this = QueueConfiguration {
-            families: queue_family_info.iter().map(|info| QueueConfigurationFamily {
-                flags: info.queue_flags,
-                shared_command_pool: ComponentId::new(0),
-                queues: SmallVec::new(),
-            }).collect()
+            families: queue_family_info
+                .iter()
+                .map(|info| QueueConfigurationFamily {
+                    flags: info.queue_flags,
+                    shared_command_pool: ComponentId::new(0),
+                    queues: SmallVec::new(),
+                })
+                .collect(),
         };
 
-        for vk::DeviceQueueCreateInfo { queue_count, queue_family_index, ..} in queue_create_info.iter() {
+        for vk::DeviceQueueCreateInfo {
+            queue_count,
+            queue_family_index,
+            ..
+        } in queue_create_info.iter()
+        {
             let family = &mut this.families[*queue_family_index as usize];
 
-
-            assert_eq!(family.shared_command_pool.index(), 0, "Each queue family index inside `queue_create_info` should be unique");
+            assert_eq!(
+                family.shared_command_pool.index(),
+                0,
+                "Each queue family index inside `queue_create_info` should be unique"
+            );
 
             // Create shared command pool.
-            let command_pool = CommandPool::new(device.clone(), *queue_family_index, vk::CommandPoolCreateFlags::TRANSIENT).unwrap();
-            let component_id = world.init_component_with_descriptor(ComponentDescriptor::new_resource::<CommandPool>());
+            let command_pool = CommandPool::new(
+                device.clone(),
+                *queue_family_index,
+                vk::CommandPoolCreateFlags::TRANSIENT,
+            )
+            .unwrap();
+            let component_id = world
+                .init_component_with_descriptor(ComponentDescriptor::new_resource::<CommandPool>());
             OwningPtr::make(command_pool, |ptr| unsafe {
                 // SAFETY: component_id was just initialized and corresponds to resource of type R.
                 world.insert_resource_by_id(component_id, ptr);
             });
             family.shared_command_pool = component_id;
 
-
             for queue_index in 0..*queue_count {
-                let queue = unsafe {
-                    device.get_device_queue(*queue_family_index, queue_index)
-                };
-                let component_id = world.init_component_with_descriptor(ComponentDescriptor::new_resource::<QueueInner>());
+                let queue = unsafe { device.get_device_queue(*queue_family_index, queue_index) };
+                let component_id =
+                    world.init_component_with_descriptor(ComponentDescriptor::new_resource::<
+                        QueueInner,
+                    >());
                 let queue_inner = QueueInner {
                     device: device.clone(),
                     queue,
-                    queue_family: *queue_family_index
+                    queue_family: *queue_family_index,
                 };
                 OwningPtr::make(queue_inner, |ptr| unsafe {
                     // SAFETY: component_id was just initialized and corresponds to resource of type R.
@@ -120,8 +144,6 @@ impl QueueConfiguration {
     }
 }
 
-
-
 pub trait QueueSelector {
     fn family_index(config: &QueueConfiguration) -> u32;
     fn component_id(config: &QueueConfiguration) -> ComponentId;
@@ -131,7 +153,7 @@ pub trait QueueSelector {
 }
 pub struct Queue<'a, T: QueueSelector> {
     queue: &'a mut QueueInner,
-    _marker: PhantomData<T>
+    _marker: PhantomData<T>,
 }
 impl<'a, T: QueueSelector> Deref for Queue<'a, T> {
     type Target = QueueInner;
@@ -183,27 +205,24 @@ unsafe impl<'a, T: QueueSelector> SystemParam for Queue<'a, T> {
         world: UnsafeWorldCell<'world>,
         _change_tick: Tick,
     ) -> Self::Item<'world, 'state> {
-        let value = world
-            .get_resource_mut_by_id(*state)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Resource requested by {} does not exist: {}",
-                    system_meta.name,
-                    std::any::type_name::<T>()
-                )
-            });
+        let value = world.get_resource_mut_by_id(*state).unwrap_or_else(|| {
+            panic!(
+                "Resource requested by {} does not exist: {}",
+                system_meta.name,
+                std::any::type_name::<T>()
+            )
+        });
         Queue {
             queue: value.value.deref_mut::<QueueInner>(),
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 }
 
-
 pub mod selectors {
     use ash::vk;
 
-    use super::{QueueSelector, QueueConfiguration, ComponentId};
+    use super::{ComponentId, QueueConfiguration, QueueSelector};
 
     macro_rules! return_queue {
         ($config: expr) => {
@@ -227,7 +246,7 @@ pub mod selectors {
     impl<const ASYNC: bool> QueueSelector for Graphics<ASYNC> {
         fn family_index(config: &QueueConfiguration) -> u32 {
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.queues.is_empty() {
                     return family_index as u32;
                 }
             }
@@ -238,19 +257,21 @@ pub mod selectors {
         }
     }
 
-
     /// Selects the queue with both [`vk::QueueFlags::GRAPHICS`] and [`vk::QueueFlags::COMPUTE`].
     /// If no such queue exists, select any queue with [`vk::QueueFlags::COMPUTE`].
     pub struct UniversalCompute<const ASYNC: bool = false>;
     impl<const ASYNC: bool> QueueSelector for UniversalCompute<ASYNC> {
         fn family_index(config: &QueueConfiguration) -> u32 {
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::GRAPHICS) && family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::GRAPHICS)
+                    && family.flags.contains(vk::QueueFlags::COMPUTE)
+                    && !family.queues.is_empty()
+                {
                     return family_index as u32;
                 }
             }
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty() {
                     return family_index as u32;
                 }
             }
@@ -268,14 +289,17 @@ pub mod selectors {
         fn family_index(config: &QueueConfiguration) -> u32 {
             // Find the dedicated compute queue with no graphics capabilities.
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::COMPUTE)
+                    && !family.flags.contains(vk::QueueFlags::GRAPHICS)
+                    && !family.queues.is_empty()
+                {
                     return family_index as u32;
                 }
             }
 
             // Find any queue with compute capabilities.
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty() {
                     return family_index as u32;
                 }
             }
@@ -293,32 +317,39 @@ pub mod selectors {
         fn family_index(config: &QueueConfiguration) -> u32 {
             // Find the dedicated compute queue with no graphics or compute capabilities.
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::TRANSFER) && !family.flags.contains(vk::QueueFlags::GRAPHICS) && !family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::TRANSFER)
+                    && !family.flags.contains(vk::QueueFlags::GRAPHICS)
+                    && !family.flags.contains(vk::QueueFlags::COMPUTE)
+                    && !family.queues.is_empty()
+                {
                     return family_index as u32;
                 }
             }
 
             // Find queue with no graphics capabilities. Prefer compute-based transfers.
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::TRANSFER) && !family.flags.contains(vk::QueueFlags::COMPUTE) && !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::TRANSFER)
+                    && !family.flags.contains(vk::QueueFlags::COMPUTE)
+                    && !family.queues.is_empty()
+                {
                     return family_index as u32;
                 }
             }
             // Find any queue with the transfer flag set.
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::TRANSFER) || !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::TRANSFER) || !family.queues.is_empty() {
                     return family_index as u32;
                 }
             }
             // Find any queue with compute flag.
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::COMPUTE) || !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::COMPUTE) || !family.queues.is_empty() {
                     return family_index as u32;
                 }
             }
             // Find any queue with graphics flag.
             for (family_index, family) in config.families.iter().enumerate() {
-                if family.flags.contains(vk::QueueFlags::GRAPHICS) || !family.queues.is_empty(){
+                if family.flags.contains(vk::QueueFlags::GRAPHICS) || !family.queues.is_empty() {
                     return family_index as u32;
                 }
             }
@@ -333,5 +364,4 @@ pub mod selectors {
     pub type AsyncGraphics = Graphics<true>;
     pub type AsyncCompute = DedicatedCompute<true>;
     pub type AsyncTransfer = DedicatedTransfer<true>;
-
 }

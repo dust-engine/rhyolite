@@ -1,10 +1,17 @@
-use std::{borrow::Borrow, collections::BTreeMap, num::{NonZero, NonZeroU64}, pin::Pin, ptr::NonNull, sync::atomic::AtomicU64, u32, u64};
+use std::{
+    borrow::Borrow,
+    collections::BTreeMap,
+    num::{NonZero, NonZeroU64},
+    pin::Pin,
+    ptr::NonNull,
+    sync::atomic::AtomicU64,
+    u32, u64,
+};
 
 use ash::vk;
 use bevy::prelude::Resource;
 
 use crate::semaphore::TimelineSemaphore;
-
 
 pub struct ResourceState {
     stage: vk::PipelineStageFlags2,
@@ -18,7 +25,7 @@ impl Default for ResourceState {
             stage: vk::PipelineStageFlags2::default(),
             mask: vk::AccessFlags2::default(),
             queue_family: u32::MAX,
-            layout: vk::ImageLayout::default()
+            layout: vk::ImageLayout::default(),
         }
     }
 }
@@ -34,18 +41,18 @@ impl ResourceId {
         let id = RESOURCE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         ResourceId {
             id: NonZeroU64::new(id).expect("ResourdeId overflow!"),
-            parent: 0
+            parent: 0,
         }
     }
 }
 
-
 pub type ResourceStateTable = BTreeMap<ResourceId, ResourceState>;
 
 pub unsafe trait GPUResource {
-    fn resource_state<'a>(self, state_table: &'a mut ResourceStateTable) -> &'a mut ResourceState where Self: 'a;
+    fn resource_state<'a>(self, state_table: &'a mut ResourceStateTable) -> &'a mut ResourceState
+    where
+        Self: 'a;
 }
-
 
 pub struct GPUBorrowedResource<'a, T> {
     id: ResourceId,
@@ -58,13 +65,19 @@ pub struct GPUOwnedResource<'a, T> {
 }
 
 unsafe impl<'t, T> GPUResource for &'t GPUBorrowedResource<'t, T> {
-    fn resource_state<'a>(self, state_table: &'a mut ResourceStateTable) -> &'a mut ResourceState where Self: 'a {
+    fn resource_state<'a>(self, state_table: &'a mut ResourceStateTable) -> &'a mut ResourceState
+    where
+        Self: 'a,
+    {
         state_table.get_mut(&self.id).unwrap()
     }
 }
 
 unsafe impl<'t, T> GPUResource for &'t mut GPUOwnedResource<'t, T> {
-    fn resource_state<'a>(self, _state_table: &'a mut ResourceStateTable) -> &'a mut ResourceState where Self: 'a {
+    fn resource_state<'a>(self, _state_table: &'a mut ResourceStateTable) -> &'a mut ResourceState
+    where
+        Self: 'a,
+    {
         &mut self.state
     }
 }
