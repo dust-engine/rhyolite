@@ -138,9 +138,7 @@ impl<T, const C: usize> InFlightFrameMananger<T, C> {
         }
     }
     pub fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
-        self.frame_data
-            .iter_mut()
-            .filter_map(|x| x.take())
+        self.frame_data.iter_mut().filter_map(|x| x.take())
     }
 }
 impl<T, const C: usize> Default for InFlightFrameMananger<T, C> {

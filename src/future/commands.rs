@@ -7,7 +7,9 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{define_future, future::GPUFutureBlockReturnValue, ImageLike};
+use crate::{
+    define_future, future::GPUFutureBlockReturnValue, swapchain::SwapchainImage, ImageLike,
+};
 use ash::vk;
 
 use super::{res::GPUResource, BarrierContext, GPUFuture, GPUFutureBlock, RecordContext};
@@ -435,5 +437,43 @@ where
         layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         clear_color,
         ranges,
+    }
+}
+
+define_future!(ImageLayoutTransitionFuture<T>, I: ImageLike, T: Unpin + GPUResource + Deref<Target = I>);
+pub struct ImageLayoutTransitionFuture<T> {
+    dst_image: T,
+    layout: vk::ImageLayout,
+    discard_contents: bool,
+}
+impl<I: ImageLike, T> GPUFuture for ImageLayoutTransitionFuture<T>
+where
+    T: Unpin + GPUResource + Deref<Target = I>,
+{
+    type Output = ();
+
+    fn barrier(&mut self, mut ctx: BarrierContext) {
+        ctx.use_image_resource(
+            &mut self.dst_image,
+            // no dst stage / accesses needed - semaphore does that.
+            vk::PipelineStageFlags2::empty(),
+            vk::AccessFlags2::empty(),
+            self.layout,
+            self.discard_contents,
+        );
+    }
+
+    fn record(self, _ctx: RecordContext) -> (Self::Output, Self::Retained) {
+        Default::default()
+    }
+}
+
+pub fn prepare_image_for_presentation<T: GPUResource + Deref<Target = SwapchainImage> + Unpin>(
+    dst_image: T,
+) -> ImageLayoutTransitionFuture<T> {
+    ImageLayoutTransitionFuture {
+        dst_image,
+        layout: vk::ImageLayout::PRESENT_SRC_KHR,
+        discard_contents: false,
     }
 }

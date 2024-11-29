@@ -8,7 +8,7 @@ use bevy::window::PrimaryWindow;
 use rhyolite::command::states::Pending;
 use rhyolite::command::{self, CommandBuffer, SharedCommandPool, Timeline};
 use rhyolite::debug::DebugUtilsPlugin;
-use rhyolite::future::commands::clear_color_image;
+use rhyolite::future::commands::{clear_color_image, prepare_image_for_presentation};
 use rhyolite::future::InFlightFrameMananger;
 use rhyolite::selectors::Graphics;
 use rhyolite::{future::gpu_future, Queue};
@@ -58,17 +58,20 @@ fn main() {
 fn clear_main_window_color(
     mut queue: Queue<Graphics>,
     mut command_pool: SharedCommandPool<Graphics>,
-    windows: Query<&SwapchainImage, With<bevy::window::PrimaryWindow>>,
+    mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
 
     timeline: Local<Timeline>,
     mut frames: Local<InFlightFrameMananger<CommandBuffer<Pending>>>,
     mut state: Local<u64>,
 ) {
-    let Ok(swapchain_image) = windows.get_single() else {
+    let Ok(mut swapchain_image) = windows.get_single_mut() else {
         return;
     };
+    let swapchain_image = &mut *swapchain_image;
 
-    frames.take().map(|command_buffer| command_pool.free(command_buffer.wait_for_completion()));
+    frames
+        .take()
+        .map(|command_buffer| command_pool.free(command_buffer.wait_for_completion()));
 
     let mut command_buffer = command_pool
         .allocate(&timeline, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
@@ -82,17 +85,21 @@ fn clear_main_window_color(
     // swapchain image won't be destroyed until it's presented.
     // swapchain image won't be presented until drawing is finished on it.
     // so it's ok to use directly here.
-    command_pool.record(&mut command_buffer, gpu_future! {
-        clear_color_image(swapchain_image, vk::ClearColorValue {
-            float32: [0.0, *state as f32 / 100.0, 0.0, 1.0],
-        }, &[vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        }]).await;
-    });
+    command_pool.record(
+        &mut command_buffer,
+        gpu_future! {
+            clear_color_image(&mut *swapchain_image, vk::ClearColorValue {
+                float32: [0.0, *state as f32 / 100.0, 0.0, 1.0],
+            }, &[vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            }]).await;
+            prepare_image_for_presentation(&mut *swapchain_image).await;
+        },
+    );
 
     let submission = queue
         .submit_one_and_present(

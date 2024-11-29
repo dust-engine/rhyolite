@@ -1,5 +1,9 @@
 use std::{
-    collections::BTreeMap, marker::PhantomData, mem::ManuallyDrop, ops::{Deref, DerefMut}, sync::{atomic::AtomicU64, Arc}
+    collections::BTreeMap,
+    marker::PhantomData,
+    mem::ManuallyDrop,
+    ops::{Deref, DerefMut},
+    sync::{atomic::AtomicU64, Arc},
 };
 
 use ash::{
@@ -29,6 +33,11 @@ pub struct CommandPool {
 
     semaphore_signal_raws: Vec<vk::Semaphore>,
     semaphore_signal_values: Vec<u64>,
+}
+impl HasDevice for CommandPool {
+    fn device(&self) -> &Device {
+        &self.device
+    }
 }
 struct CommandPoolTimeline {
     semaphore: Arc<TimelineSemaphore>,
@@ -135,7 +144,7 @@ impl CommandPool {
             ),
         );
         unsafe {
-            self.device.end_command_buffer(command_buffer.raw);
+            self.device.end_command_buffer(command_buffer.raw).unwrap();
             command_buffer.state_transition(states::Executable)
         }
     }
@@ -173,7 +182,7 @@ impl CommandPool {
             signal_value: on_timeline.increment() + 1,
             future_ctx: GPUFutureContext::new(self.device.clone(), raw),
             generation: self.generation,
-            _marker: PhantomData
+            _marker: PhantomData,
         };
         Ok(command_buffer)
     }
@@ -302,13 +311,15 @@ pub mod states {
     impl NonPending for Completed {}
 }
 pub struct CommandBuffer<STATE: 'static> {
-    raw: vk::CommandBuffer,
+    pub(crate) raw: vk::CommandBuffer,
     pub(crate) pool: vk::CommandPool,
     flags: vk::CommandBufferUsageFlags,
     pub(crate) timeline_semaphore: Arc<TimelineSemaphore>,
     // When the command buffer was executed on the GPU, this shall be signaled
     pub(crate) signal_value: u64,
     pub(crate) future_ctx: GPUFutureContext,
+
+    /// The generation of the command pool when this was last allocated / reset
     pub(crate) generation: u64,
     _marker: PhantomData<STATE>,
 }
@@ -330,12 +341,15 @@ impl CommandBuffer<states::Pending> {
 }
 impl<T: 'static> Drop for CommandBuffer<T> {
     fn drop(&mut self) {
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Executable>() ||
-        std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Pending>() {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Executable>()
+            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Pending>()
+        {
             self.timeline_semaphore.signal(self.signal_value);
             tracing::warn!("CommandBuffer dropped without being submitted");
         }
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Recording>() || std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Completed>() {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Recording>()
+            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Completed>()
+        {
             tracing::warn!("CommandBuffer dropped without being freed");
         }
     }
@@ -458,19 +472,15 @@ impl<'a, T: QueueSelector> Queue<'a, T> {
     }
 }
 
-
 // TODO: for buffers without one time submit, allow one to retarget them onto a different timeline.
 // TODO: for buffers with simutaneous use, allow one to submit simutaneously.
-
-
-
 
 /// Shared command pool. One for each queue family.
 /// Good for small amount of command encoding. Use parallel encoding if an incredibly large amount of
 /// commands need to be encoded.
 pub struct SharedCommandPool<'a, Q: QueueSelector> {
     command_pool: &'a mut CommandPool,
-    _marker: PhantomData<Q>
+    _marker: PhantomData<Q>,
 }
 impl<'a, Q: QueueSelector> Deref for SharedCommandPool<'a, Q> {
     type Target = CommandPool;
@@ -484,13 +494,15 @@ impl<'a, Q: QueueSelector> DerefMut for SharedCommandPool<'a, Q> {
     }
 }
 
-
 unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
     type State = (ComponentId, u64);
 
     type Item<'world, 'state> = SharedCommandPool<'world, Q>;
 
-    fn init_state(world: &mut bevy::prelude::World, system_meta: &mut bevy::ecs::system::SystemMeta) -> Self::State {
+    fn init_state(
+        world: &mut bevy::prelude::World,
+        system_meta: &mut bevy::ecs::system::SystemMeta,
+    ) -> Self::State {
         let config = world.resource::<QueueConfiguration>();
         let component_id = Q::shared_command_pool_component_id(config);
 
@@ -534,7 +546,7 @@ unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
             });
         SharedCommandPool {
             command_pool: value.value.deref_mut::<CommandPool>(),
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 }

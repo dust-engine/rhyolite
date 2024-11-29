@@ -169,6 +169,9 @@ impl Plugin for RhyolitePlugin {
             instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
             app.add_instance_extension_named(ash::khr::portability_enumeration::NAME)
                 .unwrap();
+
+            app.add_instance_layer(cstr::cstr!(b"VK_LAYER_KHRONOS_validation"))
+                .unwrap();
         }
         let mut instance_extensions = app.world_mut().remove_resource::<InstanceExtensions>();
         let instance_layers = app.world_mut().remove_resource::<InstanceLayers>();

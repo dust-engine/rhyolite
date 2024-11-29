@@ -9,7 +9,11 @@ use std::{
 
 use ash::{prelude::VkResult, vk};
 
-use crate::{command::{CommandBuffer, CommandPool, states::Recording}, semaphore::TimelineSemaphore, Device};
+use crate::{
+    command::{states::Recording, CommandBuffer, CommandPool},
+    semaphore::TimelineSemaphore,
+    Device, HasDevice,
+};
 
 use super::{GPUFutureBlock, GPUFutureBlockReturnValue, GPUFutureContext};
 
@@ -54,6 +58,7 @@ impl CommandPool {
         assert_eq!(command_buffer.pool, self.raw);
         assert_eq!(command_buffer.generation, self.generation);
         let mut future = std::pin::pin!(future);
+        let mut stage_count = 0;
         let GPUFutureBlockReturnValue {
             output,
             retained_values,
@@ -61,7 +66,20 @@ impl CommandPool {
             match gpu_future_poll(future.as_mut(), &mut command_buffer.future_ctx) {
                 Poll::Ready(output) => break output,
                 Poll::Pending => {
-                    // TODO insert pipeline barrier as needed
+                    stage_count += 1;
+                    if command_buffer.future_ctx.has_barriers() {
+                        // record pipeline barrier
+                        unsafe {
+                            // Safety: we have mutable borrow to both the command buffer and command pool.
+                            self.device().cmd_pipeline_barrier2(
+                                command_buffer.raw,
+                                &vk::DependencyInfo::default()
+                                    .image_memory_barriers(&command_buffer.future_ctx.image_barrier)
+                                    .memory_barriers(&[command_buffer.future_ctx.memory_barrier]),
+                            );
+                        }
+                    }
+                    command_buffer.future_ctx.clear_barriers();
                 }
             }
         };

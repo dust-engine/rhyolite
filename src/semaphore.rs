@@ -64,11 +64,13 @@ impl TimelineSemaphore {
     }
     pub fn signal(&self, val: u64) {
         unsafe {
-            self.device.signal_semaphore(&vk::SemaphoreSignalInfo {
-                semaphore: self.semaphore,
-                value: val,
-                ..Default::default()
-            }).unwrap();
+            self.device
+                .signal_semaphore(&vk::SemaphoreSignalInfo {
+                    semaphore: self.semaphore,
+                    value: val,
+                    ..Default::default()
+                })
+                .unwrap();
             self.value.store(val, std::sync::atomic::Ordering::Relaxed);
         }
     }

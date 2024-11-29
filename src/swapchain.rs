@@ -16,7 +16,7 @@ use bevy::{
 use smallvec::SmallVec;
 
 use crate::command::QueueDependency;
-use crate::future::{GPUOwnedResource, GPUResource, ResourceId};
+use crate::future::{GPUOwned, GPUResource, ResourceState};
 use crate::selectors::Graphics;
 use crate::{
     plugin::RhyoliteApp,
@@ -526,7 +526,6 @@ pub(super) fn extract_swapchains(
             recreate_swapchain(&mut swapchain, surface, window, config);
         }
     }
-    let resource_id = ResourceId::new();
     for create_event in window_created_events.read() {
         let (window, config, swapchain, surface) = query.get(create_event.window).unwrap();
         assert!(swapchain.is_none());
@@ -541,7 +540,7 @@ pub(super) fn extract_swapchains(
             .insert(new_swapchain)
             .insert(SwapchainImage {
                 inner: None,
-                id: resource_id, // all swapchain images to use the same resource id. Assuming that one frame cannot use two swapchain images simutaneously.
+                state: ResourceState::default(),
             });
     }
 }
@@ -751,7 +750,7 @@ fn get_surface_preferred_format(
 
 #[derive(Component)]
 pub struct SwapchainImage {
-    id: ResourceId,
+    state: ResourceState,
     pub(crate) inner: Option<SwapchainImageInner>,
 }
 impl SwapchainImage {
@@ -764,15 +763,17 @@ impl SwapchainImage {
         })
     }
 }
-unsafe impl<'t> GPUResource for &'t SwapchainImage {
-    fn resource_state<'a>(
-        self,
-        state_table: &'a mut crate::future::ResourceStateTable,
-    ) -> &'a mut crate::future::ResourceState
-    where
-        Self: 'a,
-    {
-        state_table.entry(self.id).or_insert_with(Default::default)
+unsafe impl<'t> GPUResource for &'t mut SwapchainImage {
+    fn get_resource_state(&self, state_table: &crate::future::ResourceStateTable) -> ResourceState {
+        self.state.clone()
+    }
+
+    fn set_resource_state(
+        &mut self,
+        state_table: &mut crate::future::ResourceStateTable,
+        state: ResourceState,
+    ) {
+        self.state = state;
     }
 }
 impl Deref for SwapchainImage {
@@ -962,6 +963,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     );
     std::mem::swap(&mut swapchain.acquire_fence, &mut image.acquire_fence);
     swapchain_image.inner = Some(image);
+    swapchain_image.state = Default::default();
 }
 
 pub fn present(

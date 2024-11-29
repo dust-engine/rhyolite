@@ -16,6 +16,7 @@ use bevy::utils::HashSet;
 
 use std::any::Any;
 use std::ffi::CStr;
+use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -37,6 +38,13 @@ impl PartialEq for Device {
     }
 }
 impl Eq for Device {}
+impl Debug for Device {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Device")
+            .field(&mut self.0.device.handle())
+            .finish()
+    }
+}
 
 pub struct DeviceInner {
     physical_device: PhysicalDevice,

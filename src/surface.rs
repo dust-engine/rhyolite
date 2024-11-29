@@ -22,7 +22,8 @@ impl Default for SurfacePlugin {
 impl Plugin for SurfacePlugin {
     fn build(&self, app: &mut App) {
         app.add_instance_extension::<KhrSurface>().unwrap();
-        app.add_instance_extension::<ash::ext::surface_maintenance1::Meta>().unwrap();
+        app.add_instance_extension::<ash::ext::surface_maintenance1::Meta>()
+            .unwrap();
 
         if let Some(event_loop) = app
             .world()
