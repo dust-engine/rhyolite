@@ -411,7 +411,13 @@ where
         );
     }
 
-    fn record(self, ctx: RecordContext) -> (Self::Output, Self::Retained) {
+    fn record(mut self, mut ctx: RecordContext) -> (Self::Output, Self::Retained) {
+        ctx.set_image_resource_state(
+            &mut self.dst_image,
+            vk::PipelineStageFlags2::CLEAR,
+            vk::AccessFlags2::TRANSFER_WRITE,
+            self.layout,
+        );
         unsafe {
             ctx.device.cmd_clear_color_image(
                 ctx.command_buffer,
@@ -463,7 +469,13 @@ where
         );
     }
 
-    fn record(self, _ctx: RecordContext) -> (Self::Output, Self::Retained) {
+    fn record(mut self, mut ctx: RecordContext) -> (Self::Output, Self::Retained) {
+        ctx.set_image_resource_state(
+            &mut self.dst_image,
+            vk::PipelineStageFlags2::empty(),
+            vk::AccessFlags2::empty(),
+            self.layout,
+        );
         Default::default()
     }
 }

@@ -110,3 +110,7 @@ fn clear_main_window_color(
         .unwrap();
     frames.next_frame(submission);
 }
+// how do we calculate semaphore stuff?
+// the wait stages are the first stage in which the resource was used.
+// the signal stages are always all stages.
+// when we hook up one system after another there's a reason for it.

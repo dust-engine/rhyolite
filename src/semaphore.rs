@@ -63,6 +63,10 @@ impl TimelineSemaphore {
         self.value() >= val
     }
     pub fn signal(&self, val: u64) {
+        let old_value = self.value.load(std::sync::atomic::Ordering::Relaxed);
+        if old_value >= val {
+            return;
+        }
         unsafe {
             self.device
                 .signal_semaphore(&vk::SemaphoreSignalInfo {

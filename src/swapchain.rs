@@ -963,7 +963,6 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     );
     std::mem::swap(&mut swapchain.acquire_fence, &mut image.acquire_fence);
     swapchain_image.inner = Some(image);
-    swapchain_image.state = Default::default();
 }
 
 pub fn present(

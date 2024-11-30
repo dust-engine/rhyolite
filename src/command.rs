@@ -64,6 +64,9 @@ impl Drop for CommandPool {
 /// ```
 impl CommandPool {
     fn wait_for_completion(&mut self) {
+        if self.semaphore_signals.is_empty() {
+            return;
+        }
         self.semaphore_signal_raws
             .extend(self.semaphore_signals.values().map(|x| x.0.raw()));
         self.semaphore_signal_values
@@ -342,7 +345,6 @@ impl CommandBuffer<states::Pending> {
 impl<T: 'static> Drop for CommandBuffer<T> {
     fn drop(&mut self) {
         if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Executable>()
-            || std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Pending>()
         {
             self.timeline_semaphore.signal(self.signal_value);
             tracing::warn!("CommandBuffer dropped without being submitted");
@@ -352,6 +354,9 @@ impl<T: 'static> Drop for CommandBuffer<T> {
         {
             tracing::warn!("CommandBuffer dropped without being freed");
         }
+        // Notably, we do not show a warning if the command buffer is pending.
+        // It's very common to drop pending command buffers when the application shuts down.
+        // As long as we wait for all command buffers to complete before destroying the command pool, we're good.
     }
 }
 // How do we handle simutaneous use and one time submit?
