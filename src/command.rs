@@ -15,8 +15,8 @@ use bevy::{
 };
 
 use crate::{
-    semaphore::TimelineSemaphore, swapchain::SwapchainImage, Device, HasDevice, Queue,
-    QueueConfiguration, QueueSelector,
+    semaphore::TimelineSemaphore, swapchain::SwapchainImage, Device, HasDevice, QueueConfiguration,
+    QueueInner, QueueSelector,
 };
 
 pub struct CommandPool {
@@ -91,6 +91,7 @@ impl CommandPool {
             let raw = device.create_command_pool(
                 &vk::CommandPoolCreateInfo {
                     queue_family_index,
+                    flags,
                     ..Default::default()
                 },
                 None,
@@ -356,6 +357,7 @@ impl<T: 'static> Drop for CommandBuffer<T> {
 
 // Each queue system will have one of this.
 // It gets incremented during queue submit.
+#[derive(Debug)]
 pub struct Timeline {
     pub(crate) semaphore: Arc<TimelineSemaphore>,
     wait_value: AtomicU64,
@@ -397,7 +399,7 @@ impl Timeline {
 #[repr(transparent)]
 pub struct QueueDependency<'a>(pub(crate) vk::SemaphoreSubmitInfo<'a>);
 
-impl<'a, T: QueueSelector> Queue<'a, T> {
+impl QueueInner {
     pub fn submit_one(
         &mut self,
         command_buffer: CommandBuffer<states::Executable>,

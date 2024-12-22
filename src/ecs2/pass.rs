@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
+use ash::vk;
 use bevy::{
     ecs::{
         component::ComponentId,
@@ -11,7 +12,11 @@ use bevy::{
 
 use petgraph::{graphmap::GraphMap, Directed};
 
-use crate::QueueInner;
+use crate::{
+    command::Timeline,
+    ecs2::{system::TimelineDependencies, IntoRenderSystem},
+    QueueInner,
+};
 
 use super::system::{RenderSystemIdentifierConfig, RenderSystemSharedState};
 
@@ -96,7 +101,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
         }
 
         // Next, we perform clustering
-        let (queue_graph, mut queue_nodes) = graph_clustering(
+        let (queue_graph, queue_nodes) = graph_clustering(
             &render_subgraph,
             queue_component_id_to_color.len(),
             |node| {
@@ -119,39 +124,93 @@ impl ScheduleBuildPass for RenderSystemsPass {
                 }
             },
         );
+        assert_eq!(queue_graph.node_count(), queue_nodes.len());
 
-        println!("{:?}", queue_graph);
+        let device: crate::Device = world.resource::<crate::Device>().clone();
+        struct QueueNode {
+            queue_component_id: ComponentId,
+            info: GraphClusteringNodeInfo,
+            nodes: Vec<NodeId>,
 
+            /// The node responsible for actually performing the queue operation.
+            /// Can be submission node or the standalone queue node itself.
+            queue_node: NodeId,
+
+            timeline_dependencies: TimelineDependencies,
+        }
         // For each non standalone queue graph node, create prelude system and submission system.
-        for queue_node in queue_graph.nodes() {
-            let node_info = &mut queue_nodes[queue_node as usize];
-            if node_info.info.is_standalone {
-                continue;
-            }
-            let prelude_system_id =
-                self.add_system(graph, world, crate::ecs2::system::prelude_system);
-            let submission_system_id =
-                self.add_system(graph, world, crate::ecs2::system::submission_system);
-            for node in node_info.nodes.iter() {
-                // for all nodes, they run before submission system and after prelude systems.
-                dependency_flattened.add_edge(prelude_system_id, *node, ());
-                dependency_flattened.add_edge(*node, submission_system_id, ());
-            }
-            node_info.nodes.push(prelude_system_id);
-            node_info.nodes.push(submission_system_id);
+        let mut queue_nodes: Vec<QueueNode> = queue_nodes
+            .into_iter()
+            .map(|mut n| {
+                let queue_component_id = color_to_queue_component_id[n.info.color as usize];
+                let queue_node = if n.info.is_standalone {
+                    assert_eq!(n.nodes.len(), 1);
+                    n.nodes[0]
+                } else {
+                    let prelude_system_id =
+                        self.add_system(graph, world, crate::ecs2::system::prelude_system);
+                    let submission_system_id = self.add_system(
+                        graph,
+                        world,
+                        crate::ecs2::system::submission_system.with_queue(queue_component_id),
+                    );
+                    for node in n.nodes.iter() {
+                        // for all nodes, they run before submission system and after prelude systems.
+                        dependency_flattened.add_edge(prelude_system_id, *node, ());
+                        dependency_flattened.add_edge(*node, submission_system_id, ());
+                    }
+                    n.nodes.push(prelude_system_id);
+                    n.nodes.push(submission_system_id);
+                    submission_system_id
+                };
+                QueueNode {
+                    queue_node,
+                    queue_component_id: queue_component_id,
+                    info: n.info,
+                    nodes: n.nodes,
+                    timeline_dependencies: TimelineDependencies {
+                        this: Arc::new(Timeline::new(device.clone()).unwrap()),
+                        dependencies: Vec::new(),
+                    },
+                }
+            })
+            .collect();
+        drop(color_to_queue_component_id);
+        drop(queue_component_id_to_color);
+
+        // Build dependency between queue nodes based on queue graph
+        for (start, end, _) in queue_graph.all_edges() {
+            let start_node = &queue_nodes[start as usize];
+            let end_node = &queue_nodes[end as usize];
+            dependency_flattened.add_edge(start_node.queue_node, end_node.queue_node, ());
+            let timeline = start_node.timeline_dependencies.this.clone();
+            let end_node = &mut queue_nodes[end as usize];
+
+            // TODO: allow stage flags
+            end_node
+                .timeline_dependencies
+                .dependencies
+                .push((timeline, vk::PipelineStageFlags2::ALL_COMMANDS));
+        }
+
+        // Distribute timeline semaphores
+        for node in queue_nodes.iter_mut() {
+            assert!(node.queue_node.is_system());
+            graph.systems[node.queue_node.index()]
+                .get_mut()
+                .unwrap()
+                .configurate(&mut node.timeline_dependencies, world);
         }
 
         // For each non standalone queue graph node, create shared states.
         // This runs after prelude and postlude systems so that these extra systems also get the shared states.
-        let device: crate::Device = world.resource::<crate::Device>().clone();
-        for queue_node in queue_graph.nodes() {
-            let node_info = &queue_nodes[queue_node as usize];
+        for node_info in queue_nodes.iter() {
             if node_info.info.is_standalone {
                 continue;
             }
             let queue_family = unsafe {
                 world
-                    .get_resource_by_id(color_to_queue_component_id[node_info.info.color as usize])
+                    .get_resource_by_id(node_info.queue_component_id)
                     .unwrap()
                     .deref::<QueueInner>()
                     .queue_family
@@ -161,7 +220,11 @@ impl ScheduleBuildPass for RenderSystemsPass {
                 ),
             );
             bevy::ptr::OwningPtr::make(
-                RenderSystemSharedState::new(device.clone(), queue_family),
+                RenderSystemSharedState::new(
+                    device.clone(),
+                    queue_family,
+                    node_info.timeline_dependencies.this.clone(),
+                ),
                 |ptr| unsafe {
                     // SAFETY: component_id was just initialized and corresponds to resource of type R.
                     world.insert_resource_by_id(component_id, ptr);
@@ -175,6 +238,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
                 graph.systems[*node_id].get_mut().unwrap().configurate(
                     &mut super::system::RenderSystemInputConfig {
                         shared_state: component_id,
+                        queue: node_info.queue_component_id,
                     },
                     world,
                 );

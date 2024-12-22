@@ -1,12 +1,13 @@
 use std::{
     any::Any,
     borrow::Cow,
-    marker::PhantomData,
     ops::{Deref, DerefMut},
     pin::Pin,
+    sync::Arc,
+    usize,
 };
 
-use ash::vk;
+use ash::{prelude::VkResult, vk};
 use bevy::{
     ecs::{
         archetype::ArchetypeComponentId,
@@ -20,15 +21,26 @@ use bevy::{
 };
 
 use crate::{
-    command::{states, CommandBuffer, CommandPool, Timeline},
+    command::{states, CommandBuffer, CommandPool, QueueDependency, Timeline},
     future::{GPUFutureBlock, GPUFutureBlockReturnValue, GPUFutureContext},
     utils::RingBuffer,
-    Device, QueueConfiguration, QueueSelector,
+    Device, QueueConfiguration, QueueInner, QueueSelector,
 };
+
+#[derive(Clone, Debug)]
+pub(super) struct TimelineDependencies {
+    pub(super) this: Arc<Timeline>,
+    pub(super) dependencies: Vec<(Arc<Timeline>, vk::PipelineStageFlags2)>,
+}
 
 /// Used as In<RenderSystemCtx<Returned>> for render systems.
 pub struct RenderSystemCtx<Returned = ()> {
     returned_value: Option<Returned>,
+}
+impl<Returned> RenderSystemCtx<Returned> {
+    pub fn take(&mut self) -> Option<Returned> {
+        self.returned_value.take()
+    }
 }
 struct RenderSystemFrame<Returned, Retained> {
     returned: Returned,
@@ -36,7 +48,6 @@ struct RenderSystemFrame<Returned, Retained> {
 }
 /// A wrapper for a system that records command buffers.
 pub struct RenderSystem<
-    Q: QueueSelector,
     F: GPUFutureBlock + Send + Sync,
     T: bevy::ecs::system::System<In = RenderSystemCtx<F::Returned>, Out = F>,
 > {
@@ -44,11 +55,16 @@ pub struct RenderSystem<
     future: Option<F>,
     frames: RingBuffer<RenderSystemFrame<F::Returned, F::Retained>, 3>,
     shared_state_component_id: ComponentId,
+
+    /// If `queue_selector` is None, this must be valid upon initialization.
     queue_component_id: ComponentId,
+
+    /// If non-None, `queue_component_id` will be null upon initialization, and this function
+    /// will be called to figure out the queue dynamically.
+    queue_selector: Option<fn(&QueueConfiguration) -> ComponentId>,
 
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
-    _marker: PhantomData<Q>,
 }
 
 /// Shared across all render systems within a single submission.
@@ -60,14 +76,14 @@ pub(super) struct RenderSystemSharedState {
     /// The prelude system will allocate and populate this command buffer.
     recording_command_buffer: Option<CommandBuffer<states::Recording>>,
     ctx: GPUFutureContext,
-    timeline: Timeline,
+    timeline: Arc<Timeline>,
     command_pool: CommandPool,
 }
 impl RenderSystemSharedState {
-    pub(super) fn new(device: Device, queue_family_index: u32) -> Self {
+    pub(super) fn new(device: Device, queue_family_index: u32, timeline: Arc<Timeline>) -> Self {
         Self {
             ctx: GPUFutureContext::new(device.clone(), vk::CommandBuffer::null()),
-            timeline: Timeline::new(device.clone()).unwrap(),
+            timeline,
             recording_command_buffer: None,
             pending_command_buffers: RingBuffer::new(),
             command_pool: CommandPool::new(
@@ -87,6 +103,7 @@ pub(super) struct RenderSystemIdentifierConfig {
 }
 pub(super) struct RenderSystemInputConfig {
     pub(super) shared_state: ComponentId,
+    pub(super) queue: ComponentId,
 }
 
 // command buffer ownership.
@@ -94,10 +111,9 @@ pub(super) struct RenderSystemInputConfig {
 // we also want command buffer affinity. so command buffers should return at a predictable fasion.
 
 impl<
-        Q: QueueSelector,
         F: GPUFutureBlock + Send + Sync + 'static,
         T: bevy::ecs::system::System<In = RenderSystemCtx<F::Returned>, Out = F>,
-    > bevy::ecs::system::System for RenderSystem<Q, F, T>
+    > bevy::ecs::system::System for RenderSystem<F, T>
 where
     F::Retained: Send + Sync,
     F::Returned: Send + Sync,
@@ -119,6 +135,7 @@ where
             return;
         };
         self.shared_state_component_id = config.shared_state;
+        assert_eq!(config.queue, self.queue_component_id);
         {
             // Add component access for the shared state
             self.component_access
@@ -212,8 +229,14 @@ where
     }
 
     fn initialize(&mut self, world: &mut World) {
-        let queue_config: &QueueConfiguration = world.resource();
-        self.queue_component_id = Q::component_id(queue_config);
+        if let Some(selector) = self.queue_selector.take() {
+            assert_eq!(self.queue_component_id.index(), usize::MAX);
+            let queue_config: &QueueConfiguration = world.resource();
+            self.queue_component_id = selector(queue_config);
+        } else {
+            assert_ne!(self.queue_component_id.index(), usize::MAX);
+        }
+
         self.inner.initialize(world);
 
         self.component_access.extend(self.inner.component_access());
@@ -259,7 +282,7 @@ unsafe impl<'w> SystemParam for RenderSystemSharedStateSystemParam<'w> {
     type Item<'world, 'state> = RenderSystemSharedStateSystemParam<'world>;
 
     fn init_state(_world: &mut World, _system_meta: &mut SystemMeta) -> Self::State {
-        ComponentId::new(0)
+        ComponentId::new(usize::MAX)
     }
     fn configurate(
         state: &mut Self::State,
@@ -297,6 +320,147 @@ unsafe impl<'w> SystemParam for RenderSystemSharedStateSystemParam<'w> {
     }
 }
 
+/// A wrapper for a system that submits queue operations.
+pub struct QueueSystem<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> {
+    inner: T,
+    timeline_dependency: Option<TimelineDependencies>,
+    component_access: Access<ComponentId>,
+    archetype_component_access: Access<ArchetypeComponentId>,
+    queue_component_id: ComponentId,
+    queue_selector: Option<fn(&QueueConfiguration) -> ComponentId>,
+}
+pub struct QueueSystemCtx {
+    queue: *mut QueueInner,
+    dependencies: *const TimelineDependencies,
+}
+impl QueueSystemCtx {
+    pub fn submit_one(
+        &mut self,
+        command_buffer: CommandBuffer<states::Executable>,
+    ) -> VkResult<CommandBuffer<states::Pending>> {
+        let queue_inner = unsafe { &mut *self.queue };
+        let dependencies = unsafe { &*self.dependencies };
+        let dependencies = dependencies
+            .dependencies
+            .iter()
+            .map(|(semaphore, stages)| {
+                QueueDependency(vk::SemaphoreSubmitInfo {
+                    semaphore: semaphore.semaphore.raw(),
+                    value: semaphore.wait_value(),
+                    stage_mask: *stages,
+                    _marker: std::marker::PhantomData,
+                    ..Default::default()
+                })
+            })
+            .collect::<Vec<_>>();
+        queue_inner.submit_one(command_buffer, &dependencies)
+    }
+}
+impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for QueueSystem<T> {
+    type In = ();
+
+    type Out = ();
+
+    fn name(&self) -> Cow<'static, str> {
+        self.inner.name()
+    }
+
+    fn component_access(&self) -> &Access<ComponentId> {
+        &self.component_access
+    }
+
+    fn archetype_component_access(&self) -> &Access<ArchetypeComponentId> {
+        &self.archetype_component_access
+    }
+
+    fn is_send(&self) -> bool {
+        self.inner.is_send()
+    }
+
+    fn is_exclusive(&self) -> bool {
+        self.inner.is_exclusive()
+    }
+
+    fn has_deferred(&self) -> bool {
+        self.inner.has_deferred()
+    }
+
+    unsafe fn run_unsafe(&mut self, _input: (), world: UnsafeWorldCell) -> Self::Out {
+        let input = QueueSystemCtx {
+            queue: &mut *world
+                .get_resource_mut_by_id(self.queue_component_id)
+                .unwrap()
+                .with_type(),
+            dependencies: self.timeline_dependency.as_ref().unwrap(),
+        };
+        self.inner.run_unsafe(input, world)
+    }
+
+    fn apply_deferred(&mut self, world: &mut World) {
+        self.inner.apply_deferred(world);
+    }
+
+    fn queue_deferred(&mut self, world: DeferredWorld) {
+        self.inner.queue_deferred(world);
+    }
+
+    fn initialize(&mut self, world: &mut World) {
+        if let Some(selector) = self.queue_selector.take() {
+            assert_eq!(self.queue_component_id.index(), usize::MAX);
+            let queue_config: &QueueConfiguration = world.resource();
+            self.queue_component_id = selector(queue_config);
+        } else {
+            assert_ne!(self.queue_component_id.index(), usize::MAX);
+        }
+        {
+            // Add component access for the queue
+            self.component_access.add_write(self.queue_component_id);
+            let archetype_component_id = world
+                .get_resource_archetype_component_id(self.queue_component_id)
+                .unwrap();
+            self.archetype_component_access
+                .add_write(archetype_component_id);
+        }
+
+        self.inner.initialize(world);
+
+        self.component_access.extend(self.inner.component_access());
+    }
+
+    fn update_archetype_component_access(&mut self, world: UnsafeWorldCell) {
+        self.inner.update_archetype_component_access(world);
+
+        self.archetype_component_access
+            .extend(self.inner.archetype_component_access());
+    }
+
+    fn check_change_tick(&mut self, change_tick: Tick) {
+        self.inner.check_change_tick(change_tick);
+    }
+
+    fn get_last_run(&self) -> Tick {
+        self.inner.get_last_run()
+    }
+
+    fn set_last_run(&mut self, last_run: Tick) {
+        self.inner.set_last_run(last_run);
+    }
+    fn configurate(&mut self, config: &mut dyn Any, world: &mut World) {
+        if let Some(config) = config.downcast_mut::<TimelineDependencies>() {
+            self.timeline_dependency = Some(config.clone());
+            return;
+        }
+        self.inner.configurate(config, world); // So that the wrapped system may have `RenderSystemInputConfig`
+    }
+    fn default_configs(&mut self, config: &mut ConfigMap) {
+        // Inseret this config to identify the current system as a render config.
+        config.insert(RenderSystemIdentifierConfig {
+            queue_component_id: self.queue_component_id,
+            is_standalone: true,
+        });
+    }
+}
+
 /// Prelude system runs before every render system in the queue node.
 /// It shall:
 /// - Allocate, or reuse and reset command buffer
@@ -326,24 +490,24 @@ pub(super) fn prelude_system(mut shared: RenderSystemSharedStateSystemParam) {
 
 /// Submission system runs after every render system in the queue node. It also runs after every render system in the next queue node.
 pub(super) fn submission_system(
-    //mut queue: Queue,
+    In(mut queue): In<QueueSystemCtx>,
     mut shared: RenderSystemSharedStateSystemParam,
     //queue_submission_ctx: (), // this gives you the semaphores from the schedule build pass and identify the system as a queue system.
 ) {
     let command_buffer = shared.recording_command_buffer.take().unwrap();
     let command_buffer = shared.command_pool.end(command_buffer);
-    /*
-    queue.submit_one(command_buffer, &[
-        QueueDependency {
-
-        }
-    ]).unwrap();
-    */
+    let command_buffer = queue.submit_one(command_buffer).unwrap();
+    println!("the submission system is running{:?}", unsafe {
+        &*queue.dependencies
+    });
+    shared.pending_command_buffers.push(command_buffer);
 }
 
-/// An extension trait for [`IntoSystem`]
+/// An extension trait for [`IntoSystem`] allowing the user to turn a system that returns a GPUFuture into
+/// a regular system that can be added to the App.
 pub trait IntoRenderSystem<Out, Marker> {
     fn into_render_system<Q: QueueSelector>(self) -> impl System<In = (), Out = ()>;
+    fn with_queue(self, queue: ComponentId) -> impl System<In = (), Out = ()>;
 }
 
 pub struct MarkerA;
@@ -353,19 +517,33 @@ where
     T: Send + Sync + 'static,
     Out: Send + Sync + 'static,
 {
-    fn into_render_system<Q: QueueSelector>(self) -> impl System<In = (), Out = ()> {
-        RenderSystem::<Q, Out, T::System> {
+    fn with_queue(self, queue: ComponentId) -> impl System<In = (), Out = ()> {
+        RenderSystem::<Out, T::System> {
             inner: IntoSystem::into_system(self),
             future: None,
             frames: RingBuffer::new(),
-            shared_state_component_id: ComponentId::new(0),
-            queue_component_id: ComponentId::new(0),
+            shared_state_component_id: ComponentId::new(usize::MAX),
+            queue_component_id: queue,
+            queue_selector: None,
             component_access: Default::default(),
             archetype_component_access: Default::default(),
-            _marker: PhantomData,
+        }
+    }
+    fn into_render_system<Q: QueueSelector>(self) -> impl System<In = (), Out = ()> {
+        RenderSystem::<Out, T::System> {
+            inner: IntoSystem::into_system(self),
+            future: None,
+            frames: RingBuffer::new(),
+            shared_state_component_id: ComponentId::new(usize::MAX),
+            queue_component_id: ComponentId::new(usize::MAX),
+            queue_selector: Some(Q::component_id),
+            component_access: Default::default(),
+            archetype_component_access: Default::default(),
         }
     }
 }
+
+fn null<T>(In(_ctx): In<RenderSystemCtx<T>>) {}
 pub struct MarkerB;
 impl<Out: GPUFutureBlock, Marker, T: IntoSystem<(), Out, Marker>>
     IntoRenderSystem<Out, (Marker, MarkerB)> for T
@@ -373,20 +551,62 @@ where
     T: Send + Sync + 'static,
     Out: Send + Sync + 'static,
 {
-    fn into_render_system<Q: QueueSelector>(self) -> impl System<In = (), Out = ()> {
-        fn null<T>(In(_ctx): In<RenderSystemCtx<T>>) {}
+    fn with_queue(self, queue: ComponentId) -> impl System<In = (), Out = ()> {
         let self_system = IntoSystem::into_system(self);
         let null_system = IntoSystem::into_system(null);
         let self_system_name = self_system.name();
-        RenderSystem::<Q, _, _> {
+        RenderSystem::<_, _> {
             inner: bevy::ecs::system::PipeSystem::new(null_system, self_system, self_system_name),
             future: None,
             frames: RingBuffer::new(),
-            shared_state_component_id: ComponentId::new(0),
-            queue_component_id: ComponentId::new(0),
+            shared_state_component_id: ComponentId::new(usize::MAX),
+            queue_component_id: queue,
+            queue_selector: None,
             component_access: Default::default(),
             archetype_component_access: Default::default(),
-            _marker: PhantomData,
+        }
+    }
+    fn into_render_system<Q: QueueSelector>(self) -> impl System<In = (), Out = ()> {
+        let self_system = IntoSystem::into_system(self);
+        let null_system = IntoSystem::into_system(null);
+        let self_system_name = self_system.name();
+        RenderSystem::<_, _> {
+            inner: bevy::ecs::system::PipeSystem::new(null_system, self_system, self_system_name),
+            future: None,
+            frames: RingBuffer::new(),
+            shared_state_component_id: ComponentId::new(usize::MAX),
+            queue_component_id: ComponentId::new(usize::MAX),
+            queue_selector: Some(Q::component_id),
+            component_access: Default::default(),
+            archetype_component_access: Default::default(),
+        }
+    }
+}
+
+pub struct MarkerC;
+impl<Marker, T: IntoSystem<QueueSystemCtx, (), Marker>> IntoRenderSystem<(), (Marker, MarkerC)>
+    for T
+where
+    T: Send + Sync + 'static,
+{
+    fn into_render_system<Q: QueueSelector>(self) -> impl System<In = (), Out = ()> {
+        QueueSystem::<T::System> {
+            inner: IntoSystem::into_system(self),
+            queue_component_id: ComponentId::new(usize::MAX),
+            queue_selector: Some(Q::component_id),
+            component_access: Default::default(),
+            archetype_component_access: Default::default(),
+            timeline_dependency: None,
+        }
+    }
+    fn with_queue(self, queue: ComponentId) -> impl System<In = (), Out = ()> {
+        QueueSystem::<T::System> {
+            inner: IntoSystem::into_system(self),
+            queue_component_id: queue,
+            queue_selector: None,
+            component_access: Default::default(),
+            archetype_component_access: Default::default(),
+            timeline_dependency: None,
         }
     }
 }

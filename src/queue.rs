@@ -1,6 +1,7 @@
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
+    usize,
 };
 
 use crate::{command::CommandPool, Device};
@@ -87,7 +88,7 @@ impl QueueConfiguration {
                 .iter()
                 .map(|info| QueueConfigurationFamily {
                     flags: info.queue_flags,
-                    shared_command_pool: ComponentId::new(0),
+                    shared_command_pool: ComponentId::new(usize::MAX),
                     queues: SmallVec::new(),
                 })
                 .collect(),
@@ -103,7 +104,7 @@ impl QueueConfiguration {
 
             assert_eq!(
                 family.shared_command_pool.index(),
-                0,
+                usize::MAX,
                 "Each queue family index inside `queue_create_info` should be unique"
             );
 

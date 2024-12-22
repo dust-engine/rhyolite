@@ -38,6 +38,11 @@ impl Default for SwapchainPlugin {
     }
 }
 
+/// A special system set for render systems requiring access to the swapchain image.
+/// Render systems added to this system set are guaranteed to run before `present` and after `acquire_next_image`.
+/// These systems will also be properly syncronized with the acquire and present queue systems with semaphores.
+#[derive(SystemSet, Hash, PartialEq, Eq, Debug, Clone, Copy)]
+pub struct SwapchainSystemSet;
 impl Plugin for SwapchainPlugin {
     fn build(&self, app: &mut App) {
         app.add_device_extension::<KhrSwapchain>().unwrap();
@@ -57,6 +62,12 @@ impl Plugin for SwapchainPlugin {
                     .after(extract_swapchains)
                     .before(present),
             ),
+        );
+        app.configure_sets(
+            PostUpdate,
+            SwapchainSystemSet
+                .before(present)
+                .after(acquire_swapchain_image::<With<PrimaryWindow>>),
         );
 
         app.add_event::<SuboptimalEvent>();

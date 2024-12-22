@@ -59,7 +59,12 @@ fn main() {
         .add_build_pass(rhyolite::ecs2::RenderSystemsPass::new())
         .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
 
-    app.add_systems(PostUpdate, clear2.into_render_system::<UniversalCompute>());
+    app.add_systems(
+        PostUpdate,
+        clear2
+            .into_render_system::<UniversalCompute>()
+            .in_set(rhyolite::swapchain::SwapchainSystemSet),
+    );
 
     app.run();
 }
