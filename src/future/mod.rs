@@ -2,23 +2,13 @@ pub mod commands;
 mod ctx;
 mod exec;
 mod res;
-use core::task::ContextBuilder;
-use std::{
-    any::Any,
-    future::{Future, IntoFuture},
-    marker::PhantomData,
-    mem::MaybeUninit,
-    pin::Pin,
-    str::FromStr,
-    task::Poll,
-};
+use std::{future::Future, mem::MaybeUninit, pin::Pin, task::Poll};
 
 pub use ctx::*;
+pub use exec::*;
 pub use res::*;
 
 pub use rhyolite_macros::gpu_future;
-
-use crate::semaphore::SemaphoreDeferredValue;
 
 pub trait GPUFuture: Sized + Unpin {
     type Output;
@@ -104,10 +94,14 @@ pub trait GPUFutureBlock:
     >,
 >
 {
-    type Returned;
-    type Retained;
+    type Returned: Send + Sync + 'static;
+    type Retained: Send + Sync + 'static;
 }
-impl<O, R, T: Future<Output = GPUFutureBlockReturnValue<O, R>>> GPUFutureBlock for T {
+impl<O, R, T: Future<Output = GPUFutureBlockReturnValue<O, R>>> GPUFutureBlock for T
+where
+    O: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
     type Returned = O;
     type Retained = R;
 }

@@ -8,7 +8,7 @@ use ash::{
     vk::{self},
 };
 
-use crate::{command::Timeline, utils::AsVkHandle, Device, HasDevice};
+use crate::{utils::AsVkHandle, Device, HasDevice};
 
 /// A thin wrapper around [Timeline Semaphores](https://www.khronos.org/blog/vulkan-timeline-semaphores).
 /// We additionally cache the timeline semaphore value in an [`AtomicU64`] to reduce the number of API
@@ -194,5 +194,58 @@ impl<T> SemaphoreDeferredValue<T> {
     }
     pub fn current_value(&self) -> u64 {
         self.wait.semaphore.value()
+    }
+}
+
+pub struct Event {
+    device: Device,
+    raw: vk::Event,
+    device_only: bool,
+}
+impl Drop for Event {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_event(self.raw, None);
+        }
+    }
+}
+impl Event {
+    pub fn new(device: Device) -> VkResult<Self> {
+        let event = unsafe { device.create_event(&vk::EventCreateInfo::default(), None)? };
+        Ok(Self {
+            device,
+            raw: event,
+            device_only: false,
+        })
+    }
+
+    pub fn new_device_only(device: Device) -> VkResult<Self> {
+        let event = unsafe {
+            device.create_event(
+                &vk::EventCreateInfo {
+                    flags: vk::EventCreateFlags::DEVICE_ONLY,
+                    ..Default::default()
+                },
+                None,
+            )?
+        };
+        Ok(Self {
+            device,
+            raw: event,
+            device_only: true,
+        })
+    }
+
+    pub fn set(&mut self) -> VkResult<()> {
+        assert!(!self.device_only);
+        unsafe { self.device.set_event(self.raw) }
+    }
+    pub fn reset(&mut self) -> VkResult<()> {
+        assert!(!self.device_only);
+        unsafe { self.device.reset_event(self.raw) }
+    }
+    pub fn get_status(&self) -> VkResult<bool> {
+        assert!(!self.device_only);
+        unsafe { self.device.get_event_status(self.raw) }
     }
 }

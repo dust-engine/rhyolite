@@ -1,23 +1,17 @@
 use core::task::ContextBuilder;
-use std::{
-    future::Future,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-    sync::{atomic::AtomicU64, Arc, Mutex, MutexGuard},
-    task::Poll,
-};
+use std::{future::Future, pin::Pin, sync::Arc, task::Poll};
 
-use ash::{prelude::VkResult, vk};
+use ash::vk;
 
 use crate::{
     command::{states::Recording, CommandBuffer, CommandPool},
     semaphore::TimelineSemaphore,
-    Device, HasDevice,
+    HasDevice,
 };
 
 use super::{GPUFutureBlock, GPUFutureBlockReturnValue, GPUFutureContext};
 
-fn gpu_future_poll<T: Future>(
+pub(crate) fn gpu_future_poll<T: Future>(
     gpu_future: Pin<&mut T>,
     ctx: &mut GPUFutureContext,
 ) -> Poll<T::Output> {
@@ -55,6 +49,7 @@ impl CommandPool {
         command_buffer: &mut CommandBuffer<Recording>,
         future: T,
     ) -> GPUFutureSubmissionStatus<T::Returned, T::Retained> {
+        let mut future_ctx = GPUFutureContext::new(self.device().clone(), command_buffer.raw);
         assert_eq!(command_buffer.pool, self.raw);
         assert_eq!(command_buffer.generation, self.generation);
         let mut future = std::pin::pin!(future);
@@ -63,23 +58,23 @@ impl CommandPool {
             output,
             retained_values,
         } = loop {
-            match gpu_future_poll(future.as_mut(), &mut command_buffer.future_ctx) {
+            match gpu_future_poll(future.as_mut(), &mut future_ctx) {
                 Poll::Ready(output) => break output,
                 Poll::Pending => {
                     stage_count += 1;
-                    if command_buffer.future_ctx.has_barriers() {
+                    if future_ctx.has_barriers() {
                         // record pipeline barrier
                         unsafe {
                             // Safety: we have mutable borrow to both the command buffer and command pool.
                             self.device().cmd_pipeline_barrier2(
                                 command_buffer.raw,
                                 &vk::DependencyInfo::default()
-                                    .image_memory_barriers(&command_buffer.future_ctx.image_barrier)
-                                    .memory_barriers(&[command_buffer.future_ctx.memory_barrier]),
+                                    .image_memory_barriers(&future_ctx.image_barrier)
+                                    .memory_barriers(&[future_ctx.memory_barrier]),
                             );
                         }
                     }
-                    command_buffer.future_ctx.clear_barriers();
+                    future_ctx.clear_barriers();
                 }
             }
         };

@@ -19,7 +19,7 @@ define_future!(Yield);
 impl GPUFuture for Yield {
     type Output = ();
 
-    fn barrier(&mut self, mut ctx: BarrierContext) {}
+    fn barrier(&mut self, ctx: BarrierContext) {}
 
     fn record(self, ctx: RecordContext) -> (Self::Output, Self::Retained) {
         Default::default()

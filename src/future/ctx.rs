@@ -1,13 +1,10 @@
-use std::{collections::BTreeMap, ops::Deref};
+use std::ops::Deref;
 
-use ash::vk::{self, AccessFlags2};
+use ash::vk::{self};
 
 use crate::{Device, ImageLike};
 
-use super::{
-    res::{self, ResourceState, ResourceStateTable},
-    Access, GPUResource,
-};
+use super::{res::ResourceStateTable, Access, GPUResource};
 
 struct GlobalResourceContext {
     // manages resource id allocator
@@ -94,10 +91,9 @@ impl<'a> RecordContext<'a> {
     }
 }
 
-#[derive(Debug)]
 pub struct GPUFutureContext {
     device: Device,
-    command_buffer: vk::CommandBuffer,
+    pub(crate) command_buffer: vk::CommandBuffer,
 
     pub(crate) memory_barrier: vk::MemoryBarrier2<'static>,
     pub(crate) image_barrier: Vec<vk::ImageMemoryBarrier2<'static>>,

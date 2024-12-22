@@ -5,6 +5,8 @@
 #![feature(ptr_metadata)]
 #![feature(alloc_layout_extra)]
 #![feature(maybe_uninit_array_assume_init)]
+#![feature(maybe_uninit_uninit_array)]
+#![feature(const_maybe_uninit_uninit_array)]
 #![feature(let_chains)]
 #![feature(type_changing_struct_update)]
 #![feature(ptr_as_uninit)]
@@ -21,7 +23,7 @@ pub mod command;
 pub mod debug;
 pub mod deferred;
 mod device;
-//pub mod ecs;
+pub mod ecs2;
 pub mod extensions;
 pub mod future;
 mod image;

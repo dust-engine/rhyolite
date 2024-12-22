@@ -1,23 +1,24 @@
-use bevy::prelude::{EventReader, IntoSystemConfigs, Local};
+use bevy::prelude::{IntoSystem, IntoSystemConfigs, Local};
 use rhyolite::ash::vk;
 
-use bevy::app::{AppExit, PluginGroup, PostUpdate};
-use bevy::ecs::system::{In, Query};
+use bevy::app::{PluginGroup, PostUpdate};
+use bevy::ecs::system::Query;
 use bevy::ecs::{entity::Entity, query::With};
 use bevy::window::PrimaryWindow;
 use rhyolite::command::states::Pending;
-use rhyolite::command::{self, CommandBuffer, SharedCommandPool, Timeline};
+use rhyolite::command::{CommandBuffer, SharedCommandPool, Timeline};
 use rhyolite::debug::DebugUtilsPlugin;
-use rhyolite::future::commands::{clear_color_image, prepare_image_for_presentation};
-use rhyolite::future::InFlightFrameMananger;
-use rhyolite::selectors::Graphics;
-use rhyolite::{future::gpu_future, Queue};
+use rhyolite::future::commands::{clear_color_image, prepare_image_for_presentation, yield_now};
+use rhyolite::future::{GPUFutureBlock, InFlightFrameMananger};
+use rhyolite::selectors::{Graphics, UniversalCompute};
 use rhyolite::{
+    ecs2::IntoRenderSystem,
     swapchain::{
         acquire_swapchain_image, present, SwapchainConfig, SwapchainImage, SwapchainPlugin,
     },
     RhyolitePlugin, SurfacePlugin,
 };
+use rhyolite::{future::gpu_future, Queue};
 
 fn main() {
     let mut app = bevy::app::App::new();
@@ -52,7 +53,23 @@ fn main() {
             ..Default::default()
         });
 
+    app.get_schedule_mut(PostUpdate)
+        .as_mut()
+        .unwrap()
+        .add_build_pass(rhyolite::ecs2::RenderSystemsPass::new())
+        .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
+
+    app.add_systems(PostUpdate, clear2.into_render_system::<UniversalCompute>());
+
     app.run();
+}
+
+fn clear2() -> impl GPUFutureBlock {
+    gpu_future! {
+        yield_now().await;
+        yield_now().await;
+        yield_now().await;
+    }
 }
 
 fn clear_main_window_color(

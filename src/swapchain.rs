@@ -1,4 +1,4 @@
-use ash::vk::{Handle, PhysicalDeviceSwapchainMaintenance1FeaturesEXT, SwapchainKHR};
+use ash::vk::Handle;
 use cstr::cstr;
 use std::ops::DerefMut;
 use std::{collections::BTreeSet, ops::Deref, sync::Arc};
@@ -16,7 +16,7 @@ use bevy::{
 use smallvec::SmallVec;
 
 use crate::command::QueueDependency;
-use crate::future::{GPUOwned, GPUResource, ResourceState};
+use crate::future::{GPUResource, ResourceState};
 use crate::selectors::Graphics;
 use crate::{
     plugin::RhyoliteApp,

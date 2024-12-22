@@ -11,7 +11,7 @@ use bevy::{
         system::{SystemMeta, SystemParam},
         world::unsafe_world_cell::UnsafeWorldCell,
     },
-    prelude::{FromWorld, ResMut, Resource, World},
+    prelude::{Resource, World},
 };
 
 const PRIORITY_HIGH: [f32; 2] = [1.0, 0.1];
@@ -144,7 +144,7 @@ impl QueueConfiguration {
     }
 }
 
-pub trait QueueSelector {
+pub trait QueueSelector: Send + Sync + 'static {
     fn family_index(config: &QueueConfiguration) -> u32;
     fn component_id(config: &QueueConfiguration) -> ComponentId;
     fn shared_command_pool_component_id(config: &QueueConfiguration) -> ComponentId {

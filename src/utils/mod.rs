@@ -1,8 +1,10 @@
 mod format;
 mod future;
+mod ring;
 use ash::vk::{self, TaggedStructure};
 pub use format::*;
 pub use future::*;
+pub use ring::*;
 use std::{ops::Deref, ptr::NonNull};
 
 #[derive(Debug, Clone)]

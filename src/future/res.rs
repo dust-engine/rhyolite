@@ -1,17 +1,6 @@
-use std::{
-    borrow::Borrow,
-    collections::BTreeMap,
-    num::{NonZero, NonZeroU64},
-    pin::Pin,
-    ptr::NonNull,
-    sync::atomic::AtomicU64,
-    u32, u64,
-};
+use std::u32;
 
 use ash::vk;
-use bevy::prelude::Resource;
-
-use crate::semaphore::TimelineSemaphore;
 
 #[derive(Clone, Debug)]
 pub struct ResourceState {

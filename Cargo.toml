@@ -43,7 +43,8 @@ shaderc = { version = "0.8", optional = true, features = ["prefer-static-linking
 raw-window-metal = "0.4"
 
 [patch.crates-io]
-bevy = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "node-config" }
+# bevy = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "node-config" }
+bevy = { path = "../bevy" }
 ash = { git = "https://github.com/Neo-Zhixing/ash.git", branch = "meta" }
 
 [dev-dependencies]

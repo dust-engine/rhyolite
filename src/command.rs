@@ -1,14 +1,13 @@
 use std::{
     collections::BTreeMap,
     marker::PhantomData,
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::{atomic::AtomicU64, Arc},
 };
 
 use ash::{
     prelude::VkResult,
-    vk::{self, Handle, SwapchainKHR},
+    vk::{self},
 };
 use bevy::{
     ecs::{component::ComponentId, system::SystemParam},
@@ -16,10 +15,8 @@ use bevy::{
 };
 
 use crate::{
-    future::{GPUFutureContext, InFlightFrameMananger},
-    semaphore::{SemaphoreDeferredValue, TimelineSemaphore},
-    swapchain::SwapchainImage,
-    Device, HasDevice, Queue, QueueConfiguration, QueueSelector,
+    semaphore::TimelineSemaphore, swapchain::SwapchainImage, Device, HasDevice, Queue,
+    QueueConfiguration, QueueSelector,
 };
 
 pub struct CommandPool {
@@ -118,7 +115,7 @@ impl CommandPool {
     /// All VkCommandBuffer objects allocated from commandPool must not be in the pending state
     ///
     /// We enforce this by awaiting on the timeline semaphores signaled.
-    pub fn reset_blocked(&mut self, release_resources: bool) {
+    pub fn reset_pool_blocked(&mut self, release_resources: bool) {
         let reset_flags = if release_resources {
             vk::CommandPoolResetFlags::RELEASE_RESOURCES
         } else {
@@ -183,7 +180,6 @@ impl CommandPool {
             flags,
             timeline_semaphore: on_timeline.semaphore.clone(),
             signal_value: on_timeline.increment() + 1,
-            future_ctx: GPUFutureContext::new(self.device.clone(), raw),
             generation: self.generation,
             _marker: PhantomData,
         };
@@ -265,7 +261,6 @@ impl CommandPool {
         &mut self,
         mut command_buffer: CommandBuffer<T>,
         release_resources: bool,
-        flags: vk::CommandBufferUsageFlags,
         next_timeline: &Timeline,
     ) -> CommandBuffer<states::Recording> {
         assert!(self
@@ -292,7 +287,7 @@ impl CommandPool {
                 .begin_command_buffer(
                     command_buffer.raw,
                     &vk::CommandBufferBeginInfo {
-                        flags,
+                        flags: command_buffer.flags,
                         ..Default::default()
                     },
                 )
@@ -320,7 +315,6 @@ pub struct CommandBuffer<STATE: 'static> {
     pub(crate) timeline_semaphore: Arc<TimelineSemaphore>,
     // When the command buffer was executed on the GPU, this shall be signaled
     pub(crate) signal_value: u64,
-    pub(crate) future_ctx: GPUFutureContext,
 
     /// The generation of the command pool when this was last allocated / reset
     pub(crate) generation: u64,
@@ -344,8 +338,7 @@ impl CommandBuffer<states::Pending> {
 }
 impl<T: 'static> Drop for CommandBuffer<T> {
     fn drop(&mut self) {
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Executable>()
-        {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<states::Executable>() {
             self.timeline_semaphore.signal(self.signal_value);
             tracing::warn!("CommandBuffer dropped without being submitted");
         }
@@ -364,7 +357,7 @@ impl<T: 'static> Drop for CommandBuffer<T> {
 // Each queue system will have one of this.
 // It gets incremented during queue submit.
 pub struct Timeline {
-    semaphore: Arc<TimelineSemaphore>,
+    pub(crate) semaphore: Arc<TimelineSemaphore>,
     wait_value: AtomicU64,
 }
 impl FromWorld for Timeline {
@@ -387,6 +380,9 @@ impl Timeline {
     pub fn increment(&self) -> u64 {
         self.wait_value
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+    pub fn wait_value(&self) -> u64 {
+        self.wait_value.load(std::sync::atomic::Ordering::Relaxed)
     }
     pub fn blocking_stages(&self, stages: vk::PipelineStageFlags2) -> QueueDependency {
         QueueDependency(vk::SemaphoreSubmitInfo {
@@ -500,7 +496,7 @@ impl<'a, Q: QueueSelector> DerefMut for SharedCommandPool<'a, Q> {
 }
 
 unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
-    type State = (ComponentId, u64);
+    type State = ComponentId;
 
     type Item<'world, 'state> = SharedCommandPool<'world, Q>;
 
@@ -531,11 +527,11 @@ unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
         system_meta
             .archetype_component_access
             .add_write(archetype_component_id);
-        (component_id, 0)
+        component_id
     }
 
     unsafe fn get_param<'world, 'state>(
-        (component_id, frame_index): &'state mut Self::State,
+        component_id: &'state mut Self::State,
         system_meta: &bevy::ecs::system::SystemMeta,
         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
         _change_tick: bevy::ecs::component::Tick,
