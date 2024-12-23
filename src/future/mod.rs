@@ -109,37 +109,3 @@ where
 unsafe fn maybe_uninit_new<'a, T>(obj: &'a mut T) -> &'a mut MaybeUninit<T> {
     std::mem::transmute(obj)
 }
-
-pub struct InFlightFrameMananger<T, const C: usize = 3> {
-    current_frame: usize,
-    frame_data: [Option<T>; C],
-}
-impl<T, const C: usize> InFlightFrameMananger<T, C> {
-    pub fn take(&mut self) -> Option<T> {
-        self.frame_data[self.current_frame].take()
-    }
-
-    pub fn next_frame(&mut self, frame_data: T) {
-        let dst = &mut self.frame_data[self.current_frame];
-        assert!(
-            dst.is_none(),
-            "You must call `take` before calling `add_frame`"
-        );
-        *dst = Some(frame_data);
-        self.current_frame += 1;
-        if self.current_frame >= C {
-            self.current_frame = 0;
-        }
-    }
-    pub fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
-        self.frame_data.iter_mut().filter_map(|x| x.take())
-    }
-}
-impl<T, const C: usize> Default for InFlightFrameMananger<T, C> {
-    fn default() -> Self {
-        Self {
-            current_frame: 0,
-            frame_data: [0; C].map(|_| None),
-        }
-    }
-}

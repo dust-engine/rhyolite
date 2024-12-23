@@ -1,20 +1,11 @@
 use std::{
-    any::Any,
-    borrow::Cow,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-    sync::Arc,
-    usize,
+    any::Any, borrow::Cow, ops::{Deref, DerefMut}, pin::Pin, ptr::NonNull, sync::Arc, usize
 };
 
 use ash::{prelude::VkResult, vk};
 use bevy::{
     ecs::{
-        archetype::ArchetypeComponentId,
-        component::{ComponentId, Tick},
-        query::Access,
-        system::{System, SystemMeta, SystemParam},
-        world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld},
+        archetype::ArchetypeComponentId, component::{ComponentId, Tick}, query::Access, schedule::InternedSystemSet, system::{System, SystemMeta, SystemParam}, world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld}
     },
     prelude::{In, IntoSystem, Mut, World},
     utils::ConfigMap,
@@ -28,9 +19,9 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
-pub(super) struct TimelineDependencies {
-    pub(super) this: Arc<Timeline>,
-    pub(super) dependencies: Vec<(Arc<Timeline>, vk::PipelineStageFlags2)>,
+pub struct TimelineDependencies {
+    pub this: Arc<Timeline>,
+    pub dependencies: Vec<(Arc<Timeline>, vk::PipelineStageFlags2)>,
 }
 
 /// Used as In<RenderSystemCtx<Returned>> for render systems.
@@ -121,6 +112,10 @@ where
     type In = ();
 
     type Out = ();
+
+    fn default_system_sets(&self) -> Vec<InternedSystemSet> {
+        self.inner.default_system_sets()
+    }
 
     fn default_configs(&mut self, config: &mut ConfigMap) {
         // Inseret this config to identify the current system as a render config.
@@ -330,15 +325,22 @@ pub struct QueueSystem<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = (
     queue_selector: Option<fn(&QueueConfiguration) -> ComponentId>,
 }
 pub struct QueueSystemCtx {
-    queue: *mut QueueInner,
+    queue: NonNull<QueueInner>,
     dependencies: *const TimelineDependencies,
 }
 impl QueueSystemCtx {
+    pub fn dependencies(&self) -> &TimelineDependencies {
+        unsafe { & *self.dependencies}
+    }
+    pub fn raw_queue(&self) -> vk::Queue {
+        let queue_inner = unsafe { self.queue.as_ref() };
+        queue_inner.queue
+    }
     pub fn submit_one(
         &mut self,
         command_buffer: CommandBuffer<states::Executable>,
     ) -> VkResult<CommandBuffer<states::Pending>> {
-        let queue_inner = unsafe { &mut *self.queue };
+        let queue_inner = unsafe { self.queue.as_mut() };
         let dependencies = unsafe { &*self.dependencies };
         let dependencies = dependencies
             .dependencies
@@ -360,6 +362,10 @@ impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for Que
     type In = ();
 
     type Out = ();
+
+    fn default_system_sets(&self) -> Vec<InternedSystemSet> {
+        self.inner.default_system_sets()
+    }
 
     fn name(&self) -> Cow<'static, str> {
         self.inner.name()
@@ -387,10 +393,12 @@ impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for Que
 
     unsafe fn run_unsafe(&mut self, _input: (), world: UnsafeWorldCell) -> Self::Out {
         let input = QueueSystemCtx {
-            queue: &mut *world
-                .get_resource_mut_by_id(self.queue_component_id)
-                .unwrap()
-                .with_type(),
+            queue: unsafe {
+                NonNull::new_unchecked(&mut *world
+                    .get_resource_mut_by_id(self.queue_component_id)
+                    .unwrap()
+                    .with_type())
+            },
             dependencies: self.timeline_dependency.as_ref().unwrap(),
         };
         self.inner.run_unsafe(input, world)
@@ -501,6 +509,7 @@ pub(super) fn submission_system(
         &*queue.dependencies
     });
     shared.pending_command_buffers.push(command_buffer);
+    queue.dependencies().this.increment();
 }
 
 /// An extension trait for [`IntoSystem`] allowing the user to turn a system that returns a GPUFuture into

@@ -1,6 +1,8 @@
 use ash::vk::Handle;
+use bevy::ecs::component::ComponentId;
 use cstr::cstr;
 use std::ops::DerefMut;
+use std::usize;
 use std::{collections::BTreeSet, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
@@ -16,6 +18,7 @@ use bevy::{
 use smallvec::SmallVec;
 
 use crate::command::QueueDependency;
+use crate::ecs2::{IntoRenderSystem, QueueSystemCtx};
 use crate::future::{GPUResource, ResourceState};
 use crate::selectors::Graphics;
 use crate::{
@@ -57,8 +60,13 @@ impl Plugin for SwapchainPlugin {
             PostUpdate,
             (
                 extract_swapchains.after(crate::surface::extract_surfaces),
-                present,
+                // Always present on the Graphics queue.
+                // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility
+                // using vkGetPhysicalDeviceSurfaceSupportKHR select the best one.
+                present.into_render_system::<Graphics>(),
                 acquire_swapchain_image::<With<PrimaryWindow>>
+                    // acquire_swapchain_image isn't exactly a queue operation.
+                    .into_render_system::<Graphics>()
                     .after(extract_swapchains)
                     .before(present),
             ),
@@ -868,6 +876,7 @@ impl ImageViewLike for SwapchainImage {
 /// For example, `With<PrimaryWindow>` will only acquire the next image from the swapchain
 /// associated with the primary window.
 pub fn acquire_swapchain_image<Filter: QueryFilter>(
+    In(queue): In<QueueSystemCtx>,
     mut query: Query<
         (
             Entity,
@@ -882,6 +891,8 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     mut suboptimal_events: EventWriter<SuboptimalEvent>,
     device: Res<Device>,
 ) {
+    println!("acquire");
+    assert!(queue.dependencies().dependencies.is_empty());
     let (entity, mut swapchain, mut swapchain_image, swapchain_config, window, surface) =
         match query.get_single_mut() {
             Ok(item) => item,
@@ -950,6 +961,29 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
             panic!("Failed to acquire next image: {:?}", err);
         }
     };
+    unsafe {
+        let wait_value = queue.dependencies().this.wait_value();
+        queue.dependencies().this.increment();
+        device.queue_submit2(queue.raw_queue(), &[
+            vk::SubmitInfo2::default().wait_semaphore_infos(&[
+                vk::SemaphoreSubmitInfo {
+                    semaphore: swapchain.acquire_semaphore,
+                    ..Default::default()
+                }, vk::SemaphoreSubmitInfo {
+                    semaphore: queue.dependencies().this.semaphore.raw(),
+                    value: wait_value,
+                    ..Default::default()
+                },
+            ])
+            .signal_semaphore_infos(&[
+                vk::SemaphoreSubmitInfo {
+                    semaphore: queue.dependencies().this.semaphore.raw(),
+                    value: wait_value + 1,
+                    ..Default::default()
+                }
+            ])
+        ], vk::Fence::null()).unwrap();
+    }
     let mut image = swapchain.images[indice as usize]
         .take()
         .expect("Acquiring image that hasn't been presented");
@@ -977,10 +1011,8 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
 }
 
 pub fn present(
+    In(queue): In<QueueSystemCtx>,
     device: Res<Device>,
-    // TODO: this isn't exactly the best. Ideally we check surface-pdevice-queuefamily compatibility, then
-    // select the best one.
-    queue: Queue<Graphics>,
     mut query: Query<(
         &mut Swapchain,
         &mut SwapchainImage,
@@ -992,16 +1024,31 @@ pub fn present(
     mut reused_states: Local<(
         Vec<vk::SwapchainKHR>,
         Vec<vk::Semaphore>,
+        Vec<vk::SemaphoreSubmitInfo>,
+        Vec<vk::SemaphoreSubmitInfo>,
         Vec<vk::Fence>,
         Vec<u32>,
     )>,
 ) {
-    let (ref mut swapchains, ref mut semaphores, ref mut fences, ref mut swapchain_image_indices) =
+    println!("present");
+    let (ref mut swapchains, ref mut semaphores, ref mut semaphore_submit_infos, ref mut semaphore_wait_infos, ref mut fences, ref mut swapchain_image_indices) =
         reused_states.deref_mut();
     swapchains.clear();
     semaphores.clear();
+    semaphore_submit_infos.clear();
+    semaphore_wait_infos.clear();
     fences.clear();
     swapchain_image_indices.clear();
+
+
+    for (timeline, stages) in queue.dependencies().dependencies.iter() {
+        semaphore_wait_infos.push(vk::SemaphoreSubmitInfo {
+            semaphore: timeline.semaphore.raw(),
+            value: timeline.wait_value(),
+            stage_mask: *stages,
+            ..Default::default()
+        });
+    }
 
     for (mut swapchain, mut swapchain_image, _, _, _) in query.iter_mut() {
         let Some(swapchain_image) = swapchain_image.inner.take() else {
@@ -1011,6 +1058,11 @@ pub fn present(
         fences.push(swapchain_image.present_fence);
 
         swapchains.push(swapchain.inner.inner);
+        semaphore_submit_infos.push(vk::SemaphoreSubmitInfo {
+            semaphore: swapchain_image.present_semaphore,
+            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS, // TODO: We're using ALL_COMMANDS for now.
+            ..Default::default()
+        });
         // Safety: we're only getting the indice of the image and we're not actually reading / writing to it.
         let indice = swapchain_image.indice;
         swapchain_image_indices.push(indice);
@@ -1024,8 +1076,13 @@ pub fn present(
         // Wait for the previous presentations to finish
         device.wait_for_fences(&fences, true, !0).unwrap();
         device.reset_fences(&fences).unwrap();
+        device.queue_submit2(queue.raw_queue(), &[
+            vk::SubmitInfo2::default()
+            .wait_semaphore_infos(&semaphore_wait_infos)
+            .signal_semaphore_infos(&semaphore_submit_infos)
+        ], vk::Fence::null()).unwrap();
         match device.extension::<KhrSwapchain>().queue_present(
-            queue.queue,
+            queue.raw_queue(),
             &vk::PresentInfoKHR::default()
                 .swapchains(&swapchains)
                 .image_indices(&swapchain_image_indices)

@@ -10,7 +10,7 @@ use bevy::{
     prelude::{IntoSystem, System},
 };
 
-use petgraph::{graphmap::GraphMap, Directed};
+use petgraph::{graphmap::GraphMap, visit::{EdgeRef, IntoEdgeReferences}, Directed};
 
 use crate::{
     command::Timeline,
@@ -90,9 +90,11 @@ impl ScheduleBuildPass for RenderSystemsPass {
             };
             let system = &graph.systems[node_id];
             if let Some(config) = system.config.get::<RenderSystemIdentifierConfig>() {
-                let color = color_to_queue_component_id.len() as u32;
-                queue_component_id_to_color.insert(config.queue_component_id, color);
-                color_to_queue_component_id.push(config.queue_component_id);
+                if !queue_component_id_to_color.contains_key(&config.queue_component_id) {
+                    let color = color_to_queue_component_id.len() as u32;
+                    queue_component_id_to_color.insert(config.queue_component_id, color);
+                    color_to_queue_component_id.push(config.queue_component_id);
+                }
                 continue; // is a render system
             };
 
@@ -178,13 +180,20 @@ impl ScheduleBuildPass for RenderSystemsPass {
         drop(color_to_queue_component_id);
         drop(queue_component_id_to_color);
 
-        // Build dependency between queue nodes based on queue graph
-        for (start, end, _) in queue_graph.all_edges() {
-            let start_node = &queue_nodes[start as usize];
-            let end_node = &queue_nodes[end as usize];
+        // Simplify the graph, then build dependency between queue nodes based on queue graph
+        let queue_nodes_topo_sorted = petgraph::algo::toposort(&queue_graph, None).unwrap();
+        let (queue_nodes_tred_list, _) = petgraph::algo::tred::dag_to_toposorted_adjacency_list::<
+            _,
+            u32,
+        >(&queue_graph, &queue_nodes_topo_sorted);
+        let (reduction, _) =
+            petgraph::algo::tred::dag_transitive_reduction_closure(&queue_nodes_tred_list);
+        for edge in reduction.edge_references() {
+            let start_node = &queue_nodes[edge.source() as usize];
+            let end_node = &queue_nodes[edge.target() as usize];
             dependency_flattened.add_edge(start_node.queue_node, end_node.queue_node, ());
             let timeline = start_node.timeline_dependencies.this.clone();
-            let end_node = &mut queue_nodes[end as usize];
+            let end_node = &mut queue_nodes[edge.target() as usize];
 
             // TODO: allow stage flags
             end_node
@@ -402,7 +411,7 @@ fn graph_clustering<N: petgraph::graphmap::NodeTrait + Clone>(
             clustered_graph.add_node(clustered_node);
             clustered_graph_info.push(ClusteredNode {
                 info: get_node_info(stage),
-                nodes: Vec::new(),
+                nodes: vec![*stage],
             });
             node_to_clustered_nodes.insert(*stage, clustered_node);
         }

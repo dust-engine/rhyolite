@@ -180,7 +180,7 @@ impl CommandPool {
             pool: self.raw,
             flags,
             timeline_semaphore: on_timeline.semaphore.clone(),
-            signal_value: on_timeline.increment() + 1,
+            signal_value: on_timeline.wait_value() + 1,
             generation: self.generation,
             _marker: PhantomData,
         };
@@ -278,7 +278,7 @@ impl CommandPool {
         if !Arc::ptr_eq(&next_timeline.semaphore, &command_buffer.timeline_semaphore) {
             command_buffer.timeline_semaphore = next_timeline.semaphore.clone();
         }
-        command_buffer.signal_value = next_timeline.increment() + 1;
+        command_buffer.signal_value = next_timeline.wait_value() + 1;
         command_buffer.generation = self.generation;
         unsafe {
             self.device

@@ -1,4 +1,4 @@
-use bevy::prelude::{IntoSystem, IntoSystemConfigs, Local};
+use bevy::prelude::{Commands, IntoSystem, IntoSystemConfigs, Local, SystemParamFunction};
 use rhyolite::ash::vk;
 
 use bevy::app::{PluginGroup, PostUpdate};
@@ -9,8 +9,9 @@ use rhyolite::command::states::Pending;
 use rhyolite::command::{CommandBuffer, SharedCommandPool, Timeline};
 use rhyolite::debug::DebugUtilsPlugin;
 use rhyolite::future::commands::{clear_color_image, prepare_image_for_presentation, yield_now};
-use rhyolite::future::{GPUFutureBlock, InFlightFrameMananger};
+use rhyolite::future::{GPUFutureBlock};
 use rhyolite::selectors::{Graphics, UniversalCompute};
+use rhyolite::ImageLike;
 use rhyolite::{
     ecs2::IntoRenderSystem,
     swapchain::{
@@ -33,13 +34,6 @@ fn main() {
     .add_plugins(RhyolitePlugin::default())
     .add_plugins(SwapchainPlugin::default());
 
-    app.add_systems(
-        PostUpdate,
-        clear_main_window_color
-            .after(acquire_swapchain_image::<With<PrimaryWindow>>)
-            .before(present),
-    );
-
     let primary_window = app
         .world_mut()
         .query_filtered::<Entity, With<PrimaryWindow>>()
@@ -59,9 +53,11 @@ fn main() {
         .add_build_pass(rhyolite::ecs2::RenderSystemsPass::new())
         .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
 
+    test(clear_main_window_color);
+
     app.add_systems(
         PostUpdate,
-        clear2
+        clear_main_window_color
             .into_render_system::<UniversalCompute>()
             .in_set(rhyolite::swapchain::SwapchainSystemSet),
     );
@@ -69,68 +65,43 @@ fn main() {
     app.run();
 }
 
-fn clear2() -> impl GPUFutureBlock {
-    gpu_future! {
-        yield_now().await;
-        yield_now().await;
-        yield_now().await;
-    }
+fn an_actual_system(commands: Commands) {
+
 }
 
+
+fn test<Marker, S: SystemParamFunction<Marker>>(s: S) {
+
+}
+
+
+
 fn clear_main_window_color(
-    mut queue: Queue<Graphics>,
-    mut command_pool: SharedCommandPool<Graphics>,
-    mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
-
-    timeline: Local<Timeline>,
-    mut frames: Local<InFlightFrameMananger<CommandBuffer<Pending>>>,
+    mut windows: Query< &mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
     mut state: Local<u64>,
-) {
-    let Ok(mut swapchain_image) = windows.get_single_mut() else {
-        return;
-    };
-    let swapchain_image = &mut *swapchain_image;
-
-    frames
-        .take()
-        .map(|command_buffer| command_pool.free(command_buffer.wait_for_completion()));
-
-    let mut command_buffer = command_pool
-        .allocate(&timeline, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-        .unwrap();
-
+) -> impl GPUFutureBlock {
     *state += 1;
     if *state >= 100 {
         *state = 0;
     }
 
-    // swapchain image won't be destroyed until it's presented.
-    // swapchain image won't be presented until drawing is finished on it.
-    // so it's ok to use directly here.
-    command_pool.record(
-        &mut command_buffer,
-        gpu_future! {
-            clear_color_image(&mut *swapchain_image, vk::ClearColorValue {
-                float32: [0.0, *state as f32 / 100.0, 0.0, 1.0],
-            }, &[vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            }]).await;
-            prepare_image_for_presentation(&mut *swapchain_image).await;
-        },
-    );
+    let state = *state;
+    let mut swapchain_image = windows.get_single_mut().unwrap();
+    let swapchain_image = swapchain_image.raw_image();
 
-    let submission = queue
-        .submit_one_and_present(
-            command_pool.end(command_buffer),
-            &[swapchain_image.blocking_stages(vk::PipelineStageFlags2::CLEAR)],
-            &swapchain_image,
-        )
-        .unwrap();
-    frames.next_frame(submission);
+    gpu_future! { move
+        let swapchain_image = swapchain_image;
+        clear_color_image(&swapchain_image, vk::ClearColorValue {
+            float32: [0.0, state as f32 / 100.0, 0.0, 1.0],
+        }, &[vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        }]).await;
+        //prepare_image_for_presentation(&swapchain_image).await;
+    }
 }
 // how do we calculate semaphore stuff?
 // the wait stages are the first stage in which the resource was used.
