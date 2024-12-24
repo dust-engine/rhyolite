@@ -49,7 +49,12 @@ impl CommandPool {
         command_buffer: &mut CommandBuffer<Recording>,
         future: T,
     ) -> GPUFutureSubmissionStatus<T::Returned, T::Retained> {
-        let mut future_ctx = GPUFutureContext::new(self.device().clone(), command_buffer.raw);
+        let queue_family_index = command_buffer.queue_family_index();
+        let mut future_ctx = GPUFutureContext::new(
+            self.device().clone(),
+            command_buffer.raw,
+            queue_family_index,
+        );
         assert_eq!(command_buffer.pool, self.raw);
         assert_eq!(command_buffer.generation, self.generation);
         let mut future = std::pin::pin!(future);

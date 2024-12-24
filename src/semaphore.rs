@@ -249,3 +249,43 @@ impl Event {
         unsafe { self.device.get_event_status(self.raw) }
     }
 }
+
+pub struct Fence {
+    device: Device,
+    raw: vk::Fence,
+}
+impl Drop for Fence {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_fence(self.raw, None);
+        }
+    }
+}
+impl Fence {
+    pub fn raw(&self) -> vk::Fence {
+        self.raw
+    }
+    pub fn new(device: Device, signaled: bool) -> VkResult<Self> {
+        let fence = unsafe {
+            device.create_fence(
+                &vk::FenceCreateInfo::default().flags(if signaled {
+                    vk::FenceCreateFlags::SIGNALED
+                } else {
+                    vk::FenceCreateFlags::empty()
+                }),
+                None,
+            )?
+        };
+        Ok(Self { device, raw: fence })
+    }
+
+    pub fn wait_blocked(&mut self) -> VkResult<()> {
+        unsafe { self.device.wait_for_fences(&[self.raw], true, !0) }
+    }
+    pub fn is_signaled(&self) -> VkResult<bool> {
+        unsafe { self.device.get_fence_status(self.raw) }
+    }
+    pub fn reset(&mut self) -> VkResult<()> {
+        unsafe { self.device.reset_fences(&[self.raw]) }
+    }
+}

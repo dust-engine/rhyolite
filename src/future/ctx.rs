@@ -11,6 +11,7 @@ struct GlobalResourceContext {
 }
 
 pub struct BarrierContext<'a> {
+    queue_family_index: u32,
     memory_barrier: &'a mut vk::MemoryBarrier2<'static>,
     image_barrier: &'a mut Vec<vk::ImageMemoryBarrier2<'static>>,
     // The local resource state table
@@ -38,7 +39,8 @@ impl<'a> GPUFutureBarrierContext for BarrierContext<'a> {
     ) {
         let old_state = resource.get_resource_state(&self.resource_states);
         let had_image_layout_transfer = layout != old_state.layout;
-        if had_image_layout_transfer {
+        let had_queue_family_transfer = self.queue_family_index != old_state.queue_family;
+        if had_image_layout_transfer || had_queue_family_transfer {
             let memory_barrier = old_state.get_barrier(Access { stage, access }, true);
             self.image_barrier.push(vk::ImageMemoryBarrier2 {
                 dst_access_mask: memory_barrier.dst_access_mask,
@@ -50,6 +52,8 @@ impl<'a> GPUFutureBarrierContext for BarrierContext<'a> {
                 } else {
                     old_state.layout
                 },
+                //src_queue_family_index: old_state.queue_family,
+                //dst_queue_family_index: self.queue_family_index,
                 new_layout: layout,
                 image: resource.raw_image(),
                 subresource_range: resource.subresource_range(),
@@ -64,6 +68,7 @@ impl<'a> GPUFutureBarrierContext for BarrierContext<'a> {
 pub struct RecordContext<'a> {
     pub device: &'a Device,
     pub command_buffer: vk::CommandBuffer,
+    queue_family_index: u32,
     pub resource_states: &'a mut ResourceStateTable,
 }
 impl<'a> GPUFutureBarrierContext for RecordContext<'a> {
@@ -88,12 +93,14 @@ impl<'a> GPUFutureBarrierContext for RecordContext<'a> {
         let mut old_state = resource.get_resource_state(&self.resource_states);
         old_state.transition(Access { stage, access });
         old_state.layout = layout;
+        old_state.queue_family = self.queue_family_index;
         resource.set_resource_state(&mut self.resource_states, old_state);
     }
 }
 
 pub struct GPUFutureContext {
     device: Device,
+    queue_family_index: u32,
     pub(crate) command_buffer: vk::CommandBuffer,
 
     pub(crate) memory_barrier: vk::MemoryBarrier2<'static>,
@@ -103,10 +110,15 @@ pub struct GPUFutureContext {
 }
 
 impl GPUFutureContext {
-    pub(crate) fn new(device: Device, command_buffer: vk::CommandBuffer) -> Self {
+    pub(crate) fn new(
+        device: Device,
+        command_buffer: vk::CommandBuffer,
+        queue_family_index: u32,
+    ) -> Self {
         Self {
             device,
             command_buffer,
+            queue_family_index,
             memory_barrier: vk::MemoryBarrier2::default(),
             image_barrier: Vec::new(),
             expected_resource_states: Default::default(),
@@ -129,10 +141,12 @@ impl GPUFutureContext {
             device: &self.device,
             command_buffer: self.command_buffer,
             resource_states: &mut self.resource_states,
+            queue_family_index: self.queue_family_index,
         }
     }
     pub(crate) fn barrier_ctx(&mut self) -> BarrierContext {
         BarrierContext {
+            queue_family_index: self.queue_family_index,
             memory_barrier: &mut self.memory_barrier,
             image_barrier: &mut self.image_barrier,
             expected_resource_states: &mut self.expected_resource_states,

@@ -149,24 +149,28 @@ impl CommandPool {
             command_buffer.state_transition(states::Executable)
         }
     }
+    pub unsafe fn allocate_raw(&mut self) -> VkResult<vk::CommandBuffer> {
+        let mut buffer = vk::CommandBuffer::null();
+        (self.device.fp_v1_0().allocate_command_buffers)(
+            self.device.handle(),
+            &vk::CommandBufferAllocateInfo {
+                command_pool: self.raw,
+                level: vk::CommandBufferLevel::PRIMARY,
+                command_buffer_count: 1,
+                ..Default::default()
+            },
+            &mut buffer,
+        )
+        .result()?;
+        Ok(buffer)
+    }
     pub fn allocate(
         &mut self,
         on_timeline: &Timeline,
         flags: vk::CommandBufferUsageFlags,
     ) -> VkResult<CommandBuffer<states::Recording>> {
-        let mut raw = vk::CommandBuffer::null();
         unsafe {
-            (self.device.fp_v1_0().allocate_command_buffers)(
-                self.device.handle(),
-                &vk::CommandBufferAllocateInfo {
-                    command_pool: self.raw,
-                    level: vk::CommandBufferLevel::PRIMARY,
-                    command_buffer_count: 1,
-                    ..Default::default()
-                },
-                &mut raw,
-            )
-            .result()?;
+            let raw = self.allocate_raw()?;
             self.device.begin_command_buffer(
                 raw,
                 &vk::CommandBufferBeginInfo {
@@ -174,17 +178,19 @@ impl CommandPool {
                     ..Default::default()
                 },
             )?;
+
+            let command_buffer = CommandBuffer {
+                raw,
+                pool: self.raw,
+                flags,
+                queue_family_index: self.queue_family_index,
+                timeline_semaphore: on_timeline.semaphore.clone(),
+                signal_value: on_timeline.wait_value() + 1,
+                generation: self.generation,
+                _marker: PhantomData,
+            };
+            Ok(command_buffer)
         }
-        let command_buffer = CommandBuffer {
-            raw,
-            pool: self.raw,
-            flags,
-            timeline_semaphore: on_timeline.semaphore.clone(),
-            signal_value: on_timeline.wait_value() + 1,
-            generation: self.generation,
-            _marker: PhantomData,
-        };
-        Ok(command_buffer)
     }
 
     /// This is used in combination with [`CommandPool::reset_blocked`].
@@ -258,6 +264,19 @@ impl CommandPool {
         }
     }
 
+    pub unsafe fn reset_command_buffer_raw(
+        &mut self,
+        command_buffer: vk::CommandBuffer,
+        release_resources: bool,
+    ) -> VkResult<()> {
+        let reset_flags = if release_resources {
+            vk::CommandBufferResetFlags::RELEASE_RESOURCES
+        } else {
+            vk::CommandBufferResetFlags::empty()
+        };
+        self.device
+            .reset_command_buffer(command_buffer, reset_flags)
+    }
     pub fn reset_command_buffer<T: states::NonPending>(
         &mut self,
         mut command_buffer: CommandBuffer<T>,
@@ -269,20 +288,13 @@ impl CommandPool {
             .contains(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER));
         self.try_remove_semaphore(&command_buffer);
         assert_eq!(command_buffer.pool, self.raw);
-        let reset_flags = if release_resources {
-            vk::CommandBufferResetFlags::RELEASE_RESOURCES
-        } else {
-            vk::CommandBufferResetFlags::empty()
-        };
-
         if !Arc::ptr_eq(&next_timeline.semaphore, &command_buffer.timeline_semaphore) {
             command_buffer.timeline_semaphore = next_timeline.semaphore.clone();
         }
         command_buffer.signal_value = next_timeline.wait_value() + 1;
         command_buffer.generation = self.generation;
         unsafe {
-            self.device
-                .reset_command_buffer(command_buffer.raw, reset_flags)
+            self.reset_command_buffer_raw(command_buffer.raw, release_resources)
                 .unwrap();
             self.device
                 .begin_command_buffer(
@@ -312,6 +324,7 @@ pub mod states {
 pub struct CommandBuffer<STATE: 'static> {
     pub(crate) raw: vk::CommandBuffer,
     pub(crate) pool: vk::CommandPool,
+    queue_family_index: u32,
     flags: vk::CommandBufferUsageFlags,
     pub(crate) timeline_semaphore: Arc<TimelineSemaphore>,
     // When the command buffer was executed on the GPU, this shall be signaled
@@ -327,6 +340,9 @@ impl<STATE> CommandBuffer<STATE> {
     }
     fn force_drop(self) {
         self.state_transition(()); // this should be free to drop
+    }
+    pub fn queue_family_index(&self) -> u32 {
+        self.queue_family_index
     }
 }
 impl CommandBuffer<states::Pending> {

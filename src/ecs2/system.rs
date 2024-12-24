@@ -84,7 +84,11 @@ pub(super) struct RenderSystemSharedState {
 impl RenderSystemSharedState {
     pub(super) fn new(device: Device, queue_family_index: u32, timeline: Arc<Timeline>) -> Self {
         Self {
-            ctx: GPUFutureContext::new(device.clone(), vk::CommandBuffer::null()),
+            ctx: GPUFutureContext::new(
+                device.clone(),
+                vk::CommandBuffer::null(),
+                queue_family_index,
+            ),
             timeline,
             recording_command_buffer: None,
             pending_command_buffers: RingBuffer::new(),
@@ -348,6 +352,10 @@ pub struct QueueSystemCtx {
     dependencies: *const TimelineDependencies,
 }
 impl QueueSystemCtx {
+    pub fn family_index(&self) -> u32 {
+        let queue_inner = unsafe { self.queue.as_ref() };
+        queue_inner.queue_family
+    }
     pub fn dependencies(&self) -> &TimelineDependencies {
         unsafe { &*self.dependencies }
     }
@@ -526,9 +534,6 @@ pub(super) fn submission_system(
     let command_buffer = shared.recording_command_buffer.take().unwrap();
     let command_buffer = shared.command_pool.end(command_buffer);
     let command_buffer = queue.submit_one(command_buffer).unwrap();
-    println!("the submission system is running{:?}", unsafe {
-        &*queue.dependencies
-    });
     shared.pending_command_buffers.push(command_buffer);
     queue.dependencies().this.increment();
 }

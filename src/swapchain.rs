@@ -1,5 +1,6 @@
 use ash::vk::Handle;
 use cstr::cstr;
+use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::usize;
 use std::{collections::BTreeSet, ops::Deref, sync::Arc};
@@ -16,10 +17,11 @@ use bevy::{
 };
 use smallvec::SmallVec;
 
-use crate::command::QueueDependency;
+use crate::command::{CommandPool, QueueDependency};
 use crate::ecs2::{IntoRenderSystem, QueueSystemCtx};
 use crate::future::{GPUResource, ResourceState};
 use crate::selectors::Graphics;
+use crate::semaphore::Fence;
 use crate::HasDevice;
 use crate::{
     plugin::RhyoliteApp,
@@ -890,7 +892,6 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     mut suboptimal_events: EventWriter<SuboptimalEvent>,
     device: Res<Device>,
 ) {
-    println!("acquire");
     assert!(queue.dependencies().dependencies.is_empty());
     let (entity, mut swapchain, mut swapchain_image, swapchain_config, window, surface) =
         match query.get_single_mut() {
@@ -1010,6 +1011,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
         &mut image.acquire_semaphore,     // 2
     );
     std::mem::swap(&mut swapchain.acquire_fence, &mut image.acquire_fence);
+    swapchain_image.state = Default::default();
     swapchain_image.inner = Some(image);
 }
 
@@ -1031,9 +1033,11 @@ pub fn present(
         Vec<vk::SemaphoreSubmitInfo>,
         Vec<vk::Fence>,
         Vec<u32>,
+        Vec<vk::ImageMemoryBarrier2<'static>>,
     )>,
+    mut command_pool: Local<Option<CommandPool>>,
+    mut command_buffers: Local<VecDeque<(vk::CommandBuffer, Fence)>>,
 ) {
-    println!("present");
     let (
         ref mut swapchains,
         ref mut semaphores,
@@ -1041,6 +1045,7 @@ pub fn present(
         ref mut semaphore_wait_infos,
         ref mut fences,
         ref mut swapchain_image_indices,
+        ref mut image_memory_barrier,
     ) = reused_states.deref_mut();
     swapchains.clear();
     semaphores.clear();
@@ -1048,6 +1053,7 @@ pub fn present(
     semaphore_wait_infos.clear();
     fences.clear();
     swapchain_image_indices.clear();
+    image_memory_barrier.clear();
 
     for (timeline, stages) in queue.dependencies().dependencies.iter() {
         semaphore_wait_infos.push(vk::SemaphoreSubmitInfo {
@@ -1059,6 +1065,7 @@ pub fn present(
     }
 
     for (mut swapchain, mut swapchain_image, _, _, _) in query.iter_mut() {
+        let swapchain_image_state = swapchain_image.state.clone();
         let Some(swapchain_image) = swapchain_image.inner.take() else {
             continue;
         };
@@ -1074,10 +1081,78 @@ pub fn present(
         // Safety: we're only getting the indice of the image and we're not actually reading / writing to it.
         let indice = swapchain_image.indice;
         swapchain_image_indices.push(indice);
+        image_memory_barrier.push(vk::ImageMemoryBarrier2 {
+            old_layout: swapchain_image_state.layout,
+            new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            //src_queue_family_index: swapchain_image_state.queue_family,
+            //dst_queue_family_index: queue.family_index(),
+            image: swapchain_image.image,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            ..Default::default()
+        });
         swapchain.images[indice as usize] = Some(swapchain_image);
     }
     if swapchains.is_empty() {
         return;
+    }
+
+    // record pre-present commands
+    let command_pool = command_pool.get_or_insert_with(|| {
+        CommandPool::new(
+            device.clone(),
+            queue.family_index(),
+            vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
+                | vk::CommandPoolCreateFlags::TRANSIENT,
+        )
+        .unwrap()
+    });
+    let (command_buffer, command_buffer_fence) = if let Some((_command_buffer, fence)) =
+        command_buffers.front()
+        && fence.is_signaled().unwrap()
+    {
+        // This is just to ensure that the command buffers are properly recycled. This should never block.
+        let (command_buffer, mut fence) = command_buffers.pop_front().unwrap();
+        fence.reset().unwrap();
+        unsafe {
+            command_pool
+                .reset_command_buffer_raw(command_buffer, false)
+                .unwrap();
+        }
+        (command_buffer, fence)
+    } else {
+        (
+            unsafe { command_pool.allocate_raw() }.unwrap(),
+            Fence::new(device.clone(), false).unwrap(),
+        )
+    };
+    if command_buffers.len() > 2 {
+        tracing::warn!(
+            "An unexpected number of command buffers for pre-presentation commands: {}",
+            command_buffers.len()
+        );
+    }
+    unsafe {
+        // record pre-present commands
+        device
+            .begin_command_buffer(
+                command_buffer,
+                &vk::CommandBufferBeginInfo {
+                    flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        device.cmd_pipeline_barrier2(
+            command_buffer,
+            &vk::DependencyInfo::default().image_memory_barriers(&image_memory_barrier),
+        );
+        device.end_command_buffer(command_buffer).unwrap();
     }
 
     unsafe {
@@ -1088,11 +1163,16 @@ pub fn present(
             .queue_submit2(
                 queue.raw_queue(),
                 &[vk::SubmitInfo2::default()
+                    .command_buffer_infos(&[vk::CommandBufferSubmitInfo {
+                        command_buffer,
+                        ..Default::default()
+                    }])
                     .wait_semaphore_infos(&semaphore_wait_infos)
                     .signal_semaphore_infos(&semaphore_submit_infos)],
-                vk::Fence::null(),
+                command_buffer_fence.raw(),
             )
             .unwrap();
+        command_buffers.push_back((command_buffer, command_buffer_fence));
         match device.extension::<KhrSwapchain>().queue_present(
             queue.raw_queue(),
             &vk::PresentInfoKHR::default()
