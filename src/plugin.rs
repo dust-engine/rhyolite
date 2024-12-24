@@ -223,13 +223,12 @@ impl Plugin for RhyolitePlugin {
             .init_asset::<crate::shader::ShaderModule>()
             .init_asset::<crate::shader::loader::SpirvShaderSource>();
         // Add build pass
-        /*
         app.get_schedule_mut(PostUpdate)
-            .as_mut()
-            .unwrap()
-            .add_build_pass(RenderSystemPass::new())
-            .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
-        */
+        .as_mut()
+        .unwrap()
+        .add_build_pass(rhyolite::ecs2::RenderSystemsPass::new())
+        .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
+
 
         // Required features
         app.enable_feature::<vk::PhysicalDeviceTimelineSemaphoreFeatures>(|f| {

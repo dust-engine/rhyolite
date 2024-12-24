@@ -42,12 +42,6 @@ fn main() {
             ..Default::default()
         });
 
-    app.get_schedule_mut(PostUpdate)
-        .as_mut()
-        .unwrap()
-        .add_build_pass(rhyolite::ecs2::RenderSystemsPass::new())
-        .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
-
     app.add_systems(
         PostUpdate,
         clear_main_window_color
@@ -79,10 +73,5 @@ fn clear_main_window_color<'w, 's>(
             base_array_layer: 0,
             layer_count: 1,
         }]).await;
-        //prepare_image_for_presentation(&swapchain_image).await;
     }
 }
-// how do we calculate semaphore stuff?
-// the wait stages are the first stage in which the resource was used.
-// the signal stages are always all stages.
-// when we hook up one system after another there's a reason for it.

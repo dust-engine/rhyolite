@@ -8,12 +8,7 @@ use bevy::app::{PluginGroup, PostUpdate, Startup};
 use bevy::ecs::system::{Commands, In, Local, Query, Res, ResMut, Resource};
 use bevy::ecs::{entity::Entity, query::With};
 use bevy::window::PrimaryWindow;
-use rhyolite::commands::{
-    CommonCommands, ComputeCommands, GraphicsCommands, ResourceTransitionCommands,
-};
 use rhyolite::debug::DebugUtilsPlugin;
-use rhyolite::dispose::RenderObject;
-use rhyolite::ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands, RenderImage};
 use rhyolite::pipeline::{
     CachedPipeline, ComputePipeline, ComputePipelineCreateInfo, DescriptorSetLayout, PipelineCache,
     PipelineLayout,
@@ -158,20 +153,6 @@ fn initialize_pipeline(
     });
 }
 
-fn run_compute_shader_barrier(
-    In(mut barriers): In<Barriers>,
-    mut game_of_life_pipeline: ResMut<GameOfLifePipeline>,
-) {
-    barriers.transition(
-        &mut game_of_life_pipeline.game,
-        Access {
-            stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
-            access: vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ,
-        },
-        true,
-        vk::ImageLayout::GENERAL,
-    );
-}
 fn run_compute_shader(
     mut commands: RenderCommands<'u'>,
     game_of_life_pipeline: ResMut<GameOfLifePipeline>,
@@ -214,33 +195,6 @@ fn run_compute_shader(
     *initialized = true;
 }
 
-fn blit_image_to_swapchain_barrier(
-    In(mut barriers): In<Barriers>,
-    mut game_of_life_pipeline: ResMut<GameOfLifePipeline>,
-    mut windows: Query<&mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
-) {
-    let Ok(swapchain) = windows.get_single_mut() else {
-        return;
-    };
-    barriers.transition(
-        swapchain.into_inner(),
-        Access {
-            stage: vk::PipelineStageFlags2::BLIT,
-            access: vk::AccessFlags2::TRANSFER_WRITE,
-        },
-        false,
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-    );
-    barriers.transition(
-        &mut game_of_life_pipeline.game,
-        Access {
-            stage: vk::PipelineStageFlags2::BLIT,
-            access: vk::AccessFlags2::TRANSFER_READ,
-        },
-        true,
-        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-    );
-}
 fn blit_image_to_swapchain(
     mut commands: RenderCommands<'g'>,
     windows: Query<&SwapchainImage, With<bevy::window::PrimaryWindow>>,
