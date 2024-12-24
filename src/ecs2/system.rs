@@ -34,6 +34,13 @@ pub struct TimelineDependencies {
     pub this: Arc<Timeline>,
     pub dependencies: Vec<(Arc<Timeline>, vk::PipelineStageFlags2)>,
 }
+impl Drop for TimelineDependencies {
+    fn drop(&mut self) {
+        // Whenever there's a dependency relationship between multiple semaphores,
+        // wait for the work to be completed before dropping the dependency semaphores.
+        self.this.wait_blocked(!0).unwrap();
+    }
+}
 
 /// Used as In<RenderSystemCtx<Returned>> for render systems.
 pub struct RenderSystemCtx<Returned = ()> {

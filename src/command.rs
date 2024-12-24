@@ -402,13 +402,8 @@ impl Timeline {
     pub fn wait_value(&self) -> u64 {
         self.wait_value.load(std::sync::atomic::Ordering::Relaxed)
     }
-    pub fn blocking_stages(&self, stages: vk::PipelineStageFlags2) -> QueueDependency {
-        QueueDependency(vk::SemaphoreSubmitInfo {
-            stage_mask: stages,
-            semaphore: self.semaphore.raw(),
-            value: self.wait_value.load(std::sync::atomic::Ordering::Relaxed),
-            ..Default::default()
-        })
+    pub fn wait_blocked(&self, timeout: u64) -> VkResult<()> {
+        self.semaphore.wait_blocked(self.wait_value(), timeout)
     }
 }
 
