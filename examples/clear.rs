@@ -1,8 +1,8 @@
-use bevy::prelude::{Commands, IntoSystem, IntoSystemConfigs, Local, SystemParamFunction};
+use bevy::prelude::{Commands, In, IntoSystem, IntoSystemConfigs, Local, Mut, ResMut, SystemParamFunction};
 use rhyolite::ash::vk;
 
-use bevy::app::{PluginGroup, PostUpdate};
-use bevy::ecs::system::Query;
+use bevy::app::{PluginGroup, PostUpdate, Update};
+use bevy::ecs::system::{Query, SystemParam, SystemParamItem};
 use bevy::ecs::{entity::Entity, query::With};
 use bevy::window::PrimaryWindow;
 use rhyolite::command::states::Pending;
@@ -53,7 +53,6 @@ fn main() {
         .add_build_pass(rhyolite::ecs2::RenderSystemsPass::new())
         .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
 
-    test(clear_main_window_color);
 
     app.add_systems(
         PostUpdate,
@@ -65,34 +64,21 @@ fn main() {
     app.run();
 }
 
-fn an_actual_system(commands: Commands) {
 
-}
+fn clear_main_window_color<'w, 's>(
+    mut windows: Query<'w, 's, &mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
+    mut state: Local<'s, u64>,
+) -> impl GPUFutureBlock + use<'w, 's> {
 
-
-fn test<Marker, S: SystemParamFunction<Marker>>(s: S) {
-
-}
-
-
-
-fn clear_main_window_color(
-    mut windows: Query< &mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
-    mut state: Local<u64>,
-) -> impl GPUFutureBlock {
-    *state += 1;
-    if *state >= 100 {
-        *state = 0;
-    }
-
-    let state = *state;
-    let mut swapchain_image = windows.get_single_mut().unwrap();
-    let swapchain_image = swapchain_image.raw_image();
+    let mut swapchain_image: Mut<'w, SwapchainImage> = windows.get_single_mut().unwrap();
 
     gpu_future! { move
-        let swapchain_image = swapchain_image;
-        clear_color_image(&swapchain_image, vk::ClearColorValue {
-            float32: [0.0, state as f32 / 100.0, 0.0, 1.0],
+        *state += 1;
+        if *state >= 100 {
+            *state = 0;
+        }
+        clear_color_image(&mut *swapchain_image, vk::ClearColorValue {
+            float32: [0.0, *state as f32 / 100.0, 0.0, 1.0],
         }, &[vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,

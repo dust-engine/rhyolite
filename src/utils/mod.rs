@@ -54,7 +54,7 @@ impl VkTaggedObject {
         let boxed = Box::new(obj);
         let boxed_ptr = NonNull::new_unchecked(Box::into_raw(boxed));
         let fat_ptr = NonNull::<Self>::from_raw_parts(
-            boxed_ptr.cast(),
+            boxed_ptr,
             std::mem::size_of::<T>() - std::mem::size_of::<vk::BaseInStructure>(),
         );
         Box::from_raw(fat_ptr.as_ptr())
