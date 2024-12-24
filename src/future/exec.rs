@@ -53,7 +53,6 @@ impl CommandPool {
         assert_eq!(command_buffer.pool, self.raw);
         assert_eq!(command_buffer.generation, self.generation);
         let mut future = std::pin::pin!(future);
-        let mut stage_count = 0;
         let GPUFutureBlockReturnValue {
             output,
             retained_values,
@@ -61,7 +60,6 @@ impl CommandPool {
             match gpu_future_poll(future.as_mut(), &mut future_ctx) {
                 Poll::Ready(output) => break output,
                 Poll::Pending => {
-                    stage_count += 1;
                     if future_ctx.has_barriers() {
                         // record pipeline barrier
                         unsafe {

@@ -12,14 +12,14 @@ use crate::{
 };
 use ash::vk;
 
-use super::{res::GPUResource, BarrierContext, GPUFuture, GPUFutureBlock, RecordContext};
+use super::{res::GPUResource, GPUFuture, GPUFutureBarrierContext, GPUFutureBlock, RecordContext};
 
 pub struct Yield;
 define_future!(Yield);
 impl GPUFuture for Yield {
     type Output = ();
 
-    fn barrier(&mut self, ctx: BarrierContext) {}
+    fn barrier<Ctx: GPUFutureBarrierContext>(&mut self, ctx: Ctx) {}
 
     fn record(self, ctx: RecordContext) -> (Self::Output, Self::Retained) {
         Default::default()
@@ -327,7 +327,7 @@ where
 {
     type Output = ();
 
-    fn barrier(&mut self, mut ctx: BarrierContext) {
+    fn barrier<Ctx: GPUFutureBarrierContext>(&mut self, mut ctx: Ctx) {
         ctx.use_image_resource(
             self.src_image,
             vk::PipelineStageFlags2::BLIT,
@@ -401,7 +401,7 @@ where
 {
     type Output = ();
 
-    fn barrier(&mut self, mut ctx: BarrierContext) {
+    fn barrier<Ctx: GPUFutureBarrierContext>(&mut self, mut ctx: Ctx) {
         ctx.use_image_resource(
             &mut self.dst_image,
             vk::PipelineStageFlags2::CLEAR,
@@ -411,13 +411,7 @@ where
         );
     }
 
-    fn record(mut self, mut ctx: RecordContext) -> (Self::Output, Self::Retained) {
-        ctx.set_image_resource_state(
-            &mut self.dst_image,
-            vk::PipelineStageFlags2::CLEAR,
-            vk::AccessFlags2::TRANSFER_WRITE,
-            self.layout,
-        );
+    fn record(self, ctx: RecordContext) -> (Self::Output, Self::Retained) {
         unsafe {
             ctx.device.cmd_clear_color_image(
                 ctx.command_buffer,
@@ -458,7 +452,7 @@ where
 {
     type Output = ();
 
-    fn barrier(&mut self, mut ctx: BarrierContext) {
+    fn barrier<Ctx: GPUFutureBarrierContext>(&mut self, mut ctx: Ctx) {
         ctx.use_image_resource(
             &mut self.dst_image,
             // no dst stage / accesses needed - semaphore does that.
@@ -469,13 +463,7 @@ where
         );
     }
 
-    fn record(mut self, mut ctx: RecordContext) -> (Self::Output, Self::Retained) {
-        ctx.set_image_resource_state(
-            &mut self.dst_image,
-            vk::PipelineStageFlags2::empty(),
-            vk::AccessFlags2::empty(),
-            self.layout,
-        );
+    fn record(self, ctx: RecordContext) -> (Self::Output, Self::Retained) {
         Default::default()
     }
 }

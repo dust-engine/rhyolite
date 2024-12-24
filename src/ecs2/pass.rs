@@ -10,7 +10,11 @@ use bevy::{
     prelude::{IntoSystem, System},
 };
 
-use petgraph::{graphmap::GraphMap, visit::{EdgeRef, IntoEdgeReferences}, Directed};
+use petgraph::{
+    graphmap::GraphMap,
+    visit::{EdgeRef, IntoEdgeReferences},
+    Directed,
+};
 
 use crate::{
     command::Timeline,
@@ -189,11 +193,13 @@ impl ScheduleBuildPass for RenderSystemsPass {
         let (reduction, _) =
             petgraph::algo::tred::dag_transitive_reduction_closure(&queue_nodes_tred_list);
         for edge in reduction.edge_references() {
-            let start_node = &queue_nodes[edge.source() as usize];
-            let end_node = &queue_nodes[edge.target() as usize];
+            let src = queue_nodes_topo_sorted[edge.source() as usize];
+            let dst = queue_nodes_topo_sorted[edge.target() as usize];
+            let start_node = &queue_nodes[src as usize];
+            let end_node = &queue_nodes[dst as usize];
             dependency_flattened.add_edge(start_node.queue_node, end_node.queue_node, ());
             let timeline = start_node.timeline_dependencies.this.clone();
-            let end_node = &mut queue_nodes[edge.target() as usize];
+            let end_node = &mut queue_nodes[dst as usize];
 
             // TODO: allow stage flags
             end_node

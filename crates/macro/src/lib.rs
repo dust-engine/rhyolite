@@ -1,5 +1,5 @@
 use syn::{
-    parse::{Parse, ParseBuffer, ParseStream},
+    parse::{Parse, ParseStream},
     parse_macro_input,
     spanned::Spanned,
     visit_mut::VisitMut,
@@ -193,6 +193,20 @@ impl VisitMut for GPUFutureTraverser {
     }
     fn visit_expr_return_mut(&mut self, i: &mut syn::ExprReturn) {
         self.is_in_divergent_control_flow = true;
+
+        let return_expr = i.expr.take().unwrap_or_else(|| {
+            Box::new(syn::Expr::Verbatim(quote::quote! {
+                ()
+            }))
+        });
+        i.expr = Some(Box::new(syn::Expr::Verbatim(
+            quote::quote_spanned! { i.expr.span() =>
+                rhyolite::future::GPUFutureBlockReturnValue {
+                    output: #return_expr,
+                    retained_values: unsafe{__retained_values.assume_init()},
+                }
+            },
+        )));
         syn::visit_mut::visit_expr_return_mut(self, i);
     }
 }

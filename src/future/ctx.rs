@@ -4,7 +4,7 @@ use ash::vk::{self};
 
 use crate::{Device, ImageLike};
 
-use super::{res::ResourceStateTable, Access, GPUResource};
+use super::{res::ResourceStateTable, Access, GPUFutureBarrierContext, GPUResource};
 
 struct GlobalResourceContext {
     // manages resource id allocator
@@ -17,10 +17,10 @@ pub struct BarrierContext<'a> {
     expected_resource_states: &'a mut ResourceStateTable,
     resource_states: &'a mut ResourceStateTable,
 }
-impl<'a> BarrierContext<'a> {
-    pub fn use_resource(
+impl<'a> GPUFutureBarrierContext for BarrierContext<'a> {
+    fn use_resource(
         &mut self,
-        resource: &impl GPUResource,
+        resource: &mut impl GPUResource,
         stage: vk::PipelineStageFlags2,
         access: vk::AccessFlags2,
     ) {
@@ -28,7 +28,7 @@ impl<'a> BarrierContext<'a> {
         *self.memory_barrier = old_state.get_barrier(Access { stage, access }, false);
     }
 
-    pub fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
+    fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
         &mut self,
         resource: &mut T,
         stage: vk::PipelineStageFlags2,
@@ -66,8 +66,8 @@ pub struct RecordContext<'a> {
     pub command_buffer: vk::CommandBuffer,
     pub resource_states: &'a mut ResourceStateTable,
 }
-impl<'a> RecordContext<'a> {
-    pub fn set_resource_state(
+impl<'a> GPUFutureBarrierContext for RecordContext<'a> {
+    fn use_resource(
         &mut self,
         resource: &mut impl GPUResource,
         stage: vk::PipelineStageFlags2,
@@ -77,12 +77,13 @@ impl<'a> RecordContext<'a> {
         old_state.transition(Access { stage, access });
         resource.set_resource_state(&mut self.resource_states, old_state);
     }
-    pub fn set_image_resource_state<I: ImageLike, T: GPUResource + Deref<Target = I>>(
+    fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
         &mut self,
         resource: &mut T,
         stage: vk::PipelineStageFlags2,
         access: vk::AccessFlags2,
         layout: vk::ImageLayout,
+        discard_contents: bool,
     ) {
         let mut old_state = resource.get_resource_state(&self.resource_states);
         old_state.transition(Access { stage, access });

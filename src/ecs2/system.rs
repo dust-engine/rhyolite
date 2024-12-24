@@ -1,11 +1,22 @@
 use std::{
-    any::Any, borrow::Cow, ops::{Deref, DerefMut}, pin::Pin, ptr::NonNull, sync::Arc, usize
+    any::Any,
+    borrow::Cow,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    ptr::NonNull,
+    sync::Arc,
+    usize,
 };
 
 use ash::{prelude::VkResult, vk};
 use bevy::{
     ecs::{
-        archetype::ArchetypeComponentId, component::{ComponentId, Tick}, query::Access, schedule::InternedSystemSet, system::{System, SystemMeta, SystemParam}, world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld}
+        archetype::ArchetypeComponentId,
+        component::{ComponentId, Tick},
+        query::Access,
+        schedule::InternedSystemSet,
+        system::{System, SystemMeta, SystemParam},
+        world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld},
     },
     prelude::{In, IntoSystem, Mut, World},
     utils::ConfigMap,
@@ -15,7 +26,7 @@ use crate::{
     command::{states, CommandBuffer, CommandPool, QueueDependency, Timeline},
     future::{GPUFutureBlock, GPUFutureBlockReturnValue, GPUFutureContext},
     utils::RingBuffer,
-    Device, QueueConfiguration, QueueInner, QueueSelector,
+    Device, HasDevice, QueueConfiguration, QueueInner, QueueSelector,
 };
 
 #[derive(Clone, Debug)]
@@ -207,6 +218,14 @@ where
             std::task::Poll::Pending => {
                 // TODO: signal events, and wait for events.
                 // how about this: between system sets we use
+                shared_state.command_pool.device().cmd_pipeline_barrier2(
+                    shared_state.ctx.command_buffer,
+                    &vk::DependencyInfo::default()
+                        .image_memory_barriers(&shared_state.ctx.image_barrier)
+                        .memory_barriers(&[shared_state.ctx.memory_barrier]),
+                );
+                shared_state.ctx.image_barrier.clear();
+                shared_state.ctx.memory_barrier = Default::default();
             }
         }
     }
@@ -330,7 +349,7 @@ pub struct QueueSystemCtx {
 }
 impl QueueSystemCtx {
     pub fn dependencies(&self) -> &TimelineDependencies {
-        unsafe { & *self.dependencies}
+        unsafe { &*self.dependencies }
     }
     pub fn raw_queue(&self) -> vk::Queue {
         let queue_inner = unsafe { self.queue.as_ref() };
@@ -394,10 +413,12 @@ impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for Que
     unsafe fn run_unsafe(&mut self, _input: (), world: UnsafeWorldCell) -> Self::Out {
         let input = QueueSystemCtx {
             queue: unsafe {
-                NonNull::new_unchecked(&mut *world
-                    .get_resource_mut_by_id(self.queue_component_id)
-                    .unwrap()
-                    .with_type())
+                NonNull::new_unchecked(
+                    &mut *world
+                        .get_resource_mut_by_id(self.queue_component_id)
+                        .unwrap()
+                        .with_type(),
+                )
             },
             dependencies: self.timeline_dependency.as_ref().unwrap(),
         };

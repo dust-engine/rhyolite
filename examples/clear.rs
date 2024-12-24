@@ -1,25 +1,20 @@
-use bevy::prelude::{Commands, In, IntoSystem, IntoSystemConfigs, Local, Mut, ResMut, SystemParamFunction};
+use bevy::prelude::{IntoSystemConfigs, Local, Mut, SystemParamFunction};
 use rhyolite::ash::vk;
 
-use bevy::app::{PluginGroup, PostUpdate, Update};
-use bevy::ecs::system::{Query, SystemParam, SystemParamItem};
+use bevy::app::{PluginGroup, PostUpdate};
+use bevy::ecs::system::Query;
 use bevy::ecs::{entity::Entity, query::With};
 use bevy::window::PrimaryWindow;
-use rhyolite::command::states::Pending;
-use rhyolite::command::{CommandBuffer, SharedCommandPool, Timeline};
 use rhyolite::debug::DebugUtilsPlugin;
-use rhyolite::future::commands::{clear_color_image, prepare_image_for_presentation, yield_now};
-use rhyolite::future::{GPUFutureBlock};
-use rhyolite::selectors::{Graphics, UniversalCompute};
-use rhyolite::ImageLike;
+use rhyolite::future::commands::clear_color_image;
+use rhyolite::future::gpu_future;
+use rhyolite::future::GPUFutureBlock;
+use rhyolite::selectors::UniversalCompute;
 use rhyolite::{
     ecs2::IntoRenderSystem,
-    swapchain::{
-        acquire_swapchain_image, present, SwapchainConfig, SwapchainImage, SwapchainPlugin,
-    },
+    swapchain::{SwapchainConfig, SwapchainImage, SwapchainPlugin},
     RhyolitePlugin, SurfacePlugin,
 };
-use rhyolite::{future::gpu_future, Queue};
 
 fn main() {
     let mut app = bevy::app::App::new();
@@ -53,7 +48,6 @@ fn main() {
         .add_build_pass(rhyolite::ecs2::RenderSystemsPass::new())
         .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
 
-
     app.add_systems(
         PostUpdate,
         clear_main_window_color
@@ -64,15 +58,14 @@ fn main() {
     app.run();
 }
 
-
 fn clear_main_window_color<'w, 's>(
-    mut windows: Query<'w, 's, &mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
+    mut windows: Query<'w, 's, &'w mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
     mut state: Local<'s, u64>,
 ) -> impl GPUFutureBlock + use<'w, 's> {
-
-    let mut swapchain_image: Mut<'w, SwapchainImage> = windows.get_single_mut().unwrap();
-
     gpu_future! { move
+        let Some(mut swapchain_image): Option<Mut<'w, SwapchainImage>> = windows.get_single_mut().ok() else {
+            return;
+        };
         *state += 1;
         if *state >= 100 {
             *state = 0;

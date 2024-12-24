@@ -1,5 +1,4 @@
 use ash::vk::Handle;
-use bevy::ecs::component::ComponentId;
 use cstr::cstr;
 use std::ops::DerefMut;
 use std::usize;
@@ -21,12 +20,12 @@ use crate::command::QueueDependency;
 use crate::ecs2::{IntoRenderSystem, QueueSystemCtx};
 use crate::future::{GPUResource, ResourceState};
 use crate::selectors::Graphics;
+use crate::HasDevice;
 use crate::{
     plugin::RhyoliteApp,
     utils::{ColorSpace, SharingMode},
     Device, ImageLike, ImageViewLike, PhysicalDevice, Surface,
 };
-use crate::{HasDevice, Queue};
 use ash::ext::swapchain_maintenance1::Meta as ExtSwapchainMaintenance1;
 use ash::khr::swapchain::Meta as KhrSwapchain;
 pub struct SwapchainPlugin {
@@ -964,25 +963,29 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
     unsafe {
         let wait_value = queue.dependencies().this.wait_value();
         queue.dependencies().this.increment();
-        device.queue_submit2(queue.raw_queue(), &[
-            vk::SubmitInfo2::default().wait_semaphore_infos(&[
-                vk::SemaphoreSubmitInfo {
-                    semaphore: swapchain.acquire_semaphore,
-                    ..Default::default()
-                }, vk::SemaphoreSubmitInfo {
-                    semaphore: queue.dependencies().this.semaphore.raw(),
-                    value: wait_value,
-                    ..Default::default()
-                },
-            ])
-            .signal_semaphore_infos(&[
-                vk::SemaphoreSubmitInfo {
-                    semaphore: queue.dependencies().this.semaphore.raw(),
-                    value: wait_value + 1,
-                    ..Default::default()
-                }
-            ])
-        ], vk::Fence::null()).unwrap();
+        device
+            .queue_submit2(
+                queue.raw_queue(),
+                &[vk::SubmitInfo2::default()
+                    .wait_semaphore_infos(&[
+                        vk::SemaphoreSubmitInfo {
+                            semaphore: swapchain.acquire_semaphore,
+                            ..Default::default()
+                        },
+                        vk::SemaphoreSubmitInfo {
+                            semaphore: queue.dependencies().this.semaphore.raw(),
+                            value: wait_value,
+                            ..Default::default()
+                        },
+                    ])
+                    .signal_semaphore_infos(&[vk::SemaphoreSubmitInfo {
+                        semaphore: queue.dependencies().this.semaphore.raw(),
+                        value: wait_value + 1,
+                        ..Default::default()
+                    }])],
+                vk::Fence::null(),
+            )
+            .unwrap();
     }
     let mut image = swapchain.images[indice as usize]
         .take()
@@ -1031,15 +1034,20 @@ pub fn present(
     )>,
 ) {
     println!("present");
-    let (ref mut swapchains, ref mut semaphores, ref mut semaphore_submit_infos, ref mut semaphore_wait_infos, ref mut fences, ref mut swapchain_image_indices) =
-        reused_states.deref_mut();
+    let (
+        ref mut swapchains,
+        ref mut semaphores,
+        ref mut semaphore_submit_infos,
+        ref mut semaphore_wait_infos,
+        ref mut fences,
+        ref mut swapchain_image_indices,
+    ) = reused_states.deref_mut();
     swapchains.clear();
     semaphores.clear();
     semaphore_submit_infos.clear();
     semaphore_wait_infos.clear();
     fences.clear();
     swapchain_image_indices.clear();
-
 
     for (timeline, stages) in queue.dependencies().dependencies.iter() {
         semaphore_wait_infos.push(vk::SemaphoreSubmitInfo {
@@ -1076,11 +1084,15 @@ pub fn present(
         // Wait for the previous presentations to finish
         device.wait_for_fences(&fences, true, !0).unwrap();
         device.reset_fences(&fences).unwrap();
-        device.queue_submit2(queue.raw_queue(), &[
-            vk::SubmitInfo2::default()
-            .wait_semaphore_infos(&semaphore_wait_infos)
-            .signal_semaphore_infos(&semaphore_submit_infos)
-        ], vk::Fence::null()).unwrap();
+        device
+            .queue_submit2(
+                queue.raw_queue(),
+                &[vk::SubmitInfo2::default()
+                    .wait_semaphore_infos(&semaphore_wait_infos)
+                    .signal_semaphore_infos(&semaphore_submit_infos)],
+                vk::Fence::null(),
+            )
+            .unwrap();
         match device.extension::<KhrSwapchain>().queue_present(
             queue.raw_queue(),
             &vk::PresentInfoKHR::default()

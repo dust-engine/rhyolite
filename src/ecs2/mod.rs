@@ -2,4 +2,4 @@ mod pass;
 mod system;
 
 pub use pass::RenderSystemsPass;
-pub use system::{IntoRenderSystem, RenderSystemCtx, QueueSystemCtx};
+pub use system::{IntoRenderSystem, QueueSystemCtx, RenderSystemCtx};
