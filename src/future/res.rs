@@ -1,5 +1,6 @@
 use ash::vk;
 use rhyolite::sync::GPUBorrowed;
+use std::ops::Deref;
 
 #[derive(Clone, Debug)]
 pub struct ResourceState {
@@ -44,6 +45,21 @@ impl<'a, T> GPUOwned<'a, T> {
 pub struct GPUBorrowedResource<T> {
     item: GPUBorrowed<T>,
     state: ResourceState,
+}
+unsafe impl<T> GPUResource for GPUBorrowedResource<T> {
+    fn get_resource_state(&self, state_table: &ResourceStateTable) -> ResourceState {
+        self.state.clone()
+    }
+    fn set_resource_state(&mut self, state_table: &mut ResourceStateTable, state: ResourceState) {
+        self.state = state;
+    }
+}
+impl<T> Deref for GPUBorrowedResource<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.item
+    }
 }
 
 impl<T> GPUBorrowedResource<T> {

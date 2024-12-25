@@ -12,6 +12,7 @@ mod compute;
 mod graphics;
 mod layout;
 
+use crate::future::RecordContext;
 pub use cache::*;
 pub use compute::*;
 pub use graphics::*;
@@ -76,6 +77,15 @@ impl Drop for PipelineInner {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_pipeline(self.pipeline, None);
+        }
+    }
+}
+
+impl<'a> RecordContext<'a> {
+    pub fn bind_pipeline<T: Pipeline>(&mut self, pipeline: &T) {
+        unsafe {
+            self.device
+                .cmd_bind_pipeline(self.command_buffer, T::TYPE, pipeline.as_raw());
         }
     }
 }

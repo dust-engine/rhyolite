@@ -1,39 +1,18 @@
 mod ctx;
 mod exec;
 mod res;
-use std::{future::Future, mem::MaybeUninit, ops::Deref, pin::Pin, task::Poll};
+use std::{future::Future, mem::MaybeUninit, pin::Pin, task::Poll};
 
-use ash::vk;
 pub use ctx::*;
 pub use exec::*;
 pub use res::*;
 
 pub use rhyolite_macros::gpu_future;
 
-use crate::ImageLike;
-
-pub trait GPUFutureBarrierContext {
-    fn use_resource(
-        &mut self,
-        resource: &mut impl GPUResource,
-        stage: vk::PipelineStageFlags2,
-        access: vk::AccessFlags2,
-    );
-
-    fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
-        &mut self,
-        resource: &mut T,
-        stage: vk::PipelineStageFlags2,
-        access: vk::AccessFlags2,
-        layout: vk::ImageLayout,
-        discard_contents: bool,
-    );
-}
-
 pub trait GPUFuture: Sized + Unpin {
     type Output;
     type Retained = ();
-    fn barrier<Ctx: GPUFutureBarrierContext>(&mut self, ctx: Ctx) {}
+    fn barrier(&mut self, ctx: BarrierContext) {}
     fn record(self, ctx: RecordContext) -> (Self::Output, Self::Retained);
 }
 
@@ -79,7 +58,7 @@ impl<T: GPUFuture> Future for GPUFutureState<T> {
                     .ext()
                     .downcast_mut::<GPUFutureContext>()
                     .expect("Attempting to run a regular future in a GPU context");
-                future.barrier(ctx.barrier_ctx());
+                future.barrier(ctx.barrier_ctx_barrier());
                 *this = Self::Record(future);
                 std::task::Poll::Pending
             }
@@ -88,7 +67,7 @@ impl<T: GPUFuture> Future for GPUFutureState<T> {
                     .ext()
                     .downcast_mut::<GPUFutureContext>()
                     .expect("Attempting to run a regular future in a GPU context");
-                future.barrier(ctx.record_ctx());
+                future.barrier(ctx.barrier_ctx_barrier());
                 let (output, retained_values) = future.record(ctx.record_ctx());
                 std::task::Poll::Ready(GPUFutureBlockReturnValue {
                     output,

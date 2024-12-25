@@ -1,14 +1,14 @@
-use std::{
-    fmt::Debug,
-    sync::{atomic::AtomicU64, Arc},
-};
-
 use crate::{utils::AsVkHandle, Device, HasDevice};
 use ash::{
     prelude::VkResult,
     vk::{self},
 };
 use smallvec::SmallVec;
+use std::ops::Deref;
+use std::{
+    fmt::Debug,
+    sync::{atomic::AtomicU64, Arc},
+};
 
 //region TimelineSemaphore
 
@@ -184,6 +184,12 @@ impl<T> GPUBorrowed<T> {
             wait: SemaphoreDeferredValueWait::default(),
             value: inner_value,
         }
+    }
+}
+impl<T> Deref for GPUBorrowed<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.value
     }
 }
 

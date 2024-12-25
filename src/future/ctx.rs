@@ -4,32 +4,58 @@ use ash::vk::{self};
 
 use crate::{Device, ImageLike};
 
-use super::{res::ResourceStateTable, Access, GPUFutureBarrierContext, GPUResource};
+use super::{res::ResourceStateTable, Access, GPUResource};
 
 struct GlobalResourceContext {
     // manages resource id allocator
 }
 
-pub struct BarrierContext<'a> {
-    queue_family_index: u32,
-    memory_barrier: &'a mut vk::MemoryBarrier2<'static>,
-    image_barrier: &'a mut Vec<vk::ImageMemoryBarrier2<'static>>,
-    // The local resource state table
-    expected_resource_states: &'a mut ResourceStateTable,
-    resource_states: &'a mut ResourceStateTable,
+pub enum BarrierContext<'a> {
+    Barrier {
+        queue_family_index: u32,
+        memory_barrier: &'a mut vk::MemoryBarrier2<'static>,
+        image_barrier: &'a mut Vec<vk::ImageMemoryBarrier2<'static>>,
+        // The local resource state table
+        expected_resource_states: &'a mut ResourceStateTable,
+        resource_states: &'a mut ResourceStateTable,
+    },
+    Record {
+        queue_family_index: u32,
+        resource_states: &'a mut ResourceStateTable,
+    },
 }
-impl<'a> GPUFutureBarrierContext for BarrierContext<'a> {
-    fn use_resource(
+
+impl<'a> BarrierContext<'a> {
+    pub fn use_resource(
         &mut self,
         resource: &mut impl GPUResource,
         stage: vk::PipelineStageFlags2,
         access: vk::AccessFlags2,
     ) {
-        let old_state = resource.get_resource_state(&self.resource_states);
-        *self.memory_barrier = old_state.get_barrier(Access { stage, access }, false);
+        match self {
+            Self::Barrier {
+                memory_barrier,
+                resource_states,
+                ..
+            } => {
+                let old_state = resource.get_resource_state(resource_states);
+                let new_barrier = old_state.get_barrier(Access { stage, access }, false);
+                memory_barrier.src_access_mask |= new_barrier.src_access_mask;
+                memory_barrier.dst_access_mask |= new_barrier.dst_access_mask;
+                memory_barrier.src_stage_mask |= new_barrier.src_stage_mask;
+                memory_barrier.dst_stage_mask |= new_barrier.dst_stage_mask;
+            }
+            Self::Record {
+                resource_states, ..
+            } => {
+                let mut old_state = resource.get_resource_state(resource_states);
+                old_state.transition(Access { stage, access });
+                resource.set_resource_state(resource_states, old_state);
+            }
+        }
     }
 
-    fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
+    pub fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
         &mut self,
         resource: &mut T,
         stage: vk::PipelineStageFlags2,
@@ -37,30 +63,54 @@ impl<'a> GPUFutureBarrierContext for BarrierContext<'a> {
         layout: vk::ImageLayout,
         discard_contents: bool,
     ) {
-        let old_state = resource.get_resource_state(&self.resource_states);
-        let had_image_layout_transfer = layout != old_state.layout;
-        let had_queue_family_transfer = self.queue_family_index != old_state.queue_family;
-        if had_image_layout_transfer || had_queue_family_transfer {
-            let memory_barrier = old_state.get_barrier(Access { stage, access }, true);
-            self.image_barrier.push(vk::ImageMemoryBarrier2 {
-                dst_access_mask: memory_barrier.dst_access_mask,
-                src_access_mask: memory_barrier.src_access_mask,
-                dst_stage_mask: memory_barrier.dst_stage_mask,
-                src_stage_mask: memory_barrier.src_stage_mask,
-                old_layout: if discard_contents {
-                    vk::ImageLayout::UNDEFINED
+        match self {
+            Self::Barrier {
+                queue_family_index,
+                memory_barrier,
+                image_barrier,
+                expected_resource_states,
+                resource_states,
+            } => {
+                let old_state = resource.get_resource_state(&resource_states);
+                let had_image_layout_transfer = layout != old_state.layout;
+                let had_queue_family_transfer = *queue_family_index != old_state.queue_family;
+                if had_image_layout_transfer || had_queue_family_transfer {
+                    let memory_barrier = old_state.get_barrier(Access { stage, access }, true);
+                    image_barrier.push(vk::ImageMemoryBarrier2 {
+                        dst_access_mask: memory_barrier.dst_access_mask,
+                        src_access_mask: memory_barrier.src_access_mask,
+                        dst_stage_mask: memory_barrier.dst_stage_mask,
+                        src_stage_mask: memory_barrier.src_stage_mask,
+                        old_layout: if discard_contents {
+                            vk::ImageLayout::UNDEFINED
+                        } else {
+                            old_state.layout
+                        },
+                        //src_queue_family_index: old_state.queue_family,
+                        //dst_queue_family_index: self.queue_family_index,
+                        new_layout: layout,
+                        image: resource.raw_image(),
+                        subresource_range: resource.subresource_range(),
+                        ..Default::default()
+                    });
                 } else {
-                    old_state.layout
-                },
-                //src_queue_family_index: old_state.queue_family,
-                //dst_queue_family_index: self.queue_family_index,
-                new_layout: layout,
-                image: resource.raw_image(),
-                subresource_range: resource.subresource_range(),
-                ..Default::default()
-            });
-        } else {
-            *self.memory_barrier = old_state.get_barrier(Access { stage, access }, false);
+                    let new_barrier = old_state.get_barrier(Access { stage, access }, false);
+                    memory_barrier.src_access_mask |= new_barrier.src_access_mask;
+                    memory_barrier.dst_access_mask |= new_barrier.dst_access_mask;
+                    memory_barrier.src_stage_mask |= new_barrier.src_stage_mask;
+                    memory_barrier.dst_stage_mask |= new_barrier.dst_stage_mask;
+                }
+            }
+            Self::Record {
+                resource_states,
+                queue_family_index,
+            } => {
+                let mut old_state = resource.get_resource_state(resource_states);
+                old_state.transition(Access { stage, access });
+                old_state.layout = layout;
+                old_state.queue_family = *queue_family_index;
+                resource.set_resource_state(resource_states, old_state);
+            }
         }
     }
 }
@@ -70,32 +120,6 @@ pub struct RecordContext<'a> {
     pub command_buffer: vk::CommandBuffer,
     queue_family_index: u32,
     pub resource_states: &'a mut ResourceStateTable,
-}
-impl<'a> GPUFutureBarrierContext for RecordContext<'a> {
-    fn use_resource(
-        &mut self,
-        resource: &mut impl GPUResource,
-        stage: vk::PipelineStageFlags2,
-        access: vk::AccessFlags2,
-    ) {
-        let mut old_state = resource.get_resource_state(&self.resource_states);
-        old_state.transition(Access { stage, access });
-        resource.set_resource_state(&mut self.resource_states, old_state);
-    }
-    fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
-        &mut self,
-        resource: &mut T,
-        stage: vk::PipelineStageFlags2,
-        access: vk::AccessFlags2,
-        layout: vk::ImageLayout,
-        discard_contents: bool,
-    ) {
-        let mut old_state = resource.get_resource_state(&self.resource_states);
-        old_state.transition(Access { stage, access });
-        old_state.layout = layout;
-        old_state.queue_family = self.queue_family_index;
-        resource.set_resource_state(&mut self.resource_states, old_state);
-    }
 }
 
 pub struct GPUFutureContext {
@@ -144,12 +168,18 @@ impl GPUFutureContext {
             queue_family_index: self.queue_family_index,
         }
     }
-    pub(crate) fn barrier_ctx(&mut self) -> BarrierContext {
-        BarrierContext {
+    pub(crate) fn barrier_ctx_barrier(&mut self) -> BarrierContext {
+        BarrierContext::Barrier {
             queue_family_index: self.queue_family_index,
             memory_barrier: &mut self.memory_barrier,
             image_barrier: &mut self.image_barrier,
             expected_resource_states: &mut self.expected_resource_states,
+            resource_states: &mut self.resource_states,
+        }
+    }
+    pub(crate) fn barrier_ctx_record(&mut self) -> BarrierContext {
+        BarrierContext::Record {
+            queue_family_index: self.queue_family_index,
             resource_states: &mut self.resource_states,
         }
     }

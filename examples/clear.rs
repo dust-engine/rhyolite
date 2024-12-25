@@ -57,14 +57,14 @@ fn clear_main_window_color<'w, 's>(
     mut state: Local<'s, u64>,
 ) -> impl GPUFutureBlock + use<'w, 's> {
     gpu_future! { move
-        let Some(mut swapchain_image): Option<Mut<'w, SwapchainImage>> = windows.get_single_mut().ok() else {
+        let Some(swapchain_image): Option<Mut<'w, SwapchainImage>> = windows.get_single_mut().ok() else {
             return;
         };
         *state += 1;
         if *state >= 100 {
             *state = 0;
         }
-        clear_color_image(&mut *swapchain_image, vk::ClearColorValue {
+        clear_color_image(&mut swapchain_image.into_inner(), vk::ClearColorValue {
             float32: [0.0, *state as f32 / 100.0, 0.0, 1.0],
         }, &[vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,

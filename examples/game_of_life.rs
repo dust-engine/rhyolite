@@ -1,6 +1,9 @@
 use bevy::asset::{AssetServer, Assets};
 use bevy::ecs::schedule::IntoSystemConfigs;
+use bevy::prelude::{Mut, Query};
 use rhyolite::ash::vk;
+use rhyolite::swapchain::SwapchainImage;
+use std::ops::Deref;
 
 use bevy::app::{PluginGroup, PostUpdate, Startup};
 use bevy::ecs::system::{Commands, Local, Res, ResMut, Resource};
@@ -18,6 +21,7 @@ use rhyolite::{
     SurfacePlugin,
 };
 
+use rhyolite::commands::{blit_image, record_commands};
 use rhyolite::ecs::IntoRenderSystem;
 use rhyolite::future::{GPUBorrowedResource, GPUFutureBlock};
 use rhyolite::selectors::UniversalCompute;
@@ -155,14 +159,15 @@ fn run_compute_shader<'w, 's>(
     task_pool: Res<'w, DeferredOperationTaskPool>,
     assets: Res<'w, Assets<ShaderModule>>,
     mut initialized: Local<'s, bool>,
+    mut windows: Query<'w, 's, &'w mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
 ) -> impl GPUFutureBlock + use<'w, 's> {
     let game_of_life_pipeline = game_of_life_pipeline.into_inner();
     gpu_future! { move
-
         let Some(pipeline) = pipeline_cache.retrieve(
             if *initialized {
                 &mut game_of_life_pipeline.run_pipeline
             } else {
+                *initialized = true;
                 &mut game_of_life_pipeline.init_pipeline
             },
             assets.into_inner(),
@@ -170,40 +175,44 @@ fn run_compute_shader<'w, 's>(
         ) else {
             return;
         };
-        println!("retrieved pipeline");
-        *initialized = true;
+
+        record_commands(
+            &mut game_of_life_pipeline.game,
+            |mut ctx, game| unsafe {
+                ctx.bind_pipeline(pipeline.deref());
+                ctx.device.extension::<ash::khr::push_descriptor::Meta>().cmd_push_descriptor_set(
+                    ctx.command_buffer,
+                    vk::PipelineBindPoint::COMPUTE,
+                    game_of_life_pipeline.layout.raw(),
+                    0,
+                    &[vk::WriteDescriptorSet {
+                        dst_binding: 0,
+                        descriptor_count: 1,
+                        descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                        p_image_info: [vk::DescriptorImageInfo {
+                            image_view: game.view,
+                            image_layout: vk::ImageLayout::GENERAL,
+                            ..Default::default()
+                        }]
+                        .as_ptr(),
+                        ..Default::default()
+                    }],
+                );
+                ctx.device.cmd_dispatch(ctx.command_buffer, 192, 108, 1);
+        }, |mut ctx, game| {
+            ctx.use_image_resource(
+                *game,
+                vk::PipelineStageFlags2::COMPUTE_SHADER,
+                vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ,
+                vk::ImageLayout::GENERAL,
+                true,
+            )
+        }).await;
+
+
+        let Some(swapchain_image): Option<Mut<'w, SwapchainImage>> = windows.get_single_mut().ok() else {
+            return;
+        };
+        blit_image(&mut game_of_life_pipeline.game, &mut swapchain_image.into_inner()).await;
     }
-    /*
-    commands.bind_pipeline(pipeline);
-    commands.push_descriptor_set(
-        &game_of_life_pipeline.layout,
-        0,
-        &[vk::WriteDescriptorSet {
-            dst_binding: 0,
-            descriptor_count: 1,
-            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-            p_image_info: [vk::DescriptorImageInfo {
-                image_view: game_of_life_pipeline.game.view,
-                image_layout: vk::ImageLayout::GENERAL,
-                ..Default::default()
-            }]
-            .as_ptr(),
-            ..Default::default()
-        }],
-        vk::PipelineBindPoint::COMPUTE,
-    );
-    commands.dispatch(UVec3::new(192, 108, 1));
-    */
 }
-/*
-fn blit_image_to_swapchain(
-    mut commands: RenderCommands<'g'>,
-    windows: Query<&SwapchainImage, With<bevy::window::PrimaryWindow>>,
-    game_of_life_pipeline: Res<GameOfLifePipeline>,
-) {
-    let Ok(swapchain) = windows.get_single() else {
-        return;
-    };
-    commands.blit_image(&game_of_life_pipeline.game, swapchain, vk::Filter::NEAREST);
-}
-*/
