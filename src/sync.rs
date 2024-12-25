@@ -10,6 +10,8 @@ use ash::{
 
 use crate::{utils::AsVkHandle, Device, HasDevice};
 
+//region TimelineSemaphore
+
 /// A thin wrapper around [Timeline Semaphores](https://www.khronos.org/blog/vulkan-timeline-semaphores).
 /// We additionally cache the timeline semaphore value in an [`AtomicU64`] to reduce the number of API
 /// calls needed for common operations such as `wait_blocked`.
@@ -156,26 +158,23 @@ impl Drop for TimelineSemaphore {
     }
 }
 
-struct SemaphoreDeferredValueWait {
-    semaphore: Arc<TimelineSemaphore>,
-    wait_value: u64,
-}
+//endregion
 
-impl Drop for SemaphoreDeferredValueWait {
-    fn drop(&mut self) {
-        self.semaphore.wait_blocked(self.wait_value, !0).unwrap();
-    }
-}
-
-/// T protected by a timeline semaphore.
-pub struct SemaphoreDeferredValue<T> {
-    /// This must be defined in this struct before `value`. This ensures that `value` won't be dropped
-    /// until we've awaited on the timeline semaphore.
+//region GPUBorrowed
+/// Ensures that a resource (`T`) is only accessed or dropped once its associated operations are
+/// complete. This is achieved by storing a timeline semaphore alongside the resource. We enforce
+/// that the resource can only be unwrapped after waiting on the corresponding semaphore signal
+/// operation.
+pub struct GPUBorrowed<T> {
+    /// This must be defined in this struct before `value`. This ensures that `value` won't be
+    /// dropped until we've waited on the timeline semaphore. We separate out the semaphore into
+    /// its own struct so that `T` can be taken out and the [`SemaphoreDeferredValueWait`] can be
+    /// separately dropped when necessary.
     wait: SemaphoreDeferredValueWait,
     value: T,
 }
 
-impl<T> SemaphoreDeferredValue<T> {
+impl<T> GPUBorrowed<T> {
     pub fn unwrap_blocked(self) -> T {
         drop(self.wait); // This blocks on the semaphore
         self.value
@@ -197,6 +196,20 @@ impl<T> SemaphoreDeferredValue<T> {
     }
 }
 
+struct SemaphoreDeferredValueWait {
+    semaphore: Arc<TimelineSemaphore>,
+    wait_value: u64,
+}
+
+impl Drop for SemaphoreDeferredValueWait {
+    fn drop(&mut self) {
+        self.semaphore.wait_blocked(self.wait_value, !0).unwrap();
+    }
+}
+
+//endregion
+
+//region Event
 pub struct Event {
     device: Device,
     raw: vk::Event,
@@ -249,7 +262,9 @@ impl Event {
         unsafe { self.device.get_event_status(self.raw) }
     }
 }
+//endregion
 
+//region Fence
 pub struct Fence {
     device: Device,
     raw: vk::Fence,
@@ -289,3 +304,4 @@ impl Fence {
         unsafe { self.device.reset_fences(&[self.raw]) }
     }
 }
+//endregion

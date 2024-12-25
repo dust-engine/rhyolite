@@ -5,7 +5,7 @@ use ash::vk;
 
 use crate::{
     command::{states::Recording, CommandBuffer, CommandPool},
-    semaphore::TimelineSemaphore,
+    sync::TimelineSemaphore,
     HasDevice,
 };
 

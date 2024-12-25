@@ -11,7 +11,7 @@ use rhyolite::future::gpu_future;
 use rhyolite::future::GPUFutureBlock;
 use rhyolite::selectors::UniversalCompute;
 use rhyolite::{
-    ecs2::IntoRenderSystem,
+    ecs::IntoRenderSystem,
     swapchain::{SwapchainConfig, SwapchainImage, SwapchainPlugin},
     RhyolitePlugin, SurfacePlugin,
 };

@@ -15,11 +15,15 @@ use rhyolite::pipeline::{
 };
 use rhyolite::shader::{ShaderModule, SpecializedShader};
 use rhyolite::{
-    acquire_swapchain_image, present, Access, Allocator, DeferredOperationTaskPool, Device, Image,
-    RhyoliteApp, RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainImage, SwapchainPlugin,
+    acquire_swapchain_image, present,
+    swapchain::{SwapchainConfig, SwapchainImage, SwapchainPlugin},
+    Access, Allocator, DeferredOperationTaskPool, Device, Image, RhyoliteApp, RhyolitePlugin,
+    SurfacePlugin,
 };
 
 use std::sync::Arc;
+use rhyolite::future::GPUOwned;
+use rhyolite::sync::GPUBorrowed;
 
 fn main() {
     let mut app = bevy::app::App::new();
@@ -37,20 +41,7 @@ fn main() {
     app.add_device_extension::<ash::khr::push_descriptor::Meta>()
         .unwrap();
 
-    app.add_systems(
-        PostUpdate,
-        (
-            run_compute_shader
-                .with_barriers(run_compute_shader_barrier)
-                .run_if(|count: Res<FrameCount>| count.0 % 30 == 0),
-            blit_image_to_swapchain
-                .with_barriers(blit_image_to_swapchain_barrier)
-                .after(acquire_swapchain_image::<With<PrimaryWindow>>)
-                .before(present)
-                .after(run_compute_shader),
-        ),
-    )
-    .add_systems(Startup, initialize_pipeline);
+    app.add_systems(Startup, initialize_pipeline);
 
     let primary_window = app
         .world_mut()
@@ -74,8 +65,8 @@ fn main() {
 
 #[derive(Resource)]
 struct GameOfLifePipeline {
-    run_pipeline: CachedPipeline<RenderObject<ComputePipeline>>,
-    init_pipeline: CachedPipeline<RenderObject<ComputePipeline>>,
+    run_pipeline: CachedPipeline<GPUBorrowed<ComputePipeline>>,
+    init_pipeline: CachedPipeline<GPUBorrowed<ComputePipeline>>,
     game: RenderImage<Image>,
     layout: Arc<PipelineLayout>,
 }
@@ -153,6 +144,7 @@ fn initialize_pipeline(
     });
 }
 
+/*
 fn run_compute_shader(
     mut commands: RenderCommands<'u'>,
     game_of_life_pipeline: ResMut<GameOfLifePipeline>,
@@ -205,3 +197,4 @@ fn blit_image_to_swapchain(
     };
     commands.blit_image(&game_of_life_pipeline.game, swapchain, vk::Filter::NEAREST);
 }
+*/

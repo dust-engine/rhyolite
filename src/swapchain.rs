@@ -18,10 +18,10 @@ use bevy::{
 use smallvec::SmallVec;
 
 use crate::command::{CommandPool, QueueDependency};
-use crate::ecs2::{IntoRenderSystem, QueueSystemCtx};
+use crate::ecs::{IntoRenderSystem, QueueSystemCtx};
 use crate::future::{GPUResource, ResourceState};
 use crate::selectors::Graphics;
-use crate::semaphore::Fence;
+use crate::sync::Fence;
 use crate::HasDevice;
 use crate::{
     plugin::RhyoliteApp,

@@ -18,7 +18,7 @@ use petgraph::{
 
 use crate::{
     command::Timeline,
-    ecs2::{system::TimelineDependencies, IntoRenderSystem},
+    ecs::{system::TimelineDependencies, IntoRenderSystem},
     QueueInner,
 };
 
@@ -154,11 +154,11 @@ impl ScheduleBuildPass for RenderSystemsPass {
                     n.nodes[0]
                 } else {
                     let prelude_system_id =
-                        self.add_system(graph, world, crate::ecs2::system::prelude_system);
+                        self.add_system(graph, world, crate::ecs::system::prelude_system);
                     let submission_system_id = self.add_system(
                         graph,
                         world,
-                        crate::ecs2::system::submission_system.with_queue(queue_component_id),
+                        crate::ecs::system::submission_system.with_queue(queue_component_id),
                     );
                     for node in n.nodes.iter() {
                         // for all nodes, they run before submission system and after prelude systems.

@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{
-    semaphore::TimelineSemaphore, swapchain::SwapchainImage, Device, HasDevice, QueueConfiguration,
+    swapchain::SwapchainImage, sync::TimelineSemaphore, Device, HasDevice, QueueConfiguration,
     QueueInner, QueueSelector,
 };
 
