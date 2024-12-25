@@ -784,7 +784,10 @@ impl SwapchainImage {
     }
 }
 unsafe impl<'t> GPUResource for &'t mut SwapchainImage {
-    fn get_resource_state(&self, _state_table: &crate::future::ResourceStateTable) -> ResourceState {
+    fn get_resource_state(
+        &self,
+        _state_table: &crate::future::ResourceStateTable,
+    ) -> ResourceState {
         self.state.clone()
     }
 

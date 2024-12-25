@@ -176,8 +176,8 @@ impl Drop for DeviceInner {
 }
 
 pub fn create_system_default_device(entry: ash::Entry) -> Device {
-    let mut instance_create_flags = vk::InstanceCreateFlags::empty();
-    let mut enabled_extensions: HashMap<&'static CStr, Option<crate::plugin::InstanceMetaBuilder>> =
+    let instance_create_flags = vk::InstanceCreateFlags::empty();
+    let enabled_extensions: HashMap<&'static CStr, Option<crate::plugin::InstanceMetaBuilder>> =
         Default::default();
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {

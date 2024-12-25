@@ -1,11 +1,9 @@
 use bevy::asset::{AssetServer, Assets};
-use bevy::core::FrameCount;
 use bevy::ecs::schedule::IntoSystemConfigs;
-use bevy::math::UVec3;
 use rhyolite::ash::vk;
 
 use bevy::app::{PluginGroup, PostUpdate, Startup};
-use bevy::ecs::system::{Commands, In, Local, Query, Res, ResMut, Resource};
+use bevy::ecs::system::{Commands, Local, Res, ResMut, Resource};
 use bevy::ecs::{entity::Entity, query::With};
 use bevy::window::PrimaryWindow;
 use rhyolite::debug::DebugUtilsPlugin;
@@ -15,17 +13,16 @@ use rhyolite::pipeline::{
 };
 use rhyolite::shader::{ShaderModule, SpecializedShader};
 use rhyolite::{
-    swapchain::{SwapchainConfig, SwapchainImage, SwapchainPlugin},
+    swapchain::{SwapchainConfig, SwapchainPlugin},
     Allocator, DeferredOperationTaskPool, Device, Image, RhyoliteApp, RhyolitePlugin,
     SurfacePlugin,
 };
 
-use rhyolite::future::{GPUBorrowedResource, GPUFutureBlock, GPUOwned};
-use rhyolite::sync::GPUBorrowed;
-use std::sync::Arc;
 use rhyolite::ecs::IntoRenderSystem;
+use rhyolite::future::{GPUBorrowedResource, GPUFutureBlock};
 use rhyolite::selectors::UniversalCompute;
 use rhyolite_macros::gpu_future;
+use std::sync::Arc;
 
 fn main() {
     let mut app = bevy::app::App::new();
@@ -42,7 +39,6 @@ fn main() {
 
     app.add_device_extension::<ash::khr::push_descriptor::Meta>()
         .unwrap();
-
 
     let primary_window = app
         .world_mut()

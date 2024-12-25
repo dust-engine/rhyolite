@@ -1,4 +1,3 @@
-pub mod commands;
 mod ctx;
 mod exec;
 mod res;

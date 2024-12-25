@@ -38,6 +38,7 @@ pub mod swapchain;
 pub mod sync;
 //pub mod task;
 
+pub mod commands;
 pub mod utils;
 
 pub use alloc::Allocator;
