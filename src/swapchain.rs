@@ -784,13 +784,13 @@ impl SwapchainImage {
     }
 }
 unsafe impl<'t> GPUResource for &'t mut SwapchainImage {
-    fn get_resource_state(&self, state_table: &crate::future::ResourceStateTable) -> ResourceState {
+    fn get_resource_state(&self, _state_table: &crate::future::ResourceStateTable) -> ResourceState {
         self.state.clone()
     }
 
     fn set_resource_state(
         &mut self,
-        state_table: &mut crate::future::ResourceStateTable,
+        _state_table: &mut crate::future::ResourceStateTable,
         state: ResourceState,
     ) {
         self.state = state;
@@ -1131,7 +1131,7 @@ pub fn present(
             Fence::new(device.clone(), false).unwrap(),
         )
     };
-    if command_buffers.len() > 2 {
+    if command_buffers.len() > 3 {
         tracing::warn!(
             "An unexpected number of command buffers for pre-presentation commands: {}",
             command_buffers.len()

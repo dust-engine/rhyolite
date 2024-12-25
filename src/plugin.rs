@@ -257,7 +257,7 @@ impl Plugin for RhyolitePlugin {
         });
 
         //app.add_plugins(crate::staging::StagingBeltPlugin);
-        //app.add_plugins(crate::pipeline::PipelineCachePlugin::default());
+        app.add_plugins(crate::pipeline::PipelineCachePlugin::default());
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions = app

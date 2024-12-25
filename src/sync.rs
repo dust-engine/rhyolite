@@ -3,12 +3,12 @@ use std::{
     sync::{atomic::AtomicU64, Arc},
 };
 
+use crate::{utils::AsVkHandle, Device, HasDevice};
 use ash::{
     prelude::VkResult,
     vk::{self},
 };
-
-use crate::{utils::AsVkHandle, Device, HasDevice};
+use smallvec::SmallVec;
 
 //region TimelineSemaphore
 
@@ -179,31 +179,38 @@ impl<T> GPUBorrowed<T> {
         drop(self.wait); // This blocks on the semaphore
         self.value
     }
-    pub fn new(semaphore: Arc<TimelineSemaphore>, wait_value: u64, inner_value: T) -> Self {
+    pub fn new(inner_value: T) -> Self {
         Self {
-            wait: SemaphoreDeferredValueWait {
-                semaphore,
-                wait_value,
-            },
+            wait: SemaphoreDeferredValueWait::default(),
             value: inner_value,
         }
     }
-    pub fn wait_value(&self) -> u64 {
-        self.wait.wait_value
-    }
-    pub fn current_value(&self) -> u64 {
-        self.wait.semaphore.value()
-    }
 }
 
+#[derive(Default)]
 struct SemaphoreDeferredValueWait {
-    semaphore: Arc<TimelineSemaphore>,
-    wait_value: u64,
+    semaphore: SmallVec<[Arc<TimelineSemaphore>; 4]>,
+    wait_values: SmallVec<[u64; 4]>,
 }
 
 impl Drop for SemaphoreDeferredValueWait {
     fn drop(&mut self) {
-        self.semaphore.wait_blocked(self.wait_value, !0).unwrap();
+        if self.semaphore.is_empty() {
+            return;
+        }
+        let semaphore_raws: SmallVec<[vk::Semaphore; 8]> =
+            self.semaphore.iter().map(|s| s.raw()).collect();
+        unsafe {
+            self.semaphore[0]
+                .device()
+                .wait_semaphores(
+                    &vk::SemaphoreWaitInfo::default()
+                        .semaphores(&semaphore_raws)
+                        .values(&self.wait_values),
+                    !0,
+                )
+                .unwrap()
+        }
     }
 }
 

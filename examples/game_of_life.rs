@@ -15,15 +15,17 @@ use rhyolite::pipeline::{
 };
 use rhyolite::shader::{ShaderModule, SpecializedShader};
 use rhyolite::{
-    acquire_swapchain_image, present,
     swapchain::{SwapchainConfig, SwapchainImage, SwapchainPlugin},
-    Access, Allocator, DeferredOperationTaskPool, Device, Image, RhyoliteApp, RhyolitePlugin,
+    Allocator, DeferredOperationTaskPool, Device, Image, RhyoliteApp, RhyolitePlugin,
     SurfacePlugin,
 };
 
-use std::sync::Arc;
-use rhyolite::future::GPUOwned;
+use rhyolite::future::{GPUBorrowedResource, GPUFutureBlock, GPUOwned};
 use rhyolite::sync::GPUBorrowed;
+use std::sync::Arc;
+use rhyolite::ecs::IntoRenderSystem;
+use rhyolite::selectors::UniversalCompute;
+use rhyolite_macros::gpu_future;
 
 fn main() {
     let mut app = bevy::app::App::new();
@@ -41,7 +43,6 @@ fn main() {
     app.add_device_extension::<ash::khr::push_descriptor::Meta>()
         .unwrap();
 
-    app.add_systems(Startup, initialize_pipeline);
 
     let primary_window = app
         .world_mut()
@@ -60,14 +61,22 @@ fn main() {
             ..Default::default()
         });
 
+    app.add_systems(Startup, initialize_pipeline);
+    app.add_systems(
+        PostUpdate,
+        run_compute_shader
+            .into_render_system::<UniversalCompute>()
+            .in_set(rhyolite::swapchain::SwapchainSystemSet),
+    );
+
     app.run();
 }
 
 #[derive(Resource)]
 struct GameOfLifePipeline {
-    run_pipeline: CachedPipeline<GPUBorrowed<ComputePipeline>>,
-    init_pipeline: CachedPipeline<GPUBorrowed<ComputePipeline>>,
-    game: RenderImage<Image>,
+    run_pipeline: CachedPipeline<ComputePipeline>,
+    init_pipeline: CachedPipeline<ComputePipeline>,
+    game: GPUBorrowedResource<Image>,
     layout: Arc<PipelineLayout>,
 }
 fn initialize_pipeline(
@@ -137,34 +146,38 @@ fn initialize_pipeline(
     commands.insert_resource(GameOfLifePipeline {
         init_pipeline,
         run_pipeline,
-        game: RenderImage::new(
+        game: GPUBorrowedResource::new(
             Image::new_device_image(allocator.clone(), &game_img_create_info).unwrap(),
         ),
         layout,
     });
 }
 
-/*
-fn run_compute_shader(
-    mut commands: RenderCommands<'u'>,
-    game_of_life_pipeline: ResMut<GameOfLifePipeline>,
-    pipeline_cache: Res<PipelineCache>,
-    task_pool: Res<DeferredOperationTaskPool>,
-    assets: Res<Assets<ShaderModule>>,
-    mut initialized: Local<bool>,
-) {
+fn run_compute_shader<'w, 's>(
+    game_of_life_pipeline: ResMut<'w, GameOfLifePipeline>,
+    pipeline_cache: Res<'w, PipelineCache>,
+    task_pool: Res<'w, DeferredOperationTaskPool>,
+    assets: Res<'w, Assets<ShaderModule>>,
+    mut initialized: Local<'s, bool>,
+) -> impl GPUFutureBlock + use<'w, 's> {
     let game_of_life_pipeline = game_of_life_pipeline.into_inner();
-    let Some(pipeline) = pipeline_cache.retrieve(
-        if *initialized {
-            &mut game_of_life_pipeline.run_pipeline
-        } else {
-            &mut game_of_life_pipeline.init_pipeline
-        },
-        assets.into_inner(),
-        task_pool.into_inner(),
-    ) else {
-        return;
-    };
+    gpu_future! { move
+
+        let Some(pipeline) = pipeline_cache.retrieve(
+            if *initialized {
+                &mut game_of_life_pipeline.run_pipeline
+            } else {
+                &mut game_of_life_pipeline.init_pipeline
+            },
+            assets.into_inner(),
+            task_pool.into_inner(),
+        ) else {
+            return;
+        };
+        println!("retrieved pipeline");
+        *initialized = true;
+    }
+    /*
     commands.bind_pipeline(pipeline);
     commands.push_descriptor_set(
         &game_of_life_pipeline.layout,
@@ -184,9 +197,9 @@ fn run_compute_shader(
         vk::PipelineBindPoint::COMPUTE,
     );
     commands.dispatch(UVec3::new(192, 108, 1));
-    *initialized = true;
+    */
 }
-
+/*
 fn blit_image_to_swapchain(
     mut commands: RenderCommands<'g'>,
     windows: Query<&SwapchainImage, With<bevy::window::PrimaryWindow>>,

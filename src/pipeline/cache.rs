@@ -9,15 +9,15 @@ use bevy::ecs::{
     system::{ResMut, Resource},
 };
 
-use crate::deferred::{DeferredOperationTaskPool, Task};
-use crate::shader::ShaderModule;
-use crate::Device;
-
 use super::compute::{ComputePipeline, ComputePipelineCreateInfo};
 use super::{
     BoxedGraphicsPipelineBuildInfo, Builder, BuilderResult, GraphicsPipeline,
     GraphicsPipelineBuildInfo, Pipeline, PipelineBuildInfo,
 };
+use crate::deferred::{DeferredOperationTaskPool, Task};
+use crate::shader::ShaderModule;
+use crate::sync::GPUBorrowed;
+use crate::Device;
 
 #[derive(Resource)]
 pub struct PipelineCache {
@@ -49,7 +49,7 @@ impl FromWorld for PipelineCache {
 
 pub struct CachedPipeline<T: Pipeline> {
     build_info: Option<T::BuildInfo>,
-    pipeline: Option<T>,
+    pipeline: Option<GPUBorrowed<T>>,
     task: Option<Task<<T::BuildInfo as PipelineBuildInfo>::Pipeline>>,
     shader_generations: HashMap<AssetId<ShaderModule>, u32>,
 }
@@ -65,11 +65,8 @@ impl<T: Pipeline> CachedPipeline<T> {
         }
         return false;
     }
-    pub fn get(&self) -> Option<&T> {
+    pub fn get(&self) -> Option<&GPUBorrowed<T>> {
         self.pipeline.as_ref()
-    }
-    pub fn get_mut(&mut self) -> Option<&mut T> {
-        self.pipeline.as_mut()
     }
 }
 
@@ -91,7 +88,7 @@ impl PipelineCache {
     pub fn create_graphics<F>(
         &self,
         build_info: GraphicsPipelineBuildInfo<F>,
-    ) -> CachedPipeline<RenderObject<GraphicsPipeline>>
+    ) -> CachedPipeline<GraphicsPipeline>
     where
         F: for<'a> Fn(Builder) -> BuilderResult + Send + Sync + 'static,
     {
@@ -101,13 +98,13 @@ impl PipelineCache {
             builder: Arc::new(build_info.builder),
             layout: build_info.layout,
         };
-        self.create::<RenderObject<GraphicsPipeline>>(boxed)
+        self.create::<GraphicsPipeline>(boxed)
     }
     pub fn create_compute(
         &self,
         build_info: ComputePipelineCreateInfo,
-    ) -> CachedPipeline<RenderObject<ComputePipeline>> {
-        self.create::<RenderObject<ComputePipeline>>(build_info)
+    ) -> CachedPipeline<ComputePipeline> {
+        self.create::<ComputePipeline>(build_info)
     }
     pub fn is_outdated<T: Pipeline>(&self, cached_pipeline: &CachedPipeline<T>) -> bool {
         for (shader, generation) in cached_pipeline.shader_generations.iter() {
@@ -124,7 +121,7 @@ impl PipelineCache {
         cached_pipeline: &'a mut CachedPipeline<T>,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-    ) -> Option<&'a mut T> {
+    ) -> Option<&'a GPUBorrowed<T>> {
         self.retrieve_pipeline(cached_pipeline, assets, pool, true)
     }
     pub fn retrieve_pipeline<'a, T: Pipeline>(
@@ -133,7 +130,7 @@ impl PipelineCache {
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
         allow_stale: bool,
-    ) -> Option<&'a mut T> {
+    ) -> Option<&'a GPUBorrowed<T>> {
         if let Some(pipeline) = &mut cached_pipeline.task {
             if pipeline.is_finished() {
                 let new_pipeline = cached_pipeline.task.take().unwrap().unwrap().unwrap();
@@ -144,7 +141,7 @@ impl PipelineCache {
                     let build_info = cached_pipeline.build_info.take().unwrap();
                     T::from_built_with_owned_info(build_info, new_pipeline)
                 };
-                cached_pipeline.pipeline.replace(built);
+                cached_pipeline.pipeline.replace(GPUBorrowed::new(built));
             } else if !allow_stale {
                 // A build task is pending, and we don't want to return a stale pipeline.
                 return None;
@@ -172,7 +169,7 @@ impl PipelineCache {
             }
         }
 
-        if let Some(pipeline) = cached_pipeline.pipeline.as_mut() {
+        if let Some(pipeline) = cached_pipeline.pipeline.as_ref() {
             if cached_pipeline.task.is_none() {
                 return Some(pipeline);
             } else if allow_stale {

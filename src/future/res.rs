@@ -1,6 +1,5 @@
-use std::u32;
-
 use ash::vk;
+use rhyolite::sync::GPUBorrowed;
 
 #[derive(Clone, Debug)]
 pub struct ResourceState {
@@ -29,9 +28,33 @@ pub unsafe trait GPUResource {
 
 // This is returned by the retain! macro.
 pub struct GPUOwned<'a, T> {
-    state: ResourceState,
-    inner: &'a T,
+    inner: &'a mut T,
 }
+impl<'a, T> GPUOwned<'a, T> {
+    pub fn __retain(item: &'a mut T) -> Self {
+        Self { inner: item }
+    }
+}
+
+/// GPU borrowed objects bundled with its associated resource states.
+///
+/// Wrapped objects will have its resource states tracked by the runtime such that pipeline barriers
+/// or events will be automatically injected into the command stream to ensure hazard-free usage on
+/// the GPU. The objects will also stay alive until the referencing operation has finished.
+pub struct GPUBorrowedResource<T> {
+    item: GPUBorrowed<T>,
+    state: ResourceState,
+}
+
+impl<T> GPUBorrowedResource<T> {
+    pub fn new(item: T) -> Self {
+        Self {
+            item: GPUBorrowed::new(item),
+            state: Default::default(),
+        }
+    }
+}
+
 #[derive(Default, Clone, Debug)]
 pub struct Access {
     pub stage: vk::PipelineStageFlags2,

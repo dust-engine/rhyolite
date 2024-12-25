@@ -7,12 +7,12 @@ use crate::{
     Device, HasDevice,
 };
 
-//mod cache;
+mod cache;
 mod compute;
 mod graphics;
 mod layout;
 
-//pub use cache::*;
+pub use cache::*;
 pub use compute::*;
 pub use graphics::*;
 pub use layout::*;
