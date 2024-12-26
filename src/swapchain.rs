@@ -773,16 +773,6 @@ pub struct SwapchainImage {
     state: ResourceState,
     pub(crate) inner: Option<SwapchainImageInner>,
 }
-impl SwapchainImage {
-    pub fn blocking_stages(&self, stages: vk::PipelineStageFlags2) -> QueueDependency {
-        debug_assert!(!self.acquire_semaphore.is_null());
-        QueueDependency(vk::SemaphoreSubmitInfo {
-            stage_mask: stages,
-            semaphore: self.acquire_semaphore,
-            ..Default::default()
-        })
-    }
-}
 unsafe impl<'t> GPUResource for &'t mut SwapchainImage {
     fn get_resource_state(
         &self,
@@ -974,17 +964,20 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
                     .wait_semaphore_infos(&[
                         vk::SemaphoreSubmitInfo {
                             semaphore: swapchain.acquire_semaphore,
+                            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
                             ..Default::default()
                         },
                         vk::SemaphoreSubmitInfo {
                             semaphore: queue.dependencies().this.semaphore.raw(),
                             value: wait_value,
+                            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
                             ..Default::default()
                         },
                     ])
                     .signal_semaphore_infos(&[vk::SemaphoreSubmitInfo {
                         semaphore: queue.dependencies().this.semaphore.raw(),
                         value: wait_value + 1,
+                        stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
                         ..Default::default()
                     }])],
                 vk::Fence::null(),

@@ -227,8 +227,6 @@ where
                 self.future = None;
             }
             std::task::Poll::Pending => {
-                // TODO: signal events, and wait for events.
-                // how about this: between system sets we use
                 shared_state.command_pool.device().cmd_pipeline_barrier2(
                     shared_state.ctx.command_buffer,
                     &vk::DependencyInfo::default()

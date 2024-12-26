@@ -67,7 +67,7 @@ impl<T: GPUFuture> Future for GPUFutureState<T> {
                     .ext()
                     .downcast_mut::<GPUFutureContext>()
                     .expect("Attempting to run a regular future in a GPU context");
-                future.barrier(ctx.barrier_ctx_barrier());
+                future.barrier(ctx.barrier_ctx_record());
                 let (output, retained_values) = future.record(ctx.record_ctx());
                 std::task::Poll::Ready(GPUFutureBlockReturnValue {
                     output,
