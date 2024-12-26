@@ -1,4 +1,6 @@
+#![feature(let_chains)]
 use bevy::asset::{AssetServer, Assets};
+use bevy::core::FrameCount;
 use bevy::ecs::schedule::IntoSystemConfigs;
 use bevy::prelude::{Mut, Query};
 use rhyolite::ash::vk;
@@ -159,55 +161,56 @@ fn run_compute_shader<'w, 's>(
     task_pool: Res<'w, DeferredOperationTaskPool>,
     assets: Res<'w, Assets<ShaderModule>>,
     mut initialized: Local<'s, bool>,
+    frame_index: Res<'w, FrameCount>,
     mut windows: Query<'w, 's, &'w mut SwapchainImage, With<bevy::window::PrimaryWindow>>,
 ) -> impl GPUFutureBlock + use<'w, 's> {
     let game_of_life_pipeline = game_of_life_pipeline.into_inner();
     gpu_future! { move
-        let Some(pipeline) = pipeline_cache.retrieve(
+        let pipeline = pipeline_cache.retrieve(
             if *initialized {
                 &mut game_of_life_pipeline.run_pipeline
             } else {
-                *initialized = true;
                 &mut game_of_life_pipeline.init_pipeline
             },
             assets.into_inner(),
             task_pool.into_inner(),
-        ) else {
-            return;
-        };
-
-        record_commands(
-            &mut game_of_life_pipeline.game,
-            |mut ctx, game| unsafe {
-                ctx.bind_pipeline(pipeline.deref());
-                ctx.device.extension::<ash::khr::push_descriptor::Meta>().cmd_push_descriptor_set(
-                    ctx.command_buffer,
-                    vk::PipelineBindPoint::COMPUTE,
-                    game_of_life_pipeline.layout.raw(),
-                    0,
-                    &[vk::WriteDescriptorSet {
-                        dst_binding: 0,
-                        descriptor_count: 1,
-                        descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-                        p_image_info: [vk::DescriptorImageInfo {
-                            image_view: game.view,
-                            image_layout: vk::ImageLayout::GENERAL,
-                            ..Default::default()
-                        }]
-                        .as_ptr(),
-                        ..Default::default()
-                    }],
-                );
-                ctx.device.cmd_dispatch(ctx.command_buffer, 192, 108, 1);
-        }, |mut ctx, game| {
-            ctx.use_image_resource(
-                *game,
-                vk::PipelineStageFlags2::COMPUTE_SHADER,
-                vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ,
-                vk::ImageLayout::GENERAL,
-                true,
-            )
-        }).await;
+        );
+        if let Some(pipeline) = pipeline && (frame_index.0 % 30 == 0 || !*initialized) {
+            *initialized = true;
+            record_commands(
+                &mut game_of_life_pipeline.game,
+                |mut ctx, game| unsafe {
+                    ctx.bind_pipeline(pipeline.deref());
+                    ctx.device.extension::<ash::khr::push_descriptor::Meta>()
+                        .cmd_push_descriptor_set(
+                            ctx.command_buffer,
+                            vk::PipelineBindPoint::COMPUTE,
+                            game_of_life_pipeline.layout.raw(),
+                            0,
+                            &[vk::WriteDescriptorSet {
+                                dst_binding: 0,
+                                descriptor_count: 1,
+                                descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                                p_image_info: [vk::DescriptorImageInfo {
+                                    image_view: game.view,
+                                    image_layout: vk::ImageLayout::GENERAL,
+                                    ..Default::default()
+                                }]
+                                .as_ptr(),
+                                ..Default::default()
+                            }],
+                        );
+                    ctx.device.cmd_dispatch(ctx.command_buffer, 192, 108, 1);
+            }, |mut ctx, game| {
+                ctx.use_image_resource(
+                    *game,
+                    vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ,
+                    vk::ImageLayout::GENERAL,
+                    true,
+                )
+            }).await;
+        }
 
 
         let Some(swapchain_image): Option<Mut<'w, SwapchainImage>> = windows.get_single_mut().ok() else {

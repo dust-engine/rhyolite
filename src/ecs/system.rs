@@ -374,7 +374,7 @@ impl QueueSystemCtx {
     ) -> VkResult<CommandBuffer<states::Pending>> {
         let queue_inner = unsafe { self.queue.as_mut() };
         let dependencies = unsafe { &*self.dependencies };
-        let dependencies = dependencies
+        let mut waits = dependencies
             .dependencies
             .iter()
             .map(|(semaphore, stages)| {
@@ -387,7 +387,16 @@ impl QueueSystemCtx {
                 })
             })
             .collect::<Vec<_>>();
-        queue_inner.submit_one(command_buffer, &dependencies)
+        assert!(
+            Arc::ptr_eq(&command_buffer.timeline_semaphore, &dependencies.this.semaphore));
+        waits.push(QueueDependency(vk::SemaphoreSubmitInfo {
+            semaphore: dependencies.this.semaphore.raw(),
+            value: dependencies.this.wait_value(),
+            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            _marker: std::marker::PhantomData,
+            ..Default::default()
+        }));
+        queue_inner.submit_one(command_buffer, &waits)
     }
 }
 impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for QueueSystem<T> {
