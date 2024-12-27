@@ -86,8 +86,10 @@ impl ScheduleBuildPass for RenderSystemsPass {
                 // This should've been flattened out.
                 panic!();
             };
-            let system = &graph.systems[node_id];
-            if let Some(config) = system.config.get::<RenderSystemIdentifierConfig>() {
+            let system = graph.systems[node_id].get_mut().unwrap();
+            let mut config: Option<RenderSystemIdentifierConfig> = None;
+            system.configurate(&mut config);
+            if let Some(config) = config {
                 if !queue_component_id_to_color.contains_key(&config.queue_component_id) {
                     let color = color_to_queue_component_id.len() as u32;
                     queue_component_id_to_color.insert(config.queue_component_id, color);
@@ -109,18 +111,15 @@ impl ScheduleBuildPass for RenderSystemsPass {
                     // This should've been flattened out.
                     panic!();
                 };
-                let Some(render_system_config) = graph.systems[*node_id]
-                    .config
-                    .get::<RenderSystemIdentifierConfig>()
-                else {
-                    // Non render nodes shouldn't go into the render graph
-                    panic!();
-                };
+                let system = graph.systems[*node_id].get_mut().unwrap();
+                let mut config: Option<RenderSystemIdentifierConfig> = None;
+                system.configurate(&mut config);
+                let config = config.unwrap(); // Non render nodes shouldn't go into the render graph
                 GraphClusteringNodeInfo {
                     color: *queue_component_id_to_color
-                        .get(&render_system_config.queue_component_id)
+                        .get(&config.queue_component_id)
                         .unwrap(),
-                    is_standalone: render_system_config.is_standalone,
+                    is_standalone: config.is_standalone,
                 }
             },
         );
@@ -208,7 +207,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
             graph.systems[node.queue_node.index()]
                 .get_mut()
                 .unwrap()
-                .configurate(&mut node.timeline_dependencies, world);
+                .configurate(&mut node.timeline_dependencies);
         }
 
         // For each non standalone queue graph node, create shared states.
@@ -246,10 +245,15 @@ impl ScheduleBuildPass for RenderSystemsPass {
                 };
                 graph.systems[*node_id].get_mut().unwrap().configurate(
                     &mut super::system::RenderSystemInputConfig {
-                        shared_state: component_id,
+                        shared_state_component_id: component_id,
+                        shared_state_archetype_component_id: world
+                            .storages()
+                            .resources
+                            .get(component_id)
+                            .unwrap()
+                            .id(),
                         queue: node_info.queue_component_id,
                     },
-                    world,
                 );
             }
         }

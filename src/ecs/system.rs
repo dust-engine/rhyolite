@@ -122,7 +122,8 @@ pub(super) struct RenderSystemIdentifierConfig {
     pub(super) is_standalone: bool,
 }
 pub(super) struct RenderSystemInputConfig {
-    pub(super) shared_state: ComponentId,
+    pub(super) shared_state_component_id: ComponentId,
+    pub(super) shared_state_archetype_component_id: ArchetypeComponentId,
     pub(super) queue: ComponentId,
 }
 
@@ -146,32 +147,27 @@ where
         self.inner.default_system_sets()
     }
 
-    fn default_configs(&mut self, config: &mut ConfigMap) {
-        // Inseret this config to identify the current system as a render config.
-        config.insert(RenderSystemIdentifierConfig {
-            queue_component_id: self.queue_component_id,
-            is_standalone: false,
-        });
-    }
+    fn configurate(&mut self, config: &mut dyn Any) {
+        if let Some(config) = config.downcast_mut::<Option<RenderSystemIdentifierConfig>>() {
+            assert!(config.is_none());
+            *config = Some(RenderSystemIdentifierConfig {
+                queue_component_id: self.queue_component_id,
+                is_standalone: false,
+            });
+            return;
+        }
 
-    fn configurate(&mut self, config: &mut dyn Any, world: &mut World) {
         let Some(config) = config.downcast_mut::<RenderSystemInputConfig>() else {
             return;
         };
-        self.shared_state_component_id = config.shared_state;
+        self.shared_state_component_id = config.shared_state_component_id;
         assert_eq!(config.queue, self.queue_component_id);
         {
             // Add component access for the shared state
             self.component_access
-                .add_resource_write(self.shared_state_component_id);
-            let archetype_component_id = world
-                .storages()
-                .resources
-                .get(self.shared_state_component_id)
-                .unwrap()
-                .id();
+                .add_resource_write(config.shared_state_component_id);
             self.archetype_component_access
-                .add_resource_write(archetype_component_id);
+                .add_resource_write(config.shared_state_archetype_component_id);
         }
     }
 
@@ -524,19 +520,21 @@ impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for Que
     fn set_last_run(&mut self, last_run: Tick) {
         self.inner.set_last_run(last_run);
     }
-    fn configurate(&mut self, config: &mut dyn Any, world: &mut World) {
+    fn configurate(&mut self, config: &mut dyn Any) {
+        if let Some(config) = config.downcast_mut::<Option<RenderSystemIdentifierConfig>>() {
+            assert!(config.is_none());
+            *config = Some(RenderSystemIdentifierConfig {
+                queue_component_id: self.queue_component_id,
+                is_standalone: true,
+            });
+            return;
+        }
+
         if let Some(config) = config.downcast_mut::<TimelineDependencies>() {
             self.timeline_dependency = Some(config.clone());
             return;
         }
-        self.inner.configurate(config, world); // So that the wrapped system may have `RenderSystemInputConfig`
-    }
-    fn default_configs(&mut self, config: &mut ConfigMap) {
-        // Inseret this config to identify the current system as a render config.
-        config.insert(RenderSystemIdentifierConfig {
-            queue_component_id: self.queue_component_id,
-            is_standalone: true,
-        });
+        self.inner.configurate(config); // So that the wrapped system may have `RenderSystemInputConfig`
     }
 
     unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
