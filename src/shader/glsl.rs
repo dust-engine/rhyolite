@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::{collections::HashMap, path::PathBuf};
 
 use bevy::app::{App, Plugin};
@@ -7,6 +6,7 @@ use bevy::asset::{
     Asset, AssetLoader, AssetPath, LoadContext, LoadDirectError,
 };
 use bevy::asset::{AssetApp, AsyncReadExt, AsyncWriteExt};
+use bevy::asset::io::{Reader, Writer};
 use bevy::reflect::TypePath;
 use bevy::utils::ConditionalSendFuture;
 use shaderc::ResolvedInclude;
@@ -28,12 +28,12 @@ impl AssetLoader for GlslSourceLoader {
     type Asset = GlslShaderSource;
     type Settings = ();
     type Error = std::io::Error;
-    fn load<'a>(
-        &'a self,
-        reader: &'a mut bevy::asset::io::Reader,
-        _settings: &'a Self::Settings,
-        _load_context: &'a mut LoadContext,
-    ) -> impl ConditionalSendFuture + Future<Output = Result<Self::Asset, Self::Error>> {
+    fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut LoadContext,
+    ) -> impl ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
         Box::pin(async move {
             let mut source = String::new();
             reader.read_to_string(&mut source).await?;
@@ -76,12 +76,12 @@ impl AssetLoader for GlslShadercCompiler {
         GLSL_EXTENSIONS
     }
 
-    fn load<'a>(
-        &'a self,
-        reader: &'a mut bevy::asset::io::Reader,
-        _settings: &'a Self::Settings,
-        ctx: &'a mut LoadContext,
-    ) -> impl ConditionalSendFuture + Future<Output = Result<Self::Asset, Self::Error>> {
+    fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        ctx: &mut LoadContext,
+    ) -> impl ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
         use shaderc::ShaderKind;
         let kind = if let Some(ext) = ctx.asset_path().get_full_extension() {
             match ext.as_str() {
@@ -127,7 +127,7 @@ impl AssetLoader for GlslShadercCompiler {
                     let normalized_path = normalize_path(&path);
                     let inc = ctx
                         .loader()
-                        .direct()
+                        .immediate()
                         .load::<GlslShaderSource>(AssetPath::from_path(&normalized_path))
                         .await?;
                     let source: &GlslShaderSource = inc.get();
@@ -170,12 +170,14 @@ impl AssetSaver for GlslSaver {
     type Settings = ();
     type OutputLoader = GlslSourceLoader;
     type Error = std::io::Error;
-    fn save<'a>(
-        &'a self,
-        writer: &'a mut bevy::asset::io::Writer,
-        asset: SavedAsset<'a, Self::Asset>,
-        _settings: &'a Self::Settings,
-    ) -> impl ConditionalSendFuture + Future<Output = Result<(), Self::Error>> {
+    fn save(
+        &self,
+        writer: &mut Writer,
+        asset: SavedAsset<'_, Self::Asset>,
+        _settings: &Self::Settings,
+    ) -> impl ConditionalSendFuture<
+        Output = Result<<Self::OutputLoader as AssetLoader>::Settings, Self::Error>,
+    > {
         async move {
             writer.write_all(asset.source.as_bytes()).await?;
             Ok(())
@@ -301,12 +303,12 @@ impl AssetLoader for PlayoutGlslLoader {
     type Asset = GlslShaderSource;
     type Settings = ();
     type Error = PlayoutLoadingError;
-    fn load<'a>(
-        &'a self,
-        reader: &'a mut bevy::asset::io::Reader,
-        _settings: &'a Self::Settings,
-        _load_context: &'a mut LoadContext,
-    ) -> impl ConditionalSendFuture + Future<Output = Result<Self::Asset, Self::Error>> {
+    fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut LoadContext,
+    ) -> impl ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
         Box::pin(async move {
             let mut source = String::new();
             reader.read_to_string(&mut source).await?;

@@ -18,10 +18,8 @@ use bevy::{
         system::{System, SystemMeta, SystemParam},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld},
     },
-    prelude::{In, IntoSystem, Mut, World},
-    utils::ConfigMap,
+    prelude::{In, IntoSystem, Mut, Resource, SystemInput, World},
 };
-
 use crate::{
     command::{states, CommandBuffer, CommandPool, QueueDependency, Timeline},
     future::{GPUFutureBlock, GPUFutureBlockReturnValue, GPUFutureContext},
@@ -45,6 +43,14 @@ impl Drop for TimelineDependencies {
 /// Used as In<RenderSystemCtx<Returned>> for render systems.
 pub struct RenderSystemCtx<Returned = ()> {
     returned_value: Option<Returned>,
+}
+impl<Returned> SystemInput for RenderSystemCtx<Returned> {
+    type Param<'i> = RenderSystemCtx<Returned>;
+    type Inner<'i> = RenderSystemCtx<Returned>;
+
+    fn wrap(this: Self::Inner<'_>) -> Self::Param<'_> {
+        this
+    }
 }
 impl<Returned> RenderSystemCtx<Returned> {
     pub fn take(&mut self) -> Option<Returned> {
@@ -77,6 +83,7 @@ pub struct RenderSystem<
 }
 
 /// Shared across all render systems within a single submission.
+#[derive(Resource)]
 pub(super) struct RenderSystemSharedState {
     /// The submission will take the command buffer and push it here.
     /// The prelude system is responsible for popping command buffers from this queue and await on them.
@@ -156,12 +163,15 @@ where
         {
             // Add component access for the shared state
             self.component_access
-                .add_write(self.shared_state_component_id);
+                .add_resource_write(self.shared_state_component_id);
             let archetype_component_id = world
-                .get_resource_archetype_component_id(self.shared_state_component_id)
-                .unwrap();
+                .storages()
+                .resources
+                .get(self.shared_state_component_id)
+                .unwrap()
+                .id();
             self.archetype_component_access
-                .add_write(archetype_component_id);
+                .add_resource_write(archetype_component_id);
         }
     }
 
@@ -283,6 +293,10 @@ where
     fn set_last_run(&mut self, last_run: Tick) {
         self.inner.set_last_run(last_run);
     }
+
+    unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
+        self.inner.validate_param_unsafe(world)
+    }
 }
 
 /// Used by the prelude system and submission system to access the render systems shared state
@@ -317,15 +331,18 @@ unsafe impl<'w> SystemParam for RenderSystemSharedStateSystemParam<'w> {
             return;
         };
         *state = config.shared_state;
-        {
+        unsafe {
             // Add component access for the shared state
-            meta.component_access_set
-                .add_unfiltered_write(config.shared_state);
+            meta.component_access_set_mut()
+                .add_unfiltered_resource_write(config.shared_state);
             let archetype_component_id = world
-                .get_resource_archetype_component_id(config.shared_state)
-                .unwrap();
-            meta.archetype_component_access
-                .add_write(archetype_component_id);
+                .storages()
+                .resources
+                .get(config.shared_state)
+                .unwrap()
+                .id();
+            meta.archetype_component_access_mut()
+                .add_resource_write(archetype_component_id);
         }
     }
 
@@ -355,6 +372,14 @@ pub struct QueueSystem<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = (
 pub struct QueueSystemCtx {
     queue: NonNull<QueueInner>,
     dependencies: *const TimelineDependencies,
+}
+impl SystemInput for QueueSystemCtx {
+    type Param<'i> = QueueSystemCtx;
+    type Inner<'i> = QueueSystemCtx;
+
+    fn wrap(this: Self::Inner<'_>) -> Self::Param<'_> {
+        this
+    }
 }
 impl QueueSystemCtx {
     pub fn family_index(&self) -> u32 {
@@ -465,12 +490,15 @@ impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for Que
         }
         {
             // Add component access for the queue
-            self.component_access.add_write(self.queue_component_id);
+            self.component_access.add_resource_write(self.queue_component_id);
             let archetype_component_id = world
-                .get_resource_archetype_component_id(self.queue_component_id)
-                .unwrap();
+                .storages()
+                .resources
+                .get(self.queue_component_id)
+                .unwrap()
+                .id();
             self.archetype_component_access
-                .add_write(archetype_component_id);
+                .add_resource_write(archetype_component_id);
         }
 
         self.inner.initialize(world);
@@ -509,6 +537,10 @@ impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for Que
             queue_component_id: self.queue_component_id,
             is_standalone: true,
         });
+    }
+
+    unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
+        self.inner.validate_param_unsafe(world)
     }
 }
 
@@ -592,7 +624,7 @@ where
     }
 }
 
-fn null<T>(In(_ctx): In<RenderSystemCtx<T>>) {}
+fn null<T>(_ctx: RenderSystemCtx<T>) {}
 pub struct MarkerB;
 impl<Out: GPUFutureBlock, Marker, T: IntoSystem<(), Out, Marker>>
     IntoRenderSystem<Out, (Marker, MarkerB)> for T

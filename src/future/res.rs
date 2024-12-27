@@ -47,10 +47,10 @@ pub struct GPUBorrowedResource<T> {
     state: ResourceState,
 }
 unsafe impl<T> GPUResource for GPUBorrowedResource<T> {
-    fn get_resource_state(&self, state_table: &ResourceStateTable) -> ResourceState {
+    fn get_resource_state(&self, _state_table: &ResourceStateTable) -> ResourceState {
         self.state.clone()
     }
-    fn set_resource_state(&mut self, state_table: &mut ResourceStateTable, state: ResourceState) {
+    fn set_resource_state(&mut self, _state_table: &mut ResourceStateTable, state: ResourceState) {
         self.state = state;
     }
 }

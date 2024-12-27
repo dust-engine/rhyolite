@@ -4,12 +4,12 @@ use ash::vk;
 use bevy::{
     ecs::{
         component::ComponentId,
-        schedule::{NodeId, ScheduleBuildError, ScheduleBuildPass, ScheduleGraph},
+        schedule::{graph::{DiGraph, Direction}, NodeId, ScheduleBuildError, ScheduleBuildPass, ScheduleGraph},
         world::World,
     },
     prelude::{IntoSystem, System},
 };
-
+use bevy::ecs::system::ScheduleSystem;
 use petgraph::{
     graphmap::GraphMap,
     visit::{EdgeRef, IntoEdgeReferences},
@@ -24,6 +24,7 @@ use crate::{
 
 use super::system::{RenderSystemIdentifierConfig, RenderSystemSharedState};
 
+#[derive(Debug)]
 pub struct RenderSystemsPass {}
 impl RenderSystemsPass {
     pub fn new() -> Self {
@@ -41,12 +42,9 @@ impl RenderSystemsPass {
         let id = NodeId::System(graph.systems.len());
         let mut system: T::System = IntoSystem::into_system(system);
         system.initialize(world);
-        let mut configs = Default::default();
-        system.default_configs(&mut configs);
 
         graph.systems.push(bevy::ecs::schedule::SystemNode::new(
-            Box::new(system),
-            configs,
+            ScheduleSystem::Infallible(Box::new(system))
         ));
         graph.system_conditions.push(Vec::new());
 
@@ -61,18 +59,14 @@ impl RenderSystemsPass {
 impl ScheduleBuildPass for RenderSystemsPass {
     type EdgeOptions = ();
 
-    type NodeOptions = ();
-
     fn add_dependency(&mut self, from: NodeId, to: NodeId, options: Option<&Self::EdgeOptions>) {}
-
-    type CollapseSetIterator = std::iter::Empty<(NodeId, NodeId)>;
 
     fn collapse_set(
         &mut self,
         set: NodeId,
         systems: &[NodeId],
-        dependency_flattened: &GraphMap<NodeId, (), Directed>,
-    ) -> Self::CollapseSetIterator {
+        dependency_flattened: &DiGraph,
+    ) -> impl Iterator<Item = (NodeId, NodeId)> {
         std::iter::empty()
     }
 
@@ -80,7 +74,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
         &mut self,
         world: &mut World,
         graph: &mut ScheduleGraph,
-        dependency_flattened: &mut GraphMap<NodeId, (), Directed>,
+        dependency_flattened: &mut DiGraph,
     ) -> Result<(), ScheduleBuildError> {
         let mut render_subgraph = dependency_flattened.clone();
         let mut queue_component_id_to_color: BTreeMap<ComponentId, u32> = BTreeMap::new();
@@ -162,8 +156,8 @@ impl ScheduleBuildPass for RenderSystemsPass {
                     );
                     for node in n.nodes.iter() {
                         // for all nodes, they run before submission system and after prelude systems.
-                        dependency_flattened.add_edge(prelude_system_id, *node, ());
-                        dependency_flattened.add_edge(*node, submission_system_id, ());
+                        dependency_flattened.add_edge(prelude_system_id, *node);
+                        dependency_flattened.add_edge(*node, submission_system_id);
                     }
                     n.nodes.push(prelude_system_id);
                     n.nodes.push(submission_system_id);
@@ -171,7 +165,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
                 };
                 QueueNode {
                     queue_node,
-                    queue_component_id: queue_component_id,
+                    queue_component_id,
                     info: n.info,
                     nodes: n.nodes,
                     timeline_dependencies: TimelineDependencies {
@@ -197,7 +191,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
             let dst = queue_nodes_topo_sorted[edge.target() as usize];
             let start_node = &queue_nodes[src as usize];
             let end_node = &queue_nodes[dst as usize];
-            dependency_flattened.add_edge(start_node.queue_node, end_node.queue_node, ());
+            dependency_flattened.add_edge(start_node.queue_node, end_node.queue_node);
             let timeline = start_node.timeline_dependencies.this.clone();
             let end_node = &mut queue_nodes[dst as usize];
 
@@ -230,7 +224,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
                     .deref::<QueueInner>()
                     .queue_family
             };
-            let component_id = world.init_component_with_descriptor(
+            let component_id = world.register_component_with_descriptor(
                 bevy::ecs::component::ComponentDescriptor::new_resource::<RenderSystemSharedState>(
                 ),
             );
@@ -263,23 +257,19 @@ impl ScheduleBuildPass for RenderSystemsPass {
     }
 }
 
-fn graph_remove_node_with_transitive_dependency<N, Ty, S>(
-    graph: &mut GraphMap<N, (), Ty, S>,
-    node: N,
-) where
-    N: petgraph::graphmap::NodeTrait,
-    Ty: petgraph::EdgeType,
-    S: std::hash::BuildHasher,
-{
-    let parents: Vec<N> = graph
-        .neighbors_directed(node, petgraph::Direction::Incoming)
+fn graph_remove_node_with_transitive_dependency(
+    graph: &mut DiGraph,
+    node: NodeId,
+) {
+    let parents: Vec<NodeId> = graph
+        .neighbors_directed(node, Direction::Incoming)
         .collect();
-    let children: Vec<N> = graph
-        .neighbors_directed(node, petgraph::Direction::Outgoing)
+    let children: Vec<NodeId> = graph
+        .neighbors_directed(node, Direction::Outgoing)
         .collect();
     for parent in parents.iter() {
         for child in children.iter() {
-            graph.add_edge(*parent, *child, ());
+            graph.add_edge(*parent, *child);
         }
     }
     graph.remove_node(node);
@@ -290,25 +280,25 @@ struct GraphClusteringNodeInfo {
     color: u32,
     is_standalone: bool,
 }
-struct ClusteredNode<N> {
+struct ClusteredNode {
     info: GraphClusteringNodeInfo,
-    nodes: Vec<N>,
+    nodes: Vec<NodeId>,
 }
 
 /// Returns (clustered graph, clustered graph node info)
-fn graph_clustering<N: petgraph::graphmap::NodeTrait + Clone>(
-    render_graph: &GraphMap<N, (), Directed>,
+fn graph_clustering(
+    render_graph: &DiGraph,
     num_colors: usize,
-    get_node_info: impl Fn(&N) -> GraphClusteringNodeInfo,
-) -> (GraphMap<u32, (), Directed>, Vec<ClusteredNode<N>>) {
-    let mut heap: Vec<N> = Vec::new(); // nodes with no incoming edges
+    get_node_info: impl Fn(&NodeId) -> GraphClusteringNodeInfo,
+) -> (GraphMap<u32, (), Directed>, Vec<ClusteredNode>) {
+    let mut heap: Vec<NodeId> = Vec::new(); // nodes with no incoming edges
 
-    let mut node_stage_indexes: BTreeMap<N, usize> = BTreeMap::new();
+    let mut node_stage_indexes: BTreeMap<NodeId, usize> = BTreeMap::new();
 
     // First, find all nodes with no incoming edges
     for node in render_graph.nodes() {
         if render_graph
-            .neighbors_directed(node, petgraph::Direction::Incoming)
+            .neighbors_directed(node, Direction::Incoming)
             .next()
             .is_none()
         {
@@ -318,11 +308,11 @@ fn graph_clustering<N: petgraph::graphmap::NodeTrait + Clone>(
     }
     let mut stage_index = 0;
     // (buffer, stages)
-    let mut cmd_op_colors: Vec<(Vec<N>, Vec<Vec<N>>)> = vec![Default::default(); num_colors];
-    let mut queue_op_colors: Vec<(Option<N>, Vec<N>)> = vec![Default::default(); num_colors];
+    let mut cmd_op_colors: Vec<(Vec<NodeId>, Vec<Vec<NodeId>>)> = vec![Default::default(); num_colors];
+    let mut queue_op_colors: Vec<(Option<NodeId>, Vec<NodeId>)> = vec![Default::default(); num_colors];
     let mut tiny_graph = petgraph::graphmap::DiGraphMap::<GraphClusteringNodeInfo, ()>::new();
     let mut current_graph = render_graph.clone();
-    let mut heap_next_stage: Vec<N> = Vec::new(); // nodes to be deferred to the next stage
+    let mut heap_next_stage: Vec<NodeId> = Vec::new(); // nodes to be deferred to the next stage
     while let Some(node) = heap.pop() {
         let node_info = get_node_info(&node);
         let mut should_defer = false;
@@ -330,7 +320,7 @@ fn graph_clustering<N: petgraph::graphmap::NodeTrait + Clone>(
             // A queue op of this color was already queued
             should_defer = true;
         }
-        for parent in render_graph.neighbors_directed(node, petgraph::Direction::Incoming) {
+        for parent in render_graph.neighbors_directed(node, Direction::Incoming) {
             let parent_info = get_node_info(&parent);
             if parent_info != node_info {
                 use petgraph::visit::Walker;
@@ -356,7 +346,7 @@ fn graph_clustering<N: petgraph::graphmap::NodeTrait + Clone>(
                 cmd_op_colors[node_info.color as usize].0.push(node);
             }
 
-            for parent in render_graph.neighbors_directed(node, petgraph::Direction::Incoming) {
+            for parent in render_graph.neighbors_directed(node, Direction::Incoming) {
                 // Update the tiny graph.
                 let parent_info = get_node_info(&parent);
                 if parent_info.color != node_info.color
@@ -366,9 +356,9 @@ fn graph_clustering<N: petgraph::graphmap::NodeTrait + Clone>(
                 }
             }
 
-            for child in current_graph.neighbors_directed(node, petgraph::Direction::Outgoing) {
+            for child in current_graph.neighbors_directed(node, Direction::Outgoing) {
                 let mut other_parents =
-                    current_graph.neighbors_directed(child, petgraph::Direction::Incoming);
+                    current_graph.neighbors_directed(child, Direction::Incoming);
                 other_parents.next().unwrap();
                 if other_parents.next().is_some() {
                     // other edges exist
@@ -403,8 +393,8 @@ fn graph_clustering<N: petgraph::graphmap::NodeTrait + Clone>(
 
     // Now, create the clustered graph.
     let mut clustered_graph = petgraph::graphmap::DiGraphMap::<u32, ()>::new();
-    let mut clustered_graph_info: Vec<ClusteredNode<N>> = Vec::new();
-    let mut node_to_clustered_nodes: BTreeMap<N, u32> = BTreeMap::new(); // mapping from render nodes to clustered nodes
+    let mut clustered_graph_info: Vec<ClusteredNode> = Vec::new();
+    let mut node_to_clustered_nodes: BTreeMap<NodeId, u32> = BTreeMap::new(); // mapping from render nodes to clustered nodes
 
     // Flush standalone nodes
     for (queue_node_buffer, stages) in queue_op_colors.iter_mut() {
@@ -451,7 +441,7 @@ fn graph_clustering<N: petgraph::graphmap::NodeTrait + Clone>(
     }
 
     // clustered graph connectivity
-    for (from, to, _) in render_graph.all_edges() {
+    for (from, to) in render_graph.all_edges() {
         let from_clustered_node = *node_to_clustered_nodes.get(&from).unwrap();
         let to_clustered_node = *node_to_clustered_nodes.get(&to).unwrap();
 

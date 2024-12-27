@@ -12,13 +12,14 @@ use bevy::{
         system::{SystemMeta, SystemParam},
         world::unsafe_world_cell::UnsafeWorldCell,
     },
-    prelude::{Resource, World},
+    prelude::{Resource, World, Mut},
 };
 
 const PRIORITY_HIGH: [f32; 2] = [1.0, 0.1];
 const PRIORITY_MEDIUM: [f32; 2] = [0.5, 0.1];
 const PRIORITY_LOW: [f32; 2] = [0.0, 0.0];
 
+#[derive(Resource)]
 pub struct QueueInner {
     pub device: Device,
     pub queue: vk::Queue,
@@ -116,7 +117,7 @@ impl QueueConfiguration {
             )
             .unwrap();
             let component_id = world
-                .init_component_with_descriptor(ComponentDescriptor::new_resource::<CommandPool>());
+                .register_component_with_descriptor(ComponentDescriptor::new_resource::<CommandPool>());
             OwningPtr::make(command_pool, |ptr| unsafe {
                 // SAFETY: component_id was just initialized and corresponds to resource of type R.
                 world.insert_resource_by_id(component_id, ptr);
@@ -126,7 +127,7 @@ impl QueueConfiguration {
             for queue_index in 0..*queue_count {
                 let queue = unsafe { device.get_device_queue(*queue_family_index, queue_index) };
                 let component_id =
-                    world.init_component_with_descriptor(ComponentDescriptor::new_resource::<
+                    world.register_component_with_descriptor(ComponentDescriptor::new_resource::<
                         QueueInner,
                     >());
                 let queue_inner = QueueInner {
@@ -153,19 +154,19 @@ pub trait QueueSelector: Send + Sync + 'static {
     }
 }
 pub struct Queue<'a, T: QueueSelector> {
-    queue: &'a mut QueueInner,
+    queue: Mut<'a, QueueInner>,
     _marker: PhantomData<T>,
 }
 impl<'a, T: QueueSelector> Deref for Queue<'a, T> {
     type Target = QueueInner;
 
     fn deref(&self) -> &Self::Target {
-        self.queue
+        &*self.queue
     }
 }
 impl<'a, T: QueueSelector> DerefMut for Queue<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.queue
+        &mut *self.queue
     }
 }
 unsafe impl<'a, T: QueueSelector> SystemParam for Queue<'a, T> {
@@ -177,26 +178,31 @@ unsafe impl<'a, T: QueueSelector> SystemParam for Queue<'a, T> {
         let config = world.resource::<QueueConfiguration>();
         let component_id = T::component_id(config);
 
-        let combined_access = system_meta.component_access_set.combined_access();
-        if combined_access.has_write(component_id) {
+        let combined_access = system_meta.component_access_set().combined_access();
+        if combined_access.has_resource_write(component_id) {
             panic!(
                 "error[B0002]: ResMut<{}> in system {} conflicts with a previous ResMut<{0}> access. Consider removing the duplicate access. See: https://bevyengine.org/learn/errors/#b0002",
-                std::any::type_name::<Self>(), system_meta.name);
-        } else if combined_access.has_read(component_id) {
+                std::any::type_name::<Self>(), system_meta.name());
+        } else if combined_access.has_resource_read(component_id) {
             panic!(
                 "error[B0002]: ResMut<{}> in system {} conflicts with a previous Res<{0}> access. Consider removing the duplicate access. See: https://bevyengine.org/learn/errors/#b0002",
-                std::any::type_name::<Self>(), system_meta.name);
+                std::any::type_name::<Self>(), system_meta.name());
         }
-        system_meta
-            .component_access_set
-            .add_unfiltered_write(component_id);
+        unsafe {
+            system_meta
+                .component_access_set_mut()
+                .add_unfiltered_resource_write(component_id);
 
-        let archetype_component_id = world
-            .get_resource_archetype_component_id(component_id)
-            .unwrap();
-        system_meta
-            .archetype_component_access
-            .add_write(archetype_component_id);
+            let archetype_component_id = world
+                .storages()
+                .resources
+                .get(component_id)
+                .unwrap()
+                .id();
+            system_meta
+                .archetype_component_access_mut()
+                .add_resource_write(archetype_component_id);
+        }
         component_id
     }
 
@@ -209,12 +215,12 @@ unsafe impl<'a, T: QueueSelector> SystemParam for Queue<'a, T> {
         let value = world.get_resource_mut_by_id(*state).unwrap_or_else(|| {
             panic!(
                 "Resource requested by {} does not exist: {}",
-                system_meta.name,
+                system_meta.name(),
                 std::any::type_name::<T>()
             )
         });
         Queue {
-            queue: value.value.deref_mut::<QueueInner>(),
+            queue: value.with_type(),
             _marker: PhantomData,
         }
     }

@@ -11,14 +11,14 @@ use ash::{
 };
 use bevy::{
     ecs::{component::ComponentId, system::SystemParam},
-    prelude::{FromWorld, World},
+    prelude::{FromWorld, World, Resource, Mut},
 };
-
 use crate::{
     swapchain::SwapchainImage, sync::TimelineSemaphore, Device, HasDevice, QueueConfiguration,
     QueueInner, QueueSelector,
 };
 
+#[derive(Resource)]
 pub struct CommandPool {
     device: Device,
     pub(crate) raw: vk::CommandPool,
@@ -493,18 +493,18 @@ impl QueueInner {
 /// Good for small amount of command encoding. Use parallel encoding if an incredibly large amount of
 /// commands need to be encoded.
 pub struct SharedCommandPool<'a, Q: QueueSelector> {
-    command_pool: &'a mut CommandPool,
+    command_pool: Mut<'a, CommandPool>,
     _marker: PhantomData<Q>,
 }
 impl<'a, Q: QueueSelector> Deref for SharedCommandPool<'a, Q> {
     type Target = CommandPool;
     fn deref(&self) -> &Self::Target {
-        self.command_pool
+        &*self.command_pool
     }
 }
 impl<'a, Q: QueueSelector> DerefMut for SharedCommandPool<'a, Q> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.command_pool
+        &mut *self.command_pool
     }
 }
 
@@ -520,26 +520,31 @@ unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
         let config = world.resource::<QueueConfiguration>();
         let component_id = Q::shared_command_pool_component_id(config);
 
-        let combined_access = system_meta.component_access_set.combined_access();
-        if combined_access.has_write(component_id) {
+        let combined_access = system_meta.component_access_set().combined_access();
+        if combined_access.has_resource_write(component_id) {
             panic!(
                 "error[B0002]: ResMut<{}> in system {} conflicts with a previous ResMut<{0}> access. Consider removing the duplicate access. See: https://bevyengine.org/learn/errors/#b0002",
-                std::any::type_name::<Self>(), system_meta.name);
-        } else if combined_access.has_read(component_id) {
+                std::any::type_name::<Self>(), system_meta.name());
+        } else if combined_access.has_resource_read(component_id) {
             panic!(
                 "error[B0002]: ResMut<{}> in system {} conflicts with a previous Res<{0}> access. Consider removing the duplicate access. See: https://bevyengine.org/learn/errors/#b0002",
-                std::any::type_name::<Self>(), system_meta.name);
+                std::any::type_name::<Self>(), system_meta.name());
         }
-        system_meta
-            .component_access_set
-            .add_unfiltered_write(component_id);
+        unsafe {
+            system_meta
+                .component_access_set_mut()
+                .add_unfiltered_resource_write(component_id);
 
-        let archetype_component_id = world
-            .get_resource_archetype_component_id(component_id)
-            .unwrap();
-        system_meta
-            .archetype_component_access
-            .add_write(archetype_component_id);
+            let archetype_component_id = world
+                .storages()
+                .resources
+                .get(component_id)
+                .unwrap()
+                .id();
+            system_meta
+                .archetype_component_access_mut()
+                .add_resource_write(archetype_component_id);
+        }
         component_id
     }
 
@@ -554,12 +559,12 @@ unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
             .unwrap_or_else(|| {
                 panic!(
                     "Resource requested by {} does not exist: {}",
-                    system_meta.name,
+                    system_meta.name(),
                     std::any::type_name::<Q>()
                 )
             });
         SharedCommandPool {
-            command_pool: value.value.deref_mut::<CommandPool>(),
+            command_pool: value.with_type::<CommandPool>(),
             _marker: PhantomData,
         }
     }

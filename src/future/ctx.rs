@@ -68,7 +68,7 @@ impl<'a> BarrierContext<'a> {
                 queue_family_index,
                 memory_barrier,
                 image_barrier,
-                expected_resource_states,
+                expected_resource_states: _,
                 resource_states,
             } => {
                 let old_state = resource.get_resource_state(&resource_states);

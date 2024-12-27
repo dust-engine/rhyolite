@@ -188,7 +188,7 @@ pub fn create_system_default_device(entry: ash::Entry) -> Device {
     let instance = Instance::create(
         Arc::new(entry),
         crate::InstanceCreateInfo {
-            flags: vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
+            flags: instance_create_flags,
             application_name: cstr::cstr!("RhyoliteSystemDefault"),
             application_version: Default::default(),
             engine_name: Default::default(),

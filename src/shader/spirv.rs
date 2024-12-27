@@ -1,10 +1,9 @@
-use std::future::Future;
-
 use crate::Device;
 
 use ash::vk;
 use bevy::asset::saver::{AssetSaver, SavedAsset};
-use bevy::asset::{Asset, AssetLoader, AsyncReadExt, AsyncWriteExt};
+use bevy::asset::{Asset, AssetLoader, AsyncWriteExt, LoadContext};
+use bevy::asset::io::{Reader, Writer};
 use bevy::ecs::world::FromWorld;
 use bevy::reflect::TypePath;
 use bevy::utils::ConditionalSendFuture;
@@ -44,12 +43,12 @@ impl AssetLoader for SpirvLoader {
     type Asset = ShaderModule;
     type Settings = ();
     type Error = SpirvLoaderError;
-    fn load<'a>(
-        &'a self,
-        reader: &'a mut bevy::asset::io::Reader,
-        _settings: &'a Self::Settings,
-        _load_context: &'a mut bevy::asset::LoadContext,
-    ) -> impl ConditionalSendFuture + Future<Output = Result<Self::Asset, Self::Error>> {
+    fn load(
+        &self,
+        reader: &mut dyn Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut LoadContext,
+    ) -> impl ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
         let device = self.device.clone();
         return Box::pin(async move {
             let mut bytes = Vec::new();
@@ -74,12 +73,14 @@ impl AssetSaver for SpirvSaver {
     type Settings = ();
     type OutputLoader = SpirvLoader;
     type Error = std::io::Error;
-    fn save<'a>(
-        &'a self,
-        writer: &'a mut bevy::asset::io::Writer,
-        asset: SavedAsset<'a, Self::Asset>,
-        _settings: &'a Self::Settings,
-    ) -> impl ConditionalSendFuture + Future<Output = Result<(), Self::Error>> {
+    fn save(
+        &self,
+        writer: &mut Writer,
+        asset: SavedAsset<'_, Self::Asset>,
+        _settings: &Self::Settings,
+    ) -> impl ConditionalSendFuture<
+        Output = Result<<Self::OutputLoader as AssetLoader>::Settings, Self::Error>,
+    > {
         Box::pin(async move {
             let slice = unsafe {
                 std::slice::from_raw_parts(

@@ -12,7 +12,7 @@ pub use rhyolite_macros::gpu_future;
 pub trait GPUFuture: Sized + Unpin {
     type Output;
     type Retained = ();
-    fn barrier(&mut self, ctx: BarrierContext) {}
+    fn barrier(&mut self, _ctx: BarrierContext) {}
     fn record(self, ctx: RecordContext) -> (Self::Output, Self::Retained);
 }
 
