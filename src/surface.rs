@@ -166,7 +166,7 @@ pub(super) fn extract_surfaces(
     mut window_created_events: EventReader<bevy::window::WindowCreated>,
     query: Query<(&RawHandleWrapper, Option<&Surface>), With<Window>>,
     #[cfg(any(target_os = "macos", target_os = "ios"))] _marker: Option<
-        NonSend<bevy::core::NonSendMarker>,
+        NonSend<bevy::app::NonSendMarker>,
     >,
 ) {
     for create_event in window_created_events.read() {

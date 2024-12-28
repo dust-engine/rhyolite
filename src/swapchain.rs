@@ -524,7 +524,7 @@ pub(super) fn extract_swapchains(
         &Surface,
     )>,
     #[cfg(any(target_os = "macos", target_os = "ios"))] _marker: Option<
-        NonSend<bevy::core::NonSendMarker>,
+        NonSend<bevy::app::NonSendMarker>,
     >,
 ) {
     let mut windows_to_rebuild: BTreeSet<Entity> = BTreeSet::new();
@@ -870,7 +870,7 @@ impl ImageViewLike for SwapchainImage {
 /// For example, `With<PrimaryWindow>` will only acquire the next image from the swapchain
 /// associated with the primary window.
 pub fn acquire_swapchain_image<Filter: QueryFilter>(
-    In(queue): In<QueueSystemCtx>,
+    queue: QueueSystemCtx,
     mut query: Query<
         (
             Entity,
@@ -1012,7 +1012,7 @@ pub fn acquire_swapchain_image<Filter: QueryFilter>(
 }
 
 pub fn present(
-    In(queue): In<QueueSystemCtx>,
+    queue: QueueSystemCtx,
     device: Res<Device>,
     mut query: Query<(
         &mut Swapchain,

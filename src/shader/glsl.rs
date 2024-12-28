@@ -1,12 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use bevy::app::{App, Plugin};
+use bevy::asset::io::{Reader, Writer};
 use bevy::asset::{
     saver::{AssetSaver, SavedAsset},
     Asset, AssetLoader, AssetPath, LoadContext, LoadDirectError,
 };
 use bevy::asset::{AssetApp, AsyncReadExt, AsyncWriteExt};
-use bevy::asset::io::{Reader, Writer};
 use bevy::reflect::TypePath;
 use bevy::utils::ConditionalSendFuture;
 use shaderc::ResolvedInclude;

@@ -226,8 +226,7 @@ impl Plugin for RhyolitePlugin {
         app.get_schedule_mut(PostUpdate)
             .as_mut()
             .unwrap()
-            .add_build_pass(rhyolite::ecs::RenderSystemsPass::new())
-            .before::<bevy::ecs::schedule::passes::AutoInsertApplyDeferredPass>();
+            .add_build_pass(rhyolite::ecs::RenderSystemsPass::new());
 
         // Required features
         app.enable_feature::<vk::PhysicalDeviceTimelineSemaphoreFeatures>(|f| {

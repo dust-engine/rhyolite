@@ -12,7 +12,7 @@ use bevy::{
         system::{SystemMeta, SystemParam},
         world::unsafe_world_cell::UnsafeWorldCell,
     },
-    prelude::{Resource, World, Mut},
+    prelude::{Mut, Resource, World},
 };
 
 const PRIORITY_HIGH: [f32; 2] = [1.0, 0.1];
@@ -116,8 +116,10 @@ impl QueueConfiguration {
                 vk::CommandPoolCreateFlags::TRANSIENT,
             )
             .unwrap();
-            let component_id = world
-                .register_component_with_descriptor(ComponentDescriptor::new_resource::<CommandPool>());
+            let component_id =
+                world.register_component_with_descriptor(ComponentDescriptor::new_resource::<
+                    CommandPool,
+                >());
             OwningPtr::make(command_pool, |ptr| unsafe {
                 // SAFETY: component_id was just initialized and corresponds to resource of type R.
                 world.insert_resource_by_id(component_id, ptr);
@@ -193,12 +195,7 @@ unsafe impl<'a, T: QueueSelector> SystemParam for Queue<'a, T> {
                 .component_access_set_mut()
                 .add_unfiltered_resource_write(component_id);
 
-            let archetype_component_id = world
-                .storages()
-                .resources
-                .get(component_id)
-                .unwrap()
-                .id();
+            let archetype_component_id = world.storages().resources.get(component_id).unwrap().id();
             system_meta
                 .archetype_component_access_mut()
                 .add_resource_write(archetype_component_id);

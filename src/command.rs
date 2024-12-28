@@ -5,17 +5,17 @@ use std::{
     sync::{atomic::AtomicU64, Arc},
 };
 
+use crate::{
+    swapchain::SwapchainImage, sync::TimelineSemaphore, Device, HasDevice, QueueConfiguration,
+    QueueInner, QueueSelector,
+};
 use ash::{
     prelude::VkResult,
     vk::{self},
 };
 use bevy::{
     ecs::{component::ComponentId, system::SystemParam},
-    prelude::{FromWorld, World, Resource, Mut},
-};
-use crate::{
-    swapchain::SwapchainImage, sync::TimelineSemaphore, Device, HasDevice, QueueConfiguration,
-    QueueInner, QueueSelector,
+    prelude::{FromWorld, Mut, Resource, World},
 };
 
 #[derive(Resource)]
@@ -535,12 +535,7 @@ unsafe impl<'a, Q: QueueSelector> SystemParam for SharedCommandPool<'a, Q> {
                 .component_access_set_mut()
                 .add_unfiltered_resource_write(component_id);
 
-            let archetype_component_id = world
-                .storages()
-                .resources
-                .get(component_id)
-                .unwrap()
-                .id();
+            let archetype_component_id = world.storages().resources.get(component_id).unwrap().id();
             system_meta
                 .archetype_component_access_mut()
                 .add_resource_write(archetype_component_id);

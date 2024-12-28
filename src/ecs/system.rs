@@ -8,6 +8,12 @@ use std::{
     usize,
 };
 
+use crate::{
+    command::{states, CommandBuffer, CommandPool, QueueDependency, Timeline},
+    future::{GPUFutureBlock, GPUFutureBlockReturnValue, GPUFutureContext},
+    utils::RingBuffer,
+    Device, HasDevice, QueueConfiguration, QueueInner, QueueSelector,
+};
 use ash::{prelude::VkResult, vk};
 use bevy::{
     ecs::{
@@ -19,12 +25,6 @@ use bevy::{
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld},
     },
     prelude::{In, IntoSystem, Mut, Resource, SystemInput, World},
-};
-use crate::{
-    command::{states, CommandBuffer, CommandPool, QueueDependency, Timeline},
-    future::{GPUFutureBlock, GPUFutureBlockReturnValue, GPUFutureContext},
-    utils::RingBuffer,
-    Device, HasDevice, QueueConfiguration, QueueInner, QueueSelector,
 };
 
 #[derive(Clone, Debug)]
@@ -317,30 +317,6 @@ unsafe impl<'w> SystemParam for RenderSystemSharedStateSystemParam<'w> {
     fn init_state(_world: &mut World, _system_meta: &mut SystemMeta) -> Self::State {
         ComponentId::new(usize::MAX)
     }
-    fn configurate(
-        state: &mut Self::State,
-        config: &mut dyn Any,
-        meta: &mut SystemMeta,
-        world: &mut World,
-    ) {
-        let Some(config) = config.downcast_mut::<RenderSystemInputConfig>() else {
-            return;
-        };
-        *state = config.shared_state;
-        unsafe {
-            // Add component access for the shared state
-            meta.component_access_set_mut()
-                .add_unfiltered_resource_write(config.shared_state);
-            let archetype_component_id = world
-                .storages()
-                .resources
-                .get(config.shared_state)
-                .unwrap()
-                .id();
-            meta.archetype_component_access_mut()
-                .add_resource_write(archetype_component_id);
-        }
-    }
 
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
@@ -408,8 +384,10 @@ impl QueueSystemCtx {
                 })
             })
             .collect::<Vec<_>>();
-        assert!(
-            Arc::ptr_eq(&command_buffer.timeline_semaphore, &dependencies.this.semaphore));
+        assert!(Arc::ptr_eq(
+            &command_buffer.timeline_semaphore,
+            &dependencies.this.semaphore
+        ));
         waits.push(QueueDependency(vk::SemaphoreSubmitInfo {
             semaphore: dependencies.this.semaphore.raw(),
             value: dependencies.this.wait_value(),
@@ -486,7 +464,8 @@ impl<T: bevy::ecs::system::System<In = QueueSystemCtx, Out = ()>> System for Que
         }
         {
             // Add component access for the queue
-            self.component_access.add_resource_write(self.queue_component_id);
+            self.component_access
+                .add_resource_write(self.queue_component_id);
             let archetype_component_id = world
                 .storages()
                 .resources
@@ -571,7 +550,7 @@ pub(super) fn prelude_system(mut shared: RenderSystemSharedStateSystemParam) {
 
 /// Submission system runs after every render system in the queue node. It also runs after every render system in the next queue node.
 pub(super) fn submission_system(
-    In(mut queue): In<QueueSystemCtx>,
+    mut queue: QueueSystemCtx,
     mut shared: RenderSystemSharedStateSystemParam,
     //queue_submission_ctx: (), // this gives you the semaphores from the schedule build pass and identify the system as a queue system.
 ) {

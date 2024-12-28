@@ -1,15 +1,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use ash::vk;
+use bevy::ecs::system::ScheduleSystem;
 use bevy::{
     ecs::{
         component::ComponentId,
-        schedule::{graph::{DiGraph, Direction}, NodeId, ScheduleBuildError, ScheduleBuildPass, ScheduleGraph},
+        schedule::{
+            graph::{DiGraph, Direction},
+            NodeId, ScheduleBuildError, ScheduleBuildPass, ScheduleGraph,
+        },
+        system::{SystemParam, SystemState},
         world::World,
     },
-    prelude::{IntoSystem, System},
+    prelude::{IntoSystem, System, SystemParamFunction},
 };
-use bevy::ecs::system::ScheduleSystem;
 use petgraph::{
     graphmap::GraphMap,
     visit::{EdgeRef, IntoEdgeReferences},
@@ -18,7 +22,10 @@ use petgraph::{
 
 use crate::{
     command::Timeline,
-    ecs::{system::TimelineDependencies, IntoRenderSystem},
+    ecs::{
+        system::{RenderSystemSharedStateSystemParam, TimelineDependencies},
+        IntoRenderSystem,
+    },
     QueueInner,
 };
 
@@ -44,7 +51,7 @@ impl RenderSystemsPass {
         system.initialize(world);
 
         graph.systems.push(bevy::ecs::schedule::SystemNode::new(
-            ScheduleSystem::Infallible(Box::new(system))
+            ScheduleSystem::Infallible(Box::new(system)),
         ));
         graph.system_conditions.push(Vec::new());
 
@@ -128,6 +135,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
         let device: crate::Device = world.resource::<crate::Device>().clone();
         struct QueueNode {
             queue_component_id: ComponentId,
+            shared_state_component_id: ComponentId,
             info: GraphClusteringNodeInfo,
             nodes: Vec<NodeId>,
 
@@ -142,16 +150,81 @@ impl ScheduleBuildPass for RenderSystemsPass {
             .into_iter()
             .map(|mut n| {
                 let queue_component_id = color_to_queue_component_id[n.info.color as usize];
+                let mut shared_state_component_id = ComponentId::new(usize::MAX);
+                let timeline_dependencies = TimelineDependencies {
+                    this: Arc::new(Timeline::new(device.clone()).unwrap()),
+                    dependencies: Vec::new(),
+                };
                 let queue_node = if n.info.is_standalone {
                     assert_eq!(n.nodes.len(), 1);
                     n.nodes[0]
                 } else {
-                    let prelude_system_id =
-                        self.add_system(graph, world, crate::ecs::system::prelude_system);
+                    let queue_family = unsafe {
+                        world
+                            .get_resource_by_id(queue_component_id)
+                            .unwrap()
+                            .deref::<QueueInner>()
+                            .queue_family
+                    };
+                    shared_state_component_id = world.register_component_with_descriptor(
+                        bevy::ecs::component::ComponentDescriptor::new_resource::<
+                            RenderSystemSharedState,
+                        >(),
+                    );
+                    bevy::ptr::OwningPtr::make(
+                        RenderSystemSharedState::new(
+                            device.clone(),
+                            queue_family,
+                            timeline_dependencies.this.clone(),
+                        ),
+                        |ptr| unsafe {
+                            // SAFETY: component_id was just initialized and corresponds to resource of type R.
+                            world.insert_resource_by_id(shared_state_component_id, ptr);
+                        },
+                    );
+                    let shared_state_archetype_component_id = world
+                        .storages()
+                        .resources
+                        .get(shared_state_component_id)
+                        .unwrap()
+                        .id();
+
+                    let mut prelude_system_state =
+                        SystemState::<(RenderSystemSharedStateSystemParam,)>::new(world);
+                    unsafe {
+                        prelude_system_state.param_state_mut().0 = shared_state_component_id;
+                        prelude_system_state
+                            .meta_mut()
+                            .component_access_set_mut()
+                            .add_unfiltered_resource_write(shared_state_component_id);
+                        prelude_system_state
+                            .meta_mut()
+                            .archetype_component_access_mut()
+                            .add_resource_write(shared_state_archetype_component_id);
+                    }
+                    let prelude_system =
+                        prelude_system_state.build_system(crate::ecs::system::prelude_system);
+                    let prelude_system_id = self.add_system(graph, world, prelude_system);
+
+                    let mut submission_system_state =
+                        SystemState::<(RenderSystemSharedStateSystemParam,)>::new(world);
+                    unsafe {
+                        submission_system_state.param_state_mut().0 = shared_state_component_id;
+                        submission_system_state
+                            .meta_mut()
+                            .component_access_set_mut()
+                            .add_unfiltered_resource_write(shared_state_component_id);
+                        submission_system_state
+                            .meta_mut()
+                            .archetype_component_access_mut()
+                            .add_resource_write(shared_state_archetype_component_id);
+                    }
+                    let submission_system = submission_system_state
+                        .build_system_with_input(crate::ecs::system::submission_system);
                     let submission_system_id = self.add_system(
                         graph,
                         world,
-                        crate::ecs::system::submission_system.with_queue(queue_component_id),
+                        submission_system.with_queue(queue_component_id),
                     );
                     for node in n.nodes.iter() {
                         // for all nodes, they run before submission system and after prelude systems.
@@ -167,10 +240,8 @@ impl ScheduleBuildPass for RenderSystemsPass {
                     queue_component_id,
                     info: n.info,
                     nodes: n.nodes,
-                    timeline_dependencies: TimelineDependencies {
-                        this: Arc::new(Timeline::new(device.clone()).unwrap()),
-                        dependencies: Vec::new(),
-                    },
+                    timeline_dependencies,
+                    shared_state_component_id,
                 }
             })
             .collect();
@@ -213,43 +284,21 @@ impl ScheduleBuildPass for RenderSystemsPass {
         // For each non standalone queue graph node, create shared states.
         // This runs after prelude and postlude systems so that these extra systems also get the shared states.
         for node_info in queue_nodes.iter() {
-            if node_info.info.is_standalone {
-                continue;
-            }
-            let queue_family = unsafe {
-                world
-                    .get_resource_by_id(node_info.queue_component_id)
-                    .unwrap()
-                    .deref::<QueueInner>()
-                    .queue_family
-            };
-            let component_id = world.register_component_with_descriptor(
-                bevy::ecs::component::ComponentDescriptor::new_resource::<RenderSystemSharedState>(
-                ),
-            );
-            bevy::ptr::OwningPtr::make(
-                RenderSystemSharedState::new(
-                    device.clone(),
-                    queue_family,
-                    node_info.timeline_dependencies.this.clone(),
-                ),
-                |ptr| unsafe {
-                    // SAFETY: component_id was just initialized and corresponds to resource of type R.
-                    world.insert_resource_by_id(component_id, ptr);
-                },
-            );
             for node in node_info.nodes.iter() {
+                if node_info.info.is_standalone {
+                    continue;
+                }
                 let NodeId::System(node_id) = node else {
                     // This should've been flattened out.
                     panic!();
                 };
                 graph.systems[*node_id].get_mut().unwrap().configurate(
                     &mut super::system::RenderSystemInputConfig {
-                        shared_state_component_id: component_id,
+                        shared_state_component_id: node_info.shared_state_component_id,
                         shared_state_archetype_component_id: world
                             .storages()
                             .resources
-                            .get(component_id)
+                            .get(node_info.shared_state_component_id)
                             .unwrap()
                             .id(),
                         queue: node_info.queue_component_id,
@@ -261,10 +310,7 @@ impl ScheduleBuildPass for RenderSystemsPass {
     }
 }
 
-fn graph_remove_node_with_transitive_dependency(
-    graph: &mut DiGraph,
-    node: NodeId,
-) {
+fn graph_remove_node_with_transitive_dependency(graph: &mut DiGraph, node: NodeId) {
     let parents: Vec<NodeId> = graph
         .neighbors_directed(node, Direction::Incoming)
         .collect();
@@ -293,7 +339,7 @@ struct ClusteredNode {
 fn graph_clustering(
     render_graph: &DiGraph,
     num_colors: usize,
-    get_node_info: impl Fn(&NodeId) -> GraphClusteringNodeInfo,
+    mut get_node_info: impl FnMut(&NodeId) -> GraphClusteringNodeInfo,
 ) -> (GraphMap<u32, (), Directed>, Vec<ClusteredNode>) {
     let mut heap: Vec<NodeId> = Vec::new(); // nodes with no incoming edges
 
@@ -312,8 +358,10 @@ fn graph_clustering(
     }
     let mut stage_index = 0;
     // (buffer, stages)
-    let mut cmd_op_colors: Vec<(Vec<NodeId>, Vec<Vec<NodeId>>)> = vec![Default::default(); num_colors];
-    let mut queue_op_colors: Vec<(Option<NodeId>, Vec<NodeId>)> = vec![Default::default(); num_colors];
+    let mut cmd_op_colors: Vec<(Vec<NodeId>, Vec<Vec<NodeId>>)> =
+        vec![Default::default(); num_colors];
+    let mut queue_op_colors: Vec<(Option<NodeId>, Vec<NodeId>)> =
+        vec![Default::default(); num_colors];
     let mut tiny_graph = petgraph::graphmap::DiGraphMap::<GraphClusteringNodeInfo, ()>::new();
     let mut current_graph = render_graph.clone();
     let mut heap_next_stage: Vec<NodeId> = Vec::new(); // nodes to be deferred to the next stage

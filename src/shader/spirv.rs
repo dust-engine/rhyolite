@@ -1,9 +1,9 @@
 use crate::Device;
 
 use ash::vk;
+use bevy::asset::io::{Reader, Writer};
 use bevy::asset::saver::{AssetSaver, SavedAsset};
 use bevy::asset::{Asset, AssetLoader, AsyncWriteExt, LoadContext};
-use bevy::asset::io::{Reader, Writer};
 use bevy::ecs::world::FromWorld;
 use bevy::reflect::TypePath;
 use bevy::utils::ConditionalSendFuture;
