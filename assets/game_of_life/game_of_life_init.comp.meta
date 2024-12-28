@@ -1,9 +1,10 @@
 (
     meta_format_version: "1.0",
     asset: Process(
-        processor: "bevy_asset::processor::process::LoadAndSave<rhyolite::shader::glsl::GlslShadercCompiler, rhyolite::shader::spirv::SpirvSaver>",
+        processor: "bevy_asset::processor::process::LoadTransformAndSave<rhyolite::shader::glsl::GlslShadercCompiler, bevy_asset::transformer::IdentityAssetTransformer<rhyolite::shader::spirv::SpirvShaderSource>, rhyolite::shader::spirv::SpirvSaver>",
         settings: (
             loader_settings: (),
+            transformer_settings: (),
             saver_settings: (),
         ),
     ),

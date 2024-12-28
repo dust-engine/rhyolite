@@ -1,6 +1,6 @@
 #![feature(let_chains)]
 use bevy::asset::{AssetServer, Assets};
-use bevy::core::FrameCount;
+use bevy::diagnostic::FrameCount;
 use bevy::ecs::schedule::IntoSystemConfigs;
 use bevy::prelude::{Mut, Query};
 use rhyolite::ash::vk;

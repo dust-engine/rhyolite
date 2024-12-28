@@ -202,10 +202,10 @@ impl Plugin for GlslPlugin {
             .world()
             .get_resource::<bevy::asset::processor::AssetProcessor>()
         {
-            use bevy::asset::processor::LoadAndSave;
-
+            use bevy::asset::processor::LoadTransformAndSave;
+            use bevy::asset::transformer::IdentityAssetTransformer;
             // Load GLSL source, compile with shaderc, and save as SPIR-V
-            type GlslToSpirv = LoadAndSave<GlslShadercCompiler, SpirvSaver>;
+            type GlslToSpirv = LoadTransformAndSave<GlslShadercCompiler, IdentityAssetTransformer<SpirvShaderSource>, SpirvSaver>;
             processor.register_processor::<GlslToSpirv>(SpirvSaver.into());
             for ext in GLSL_EXTENSIONS {
                 if *ext != "glsl" {
@@ -214,7 +214,7 @@ impl Plugin for GlslPlugin {
             }
 
             // Load Playout source, compile, and save as GLSL
-            type PlayoutToGlsl = LoadAndSave<PlayoutGlslLoader, GlslSaver>;
+            type PlayoutToGlsl = LoadTransformAndSave<PlayoutGlslLoader, IdentityAssetTransformer<GlslShaderSource>, GlslSaver>;
             processor.register_processor::<PlayoutToGlsl>(GlslSaver.into());
             processor.set_default_processor::<PlayoutToGlsl>("playout");
         }
