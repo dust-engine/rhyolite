@@ -6,12 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies.bevy_egui]
-version = "0.28"
+version = "0.31"
+git = "https://github.com/Neo-Zhixing/bevy_egui.git"
+rev = "0417e2a17aec5c36ab7293a9166407206fc4ba24"
 default-features = false
 features = ["manage_clipboard", "open_url", "default_fonts"]
 
 [dependencies]
-bevy = { version = "0.14.0", default-features = false }
+bevy = { version = "0.15.0-dev", default-features = false }
 rhyolite = { path = "../../" }
 playout_macro = { version = "0.1" }
 bytemuck = "1.15"

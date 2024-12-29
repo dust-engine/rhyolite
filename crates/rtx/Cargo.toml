@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 rhyolite = { path = "../../" }
-bevy = { version = "0.14.0", default-features = false }
+bevy = { version = "0.15.0-dev", default-features = false }
 bytemuck = "1.15"
 itertools = "0.12"
 smallvec = "1.6"

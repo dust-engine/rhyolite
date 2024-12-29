@@ -17,7 +17,6 @@ glsl = ["shaderc"]
 [dependencies]
 crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
-bevy = { version = "0.15.0-dev", default-features = false, features=["multi_threaded","wayland", "x11", "bevy_asset", "asset_processor", "file_watcher", "bevy_window"] }
 ash = "0.38"
 tracing = "0.1"
 log = { version = "0.4", features = ["kv"] }
@@ -35,16 +34,31 @@ bytemuck = "1.15"
 petgraph = "0.6"
 smallvec = "1.13"
 rhyolite_macros = { path = "./crates/macro" }
-
-# GLSL
 shaderc = { version = "0.8", optional = true, features = ["prefer-static-linking"] }
+
+[dependencies.bevy]
+version = "0.15.0-dev"
+default-features = false
+features = ["multi_threaded","wayland", "x11", "bevy_asset", "asset_processor", "file_watcher", "bevy_window"]
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 raw-window-metal = "0.4"
 
 [patch.crates-io]
-# bevy = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "node-config" }
-bevy = { path = "../bevy" }
+bevy = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_app = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_derive = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_ecs = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_input = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_log = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_math = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_reflect = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_time = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_utils = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_winit = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" , features = ["custom_cursor"] }
+bevy_window = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+
+
 ash = { git = "https://github.com/Neo-Zhixing/ash.git", branch = "meta" }
 
 [dev-dependencies]
