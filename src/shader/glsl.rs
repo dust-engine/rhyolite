@@ -8,7 +8,7 @@ use bevy::asset::{
 };
 use bevy::asset::{AssetApp, AsyncReadExt, AsyncWriteExt};
 use bevy::reflect::TypePath;
-use bevy::utils::ConditionalSendFuture;
+use bevy::tasks::ConditionalSendFuture;
 use shaderc::ResolvedInclude;
 use thiserror::Error;
 

@@ -6,7 +6,7 @@ use bevy::asset::saver::{AssetSaver, SavedAsset};
 use bevy::asset::{Asset, AssetLoader, AsyncWriteExt, LoadContext};
 use bevy::ecs::world::FromWorld;
 use bevy::reflect::TypePath;
-use bevy::utils::ConditionalSendFuture;
+use bevy::tasks::ConditionalSendFuture;
 
 use thiserror::Error;
 

@@ -9,7 +9,7 @@ use bevy::{
             graph::{DiGraph, Direction},
             NodeId, ScheduleBuildError, ScheduleBuildPass, ScheduleGraph,
         },
-        system::{SystemParam, SystemState},
+        system::{SystemParam, SystemState, InfallibleSystemWrapper},
         world::World,
     },
     prelude::{IntoSystem, System, SystemParamFunction},
@@ -51,7 +51,7 @@ impl RenderSystemsPass {
         system.initialize(world);
 
         graph.systems.push(bevy::ecs::schedule::SystemNode::new(
-            ScheduleSystem::Infallible(Box::new(system)),
+            Box::new(InfallibleSystemWrapper::new(IntoSystem::into_system(system))),
         ));
         graph.system_conditions.push(Vec::new());
 
