@@ -13,9 +13,10 @@
 #![feature(local_waker)]
 #![feature(debug_closure_helpers)]
 #![feature(adt_const_params)]
+#![feature(allocator_api)]
 
 mod alloc;
-//pub mod buffer;
+pub mod buffer;
 pub mod command;
 //pub mod commands;
 pub mod debug;

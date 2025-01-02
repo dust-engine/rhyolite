@@ -39,7 +39,16 @@ shaderc = { version = "0.8", optional = true, features = ["prefer-static-linking
 [dependencies.bevy]
 version = "0.15.0-dev"
 default-features = false
-features = ["multi_threaded","wayland", "x11", "bevy_asset", "asset_processor", "file_watcher", "bevy_window"]
+features = [
+  "multi_threaded",
+  "wayland",
+  "x11",
+  "bevy_asset",
+  "asset_processor",
+  "file_watcher",
+  "bevy_window",
+  "bevy_image",
+]
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 raw-window-metal = "0.4"
@@ -57,6 +66,7 @@ bevy_time = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolit
 bevy_utils = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
 bevy_winit = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" , features = ["custom_cursor"] }
 bevy_window = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
+bevy_image = { git = "https://github.com/Neo-Zhixing/bevy.git", branch = "rhyolite-main" }
 
 
 ash = { git = "https://github.com/Neo-Zhixing/ash.git", branch = "meta" }

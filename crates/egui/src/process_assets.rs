@@ -4,7 +4,7 @@ fn main() {
     let mut app = bevy::app::App::new();
     app.add_plugins((
         bevy::log::LogPlugin::default(),
-        bevy::core::TaskPoolPlugin::default(),
+        bevy::app::TaskPoolPlugin::default(),
         bevy::asset::AssetPlugin {
             mode: bevy::asset::AssetMode::Processed,
             ..Default::default()

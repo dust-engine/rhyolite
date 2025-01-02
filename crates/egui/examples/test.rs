@@ -5,7 +5,7 @@ use bevy::ecs::system::Local;
 use bevy::ecs::{entity::Entity, query::With};
 use bevy::window::PrimaryWindow;
 use rhyolite::debug::DebugUtilsPlugin;
-use rhyolite::{RhyolitePlugin, SurfacePlugin, SwapchainConfig, SwapchainPlugin};
+use rhyolite::{RhyolitePlugin, SurfacePlugin, swapchain::{SwapchainConfig, SwapchainPlugin}};
 use rhyolite_egui::{egui, EguiContexts};
 
 fn main() {

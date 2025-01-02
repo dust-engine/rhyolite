@@ -1,22 +1,14 @@
-pub mod immediate_buffer_transfer;
-mod managed;
-pub mod staging;
-
 use std::{
-    alloc::Layout,
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut, Index, IndexMut, RangeBounds},
+    alloc::Layout, cell::{Cell, UnsafeCell}, marker::PhantomData, mem::MaybeUninit, ops::{Deref, DerefMut, Index, IndexMut, RangeBounds}, ptr::NonNull
 };
 
 use ash::{prelude::VkResult, vk};
 
 use crate::{
-    commands::TransferCommands, utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel,
+    utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel,
 };
 use vk_mem::Alloc;
 
-use self::staging::StagingBelt;
-pub use managed::ManagedBuffer;
 
 pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
@@ -36,6 +28,7 @@ pub struct Buffer {
     allocation: vk_mem::Allocation,
     buffer: vk::Buffer,
     size: vk::DeviceSize,
+    device_address: u64,
 }
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
@@ -59,15 +52,29 @@ impl Buffer {
         buffer: vk::Buffer,
         allocation: vk_mem::Allocation,
     ) -> Self {
-        let size = allocator.get_allocation_info(&allocation).size;
+        let info = allocator.get_allocation_info(&allocation);
+        let device_address = unsafe {
+            allocator
+                .device()
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                    buffer,
+                    ..Default::default()
+                })
+        };
         Self {
             allocator,
             buffer,
             allocation,
-            size,
+            size: info.size,
+            device_address,
         }
     }
-    /// Create a new buffer with DEVICE_LOCAL, HOST_VISIBLE memory.
+    /// Create a buffer for small amount of host -> device dataflow.
+    /// On Discrete devices: 
+    /// 
+    /// Integrated, ReBar: Create a new buffer with HOST_VISIBLE, preferably DEVICE_LOCAL memory.
+    /// Bar: Create a new buffer on the 256MB Bar.
+    /// Discrete: Create a new buffer on device memory. Application to use StagingBelt for updates.
     pub fn new_dynamic(
         allocator: Allocator,
         size: vk::DeviceSize,
@@ -89,15 +96,27 @@ impl Buffer {
                 },
                 alignment,
             )?;
+            let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+                allocator
+                .device()
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                    buffer,
+                    ..Default::default()
+                })
+            } else {
+                0
+            };
             Ok(Self {
                 allocator,
                 buffer,
                 allocation,
                 size,
+                device_address,
             })
         }
     }
-    /// Create a new buffer with DEVICE_LOCAL memory.
+    /// Discrete, Bar: Create a new buffer on host memory.
+    /// Integrated, ReBar: Not applicable.
     pub fn new_staging(
         allocator: Allocator,
         size: vk::DeviceSize,
@@ -119,11 +138,22 @@ impl Buffer {
                 },
                 alignment,
             )?;
+            let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+                allocator
+                    .device()
+                    .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                        buffer,
+                        ..Default::default()
+                    })
+            } else {
+                0
+            };
             Ok(Self {
                 allocator,
                 buffer,
                 allocation,
                 size,
+                device_address,
             })
         }
     }
@@ -149,14 +179,27 @@ impl Buffer {
                 },
                 alignment,
             )?;
+            let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+                allocator
+                    .device()
+                    .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                        buffer,
+                        ..Default::default()
+                    })
+            } else {
+                0
+            };
             Ok(Self {
                 allocator,
                 buffer,
                 allocation,
                 size,
+                device_address,
             })
         }
     }
+
+    /*
     pub fn new_resource_init(
         allocator: Allocator,
         staging_belt: &mut StagingBelt,
@@ -262,6 +305,7 @@ impl Buffer {
             }
         }
     }
+    */
 
     pub fn as_slice(&self) -> &[u8] {
         unsafe {
@@ -308,224 +352,152 @@ impl BufferLike for Buffer {
     }
 }
 
-pub struct BufferArray<T> {
+
+/// A special allocator designed to be used for [`BufferVec`].
+/// Holds one allocation at any given time.
+pub struct BufferAllocator {
     allocator: Allocator,
-    allocation: Option<vk_mem::Allocation>,
-    buffer: vk::Buffer,
-    len: usize,
-    alignment: u64,
-    ptr: *mut MaybeUninit<T>,
-    _marker: std::marker::PhantomData<T>,
+    buffer: UnsafeCell<Option<Buffer>>,
     usage: vk::BufferUsageFlags,
-    sharing_mode: SharingMode<Vec<u32>>,
-    allocation_info: vk_mem::AllocationCreateInfo,
+    create_info: vk_mem::AllocationCreateInfo,
 }
-unsafe impl<T: Send> Send for BufferArray<T> {}
-unsafe impl<T: Sync> Sync for BufferArray<T> {}
-impl<T> Drop for BufferArray<T> {
-    fn drop(&mut self) {
+unsafe impl std::alloc::Allocator for BufferAllocator {
+    fn allocate(&self, layout: Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError> {
         unsafe {
-            if let Some(allocation) = &mut self.allocation {
-                self.allocator.destroy_buffer(self.buffer, allocation);
-            }
+            let (buffer, allocation) = self.allocator.create_buffer_with_alignment(&vk::BufferCreateInfo {
+                size: layout.size() as u64,
+                usage: self.usage,
+                ..Default::default()
+            }, &self.create_info, layout.align() as u64).map_err(|_| std::alloc::AllocError)?;
+            let info = self.allocator.get_allocation_info(&allocation);
+            let buffer = Buffer::from_raw(self.allocator.clone(), buffer, allocation);
+            let old_buffer = (&mut *self.buffer.get()).replace(buffer);
+            assert!(old_buffer.is_none());
+            let ptr = NonNull::new(info.mapped_data as *mut u8).unwrap();
+            Ok(NonNull::slice_from_raw_parts(ptr, info.size as usize))
         }
     }
-}
-impl<T> HasDevice for BufferArray<T> {
-    fn device(&self) -> &crate::Device {
-        self.allocator.device()
+
+    unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: Layout) {
+        let buffer = (&mut *self.buffer.get()).take();
+        assert!(buffer.is_some());
+        drop(buffer);
     }
 }
-impl<T> BufferLike for BufferArray<T> {
+impl<T> BufferLike for BufferVec<T> {
     fn raw_buffer(&self) -> vk::Buffer {
-        self.buffer
-    }
-    fn device_address(&self) -> vk::DeviceAddress {
         unsafe {
-            self.allocator
-                .device()
-                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-                    buffer: self.buffer,
-                    ..Default::default()
-                })
+            (&*self.0.allocator().buffer.get()).as_ref().unwrap().buffer
         }
     }
     fn size(&self) -> vk::DeviceSize {
-        Layout::new::<T>()
-            .repeat(self.len)
-            .unwrap()
-            .0
-            .pad_to_align()
-            .size() as vk::DeviceSize
+        unsafe {
+            (&*self.0.allocator().buffer.get()).as_ref().unwrap().size
+        }
+    }
+    fn device_address(&self) -> vk::DeviceAddress {
+        unsafe {
+            (&*self.0.allocator().buffer.get()).as_ref().unwrap().device_address
+        }
     }
 }
-
-impl<T> BufferArray<T> {
-    pub fn len(&self) -> usize {
-        self.len
-    }
-    /// Ensure that the array is at least `new_len` elements long.
-    pub fn realloc(&mut self, new_len: usize) -> VkResult<Option<Buffer>> {
-        let new_capacity = new_len.next_power_of_two().max(8);
-        if new_capacity <= self.len {
-            return Ok(None);
-        }
-        unsafe {
-            let old_buffer = self
-                .allocation
-                .take()
-                .map(|a| Buffer::from_raw(self.allocator.clone(), self.buffer, a));
-            let (buffer, allocation) = self.allocator.create_buffer_with_alignment(
-                &vk::BufferCreateInfo {
-                    size: Layout::new::<T>()
-                        .repeat(new_capacity)
-                        .unwrap()
-                        .0
-                        .pad_to_align()
-                        .size() as vk::DeviceSize,
-                    usage: self.usage,
-                    sharing_mode: self.sharing_mode.as_raw(),
-                    queue_family_index_count: self.sharing_mode.queue_family_indices().len() as u32,
-                    p_queue_family_indices: self.sharing_mode.queue_family_indices().as_ptr(),
-                    ..Default::default()
-                },
-                &self.allocation_info,
-                self.alignment,
-            )?;
-
-            let info = self.allocator.get_allocation_info(&allocation);
-            self.ptr = info.mapped_data as *mut MaybeUninit<T>;
-            self.buffer = buffer;
-            self.allocation = Some(allocation);
-            self.len = new_capacity;
-            Ok(old_buffer)
-        }
-    }
-    /// Create a new HOST_VISIBLE upload buffer for sequential write.
-    /// On integrated GPUs and GPUs with SAM, the upload buffer may be used directly by the device.
-    /// On discrete GPUs, the upload buffer serves as the staging buffer. The user will have to create backing
-    /// DEVICE_LOCAL buffer and schedule transfer.
-    pub fn new_upload(allocator: Allocator, mut usage: vk::BufferUsageFlags) -> Self {
-        let memory_model = allocator
-            .device()
-            .physical_device()
-            .properties()
-            .memory_model;
-        let memory_usage = if matches!(memory_model, PhysicalDeviceMemoryModel::ReBar) {
-            vk_mem::MemoryUsage::AutoPreferDevice
-        } else {
-            vk_mem::MemoryUsage::AutoPreferHost
-        };
-        if memory_model.storage_buffer_should_use_staging() {
-            usage |= vk::BufferUsageFlags::TRANSFER_SRC;
-        };
-        Self {
+impl<T> BufferVec<T> {
+    /// Create a buffer for small amount of host -> device dataflow.
+    /// On Discrete devices: 
+    /// 
+    /// Integrated, ReBar: Create a new buffer with HOST_VISIBLE, preferably DEVICE_LOCAL memory.
+    /// Bar: Create a new buffer on the 256MB Bar.
+    /// Discrete: Create a new buffer on device memory. Application to use StagingBelt for updates.
+    pub fn new_dynamic(
+        allocator: Allocator,
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> Self {
+        Self(Vec::new_in(BufferAllocator {
             allocator,
-            allocation: None,
-            buffer: vk::Buffer::null(),
-            ptr: std::ptr::null_mut(),
-            _marker: std::marker::PhantomData,
+            buffer: UnsafeCell::new(None),
             usage,
-            alignment: 1,
-            sharing_mode: SharingMode::Exclusive,
-            allocation_info: vk_mem::AllocationCreateInfo {
-                usage: memory_usage,
+            create_info: vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::AutoPreferDevice,
                 flags: vk_mem::AllocationCreateFlags::MAPPED
                     | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            len: 0,
-        }
+        }))
     }
-
-    /// Create GPU-owned buffer.
-    pub fn new_resource(allocator: Allocator, usage: vk::BufferUsageFlags, alignment: u64) -> Self {
-        let res = Self {
+    /// Create a buffer for large amount of host -> device dataflow.
+    /// Only difference with `new_dynamic` is that on GPUs with Bar, this creates the buffer on the host.
+    pub fn new_upload(
+        allocator: Allocator,
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> Self {
+        Self(Vec::new_in(BufferAllocator {
             allocator,
-            alignment,
-            allocation: None,
-            buffer: vk::Buffer::null(),
-            ptr: std::ptr::null_mut(),
-            _marker: std::marker::PhantomData,
+            buffer: UnsafeCell::new(None),
             usage,
-            sharing_mode: SharingMode::Exclusive,
-            allocation_info: vk_mem::AllocationCreateInfo {
+            create_info: vk_mem::AllocationCreateInfo {
                 usage: vk_mem::MemoryUsage::AutoPreferDevice,
-                flags: vk_mem::AllocationCreateFlags::empty(),
+                flags: vk_mem::AllocationCreateFlags::MAPPED
+                    | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+        }))
+    }
+    pub fn new_staging(
+        allocator: Allocator,
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> Self {
+        Self(Vec::new_in(BufferAllocator {
+            allocator,
+            buffer: UnsafeCell::new(None),
+            usage,
+            create_info: vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::AutoPreferHost,
+                flags: vk_mem::AllocationCreateFlags::MAPPED
+                    | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+        }))
+    }
+    /// Create a new buffer with DEVICE_LOCAL memory.
+    pub fn new_resource(
+        allocator: Allocator,
+        alignment: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+    ) -> Self {
+        Self(Vec::new_in(BufferAllocator {
+            allocator,
+            buffer: UnsafeCell::new(None),
+            usage,
+            create_info: vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::AutoPreferDevice,
                 required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 preferred_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 ..Default::default()
             },
-            len: 0,
-        };
-        res
+        }))
     }
 
-    pub fn flush(&mut self, range: impl RangeBounds<usize>) -> VkResult<()> {
-        if let Some(allocation) = &self.allocation {
-            let item_size = Layout::new::<T>().pad_to_align().size();
-            let start = match range.start_bound() {
-                std::ops::Bound::Included(&start) => start * item_size,
-                std::ops::Bound::Excluded(&start) => (start + 1) * item_size,
-                std::ops::Bound::Unbounded => 0,
-            };
-            let len = match range.end_bound() {
-                std::ops::Bound::Included(&end) => (end + 1) * item_size - start,
-                std::ops::Bound::Excluded(&end) => end * item_size - start,
-                std::ops::Bound::Unbounded => vk::WHOLE_SIZE as usize,
-            };
-            return self
-                .allocator
-                .flush_allocation(allocation, start as u64, len as u64);
-        } else {
-            return Ok(());
-        }
+    pub fn flush(&mut self) -> VkResult<()> {
+        let allocation = &unsafe{&mut *self.0.allocator().buffer.get()}.as_ref().unwrap().allocation;
+        self.0.allocator().allocator.flush_allocation(allocation, 0, self.0.len() as u64)
     }
 }
 
-impl<T> Index<usize> for BufferArray<T> {
-    type Output = MaybeUninit<T>;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        if self
-            .allocation_info
-            .flags
-            .contains(vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE)
-        {
-            tracing::warn!("Reading from a HOST_VISIBLE buffer that is mapped for sequential write is likely inefficient");
-        }
-        assert!(index < self.len);
-        unsafe {
-            let ptr = self.ptr.add(index as usize);
-            &*ptr
-        }
-    }
-}
-impl<T> IndexMut<usize> for BufferArray<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        assert!(index < self.len);
-        unsafe {
-            let ptr = self.ptr.add(index as usize);
-            &mut *ptr
-        }
-    }
-}
-impl<T> Deref for BufferArray<T> {
-    type Target = [MaybeUninit<T>];
+pub struct BufferVec<T>(Vec<T, BufferAllocator>);
+unsafe impl<T: Send> Send for BufferVec<T>{}
+unsafe impl<T: Sync> Sync for BufferVec<T>{}
+impl<T> Deref for BufferVec<T> {
+    type Target = Vec<T, BufferAllocator>;
 
     fn deref(&self) -> &Self::Target {
-        if self
-            .allocation_info
-            .flags
-            .contains(vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE)
-        {
-            tracing::warn!("Reading from a HOST_VISIBLE buffer that is mapped for sequential write is likely inefficient");
-        }
-        unsafe { std::slice::from_raw_parts(self.ptr, self.len as usize) }
+        &self.0
     }
 }
-impl<T> DerefMut for BufferArray<T> {
+impl<T> DerefMut for BufferVec<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len as usize) }
+        &mut self.0
     }
 }

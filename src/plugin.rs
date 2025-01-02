@@ -257,6 +257,10 @@ impl Plugin for RhyolitePlugin {
 
         //app.add_plugins(crate::staging::StagingBeltPlugin);
         app.add_plugins(crate::pipeline::PipelineCachePlugin::default());
+
+        app.register_type::<bevy::image::Image>()
+            .init_asset::<bevy::image::Image>()
+            .register_asset_reflect::<bevy::image::Image>();
     }
     fn finish(&self, app: &mut App) {
         let extension_settings: DeviceExtensions = app

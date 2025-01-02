@@ -7,8 +7,9 @@ edition = "2021"
 
 [dependencies.bevy_egui]
 version = "0.31"
-git = "https://github.com/Neo-Zhixing/bevy_egui.git"
-rev = "0417e2a17aec5c36ab7293a9166407206fc4ba24"
+#git = "https://github.com/Neo-Zhixing/bevy_egui.git"
+#rev = "21f3ecfa63c6e7245d6ea7d6d2f8d64719515e74"
+path = "../../../bevy_egui"
 default-features = false
 features = ["manage_clipboard", "open_url", "default_fonts"]
 

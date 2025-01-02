@@ -20,25 +20,17 @@ use bevy::{
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::ash::khr::{dynamic_rendering, push_descriptor};
-use rhyolite::commands::CommonCommands;
-use rhyolite::dispose::RenderObject;
 use rhyolite::{
-    acquire_swapchain_image,
     ash::vk,
-    buffer::staging::StagingBelt,
-    commands::{
-        GraphicsCommands, RenderPassCommands, ResourceTransitionCommands, TransferCommands,
-    },
-    ecs::{BarrierProducerOut, Barriers, IntoRenderSystemConfigs},
-    ecs::{PerFrame, RenderCommands, RenderImage, RenderRes},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
         PipelineCache, PipelineLayout,
     },
-    present,
     shader::{ShaderModule, SpecializedShader},
-    Access, Allocator, BufferArray, BufferLike, DeferredOperationTaskPool, Device, HasDevice,
-    Image, ImageLike, ImageViewLike, RhyoliteApp, Sampler, SwapchainImage,
+    Allocator, DeferredOperationTaskPool, Device, HasDevice,
+    Image, ImageLike, ImageViewLike, RhyoliteApp, Sampler,
+    future::GPUBorrowedResource,
+    buffer::BufferVec,
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -70,11 +62,12 @@ impl Plugin for EguiBasePlugin {
 impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> {
     fn build(&self, app: &mut App) {
         app.add_plugins((EguiBasePlugin, bevy_egui::EguiPlugin));
-        app.add_systems(
-            PostUpdate,
-            (
-                collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
-                prepare_image::<Filter>.after(collect_outputs::<Filter>),
+        //app.add_systems(
+        //    PostUpdate,
+        //    (
+                //collect_outputs::<Filter>. after(EguiSet::ProcessOutput),
+                //prepare_image::<Filter>.after(collect_outputs::<Filter>),
+                /*
                 transfer_image::<Filter>
                     .after(prepare_image::<Filter>)
                     .with_barriers(image_barrier::<Filter>),
@@ -84,8 +77,9 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
                     .after(acquire_swapchain_image::<Filter>)
                     .after(transfer_image::<Filter>)
                     .before(present),
-            ),
-        );
+                */
+        //    ),
+        //);
         app.add_systems(Startup, initialize_pipelines);
         app.add_device_extension::<dynamic_rendering::Meta>()
             .unwrap();
@@ -98,19 +92,8 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
         let allocator = app.world().resource::<Allocator>().clone();
-        app.insert_resource(PerFrame::<EguiHostBuffer<Filter>>::new(|_| {
-            EguiHostBuffer {
-                index_buffer: BufferArray::new_upload(
-                    allocator.clone(),
-                    vk::BufferUsageFlags::INDEX_BUFFER,
-                ),
-                vertex_buffer: BufferArray::new_upload(
-                    allocator.clone(),
-                    vk::BufferUsageFlags::VERTEX_BUFFER,
-                ),
-                marker: Default::default(),
-            }
-        }));
+
+        /*
         if allocator
             .physical_device()
             .properties()
@@ -128,12 +111,13 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
                 ),
             );
         }
+        */
     }
 }
 
 #[derive(Resource)]
 pub struct EguiPipelines {
-    pipeline: CachedPipeline<RenderObject<GraphicsPipeline>>,
+    pipeline: CachedPipeline<GraphicsPipeline>,
     layout: Arc<PipelineLayout>,
 }
 fn initialize_pipelines(
@@ -278,32 +262,32 @@ fn initialize_pipelines(
 }
 
 pub struct EguiHostBuffer<Filter: QueryFilter> {
-    index_buffer: BufferArray<u32>,
-    vertex_buffer: BufferArray<egui::epaint::Vertex>,
+    index_buffer: BufferVec<MaybeUninit<u32>>,
+    vertex_buffer: BufferVec<MaybeUninit<egui::epaint::Vertex>>,
     marker: std::marker::PhantomData<Filter>,
 }
 #[derive(Resource)]
 pub struct EguiDeviceBuffer<Filter: QueryFilter> {
     total_indices_count: usize,
     total_vertices_count: usize,
-    index_buffer: RenderRes<BufferArray<u32>>,
-    vertex_buffer: RenderRes<BufferArray<egui::epaint::Vertex>>,
-    textures: BTreeMap<u64, (RenderImage<Image>, egui::TextureOptions)>,
+    index_buffer: GPUBorrowedResource<BufferVec<u32>>,
+    vertex_buffer: GPUBorrowedResource<BufferVec<egui::epaint::Vertex>>,
+    textures: BTreeMap<u64, (GPUBorrowedResource<Image>, egui::TextureOptions)>,
     marker: std::marker::PhantomData<Filter>,
     samplers: HashMap<egui::TextureOptions, Sampler>,
 }
 impl<Filter: QueryFilter + Send + Sync + 'static> EguiDeviceBuffer<Filter> {
     fn new(allocator: &Allocator) -> Self {
         Self {
-            index_buffer: RenderRes::new(BufferArray::new_resource(
+            index_buffer: GPUBorrowedResource::new(BufferVec::new_resource(
                 allocator.clone(),
+                4,
                 vk::BufferUsageFlags::INDEX_BUFFER,
-                4,
             )),
-            vertex_buffer: RenderRes::new(BufferArray::new_resource(
+            vertex_buffer: GPUBorrowedResource::new(BufferVec::new_resource(
                 allocator.clone(),
-                vk::BufferUsageFlags::VERTEX_BUFFER,
                 4,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
             )),
             marker: Default::default(),
             total_indices_count: 0,
@@ -320,19 +304,16 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer
     }
 }
 
+
+
+
 /// Collect output from egui and copy it into a host-side buffer
 /// Create textures
 fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
-    mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
-    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
-    commands: RenderCommands<'t'>,
+    mut host_buffers: EguiHostBuffer<Filter>,
+    mut device_buffers: &mut EguiDeviceBuffer<Filter>,
+    mut output: &mut EguiRenderOutput,
 ) {
-    let Ok(output) = egui_render_output.get_single_mut() else {
-        return;
-    };
-
-    let host_buffers = host_buffers.on_frame(&commands);
 
     let device_buffers = &mut *device_buffers;
     let mut total_indices_count: usize = 0;
@@ -351,15 +332,12 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
         total_indices_count += mesh.indices.len();
         total_vertices_count += mesh.vertices.len();
     }
-    let host_buffers = &mut *host_buffers;
     host_buffers
         .vertex_buffer
-        .realloc(total_vertices_count)
-        .unwrap();
+        .resize(total_vertices_count, MaybeUninit::uninit());
     host_buffers
         .index_buffer
-        .realloc(total_indices_count)
-        .unwrap();
+        .resize(total_indices_count, MaybeUninit::uninit());
 
     device_buffers.total_indices_count = total_indices_count;
     device_buffers.total_vertices_count = total_vertices_count;
@@ -389,23 +367,20 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     assert_eq!(total_vertices_count, device_buffers.total_vertices_count);
     host_buffers
         .vertex_buffer
-        .flush(..total_vertices_count)
+        .flush()
         .unwrap();
     host_buffers
         .index_buffer
-        .flush(..total_indices_count)
+        .flush()
         .unwrap();
 }
 
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
-    commands: RenderCommands<'t'>,
-    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
-    allocator: Res<Allocator>,
+    mut host_buffers: EguiHostBuffer<Filter>,
+    mut device_buffers: &mut EguiDeviceBuffer<Filter>,
+    mut output: &mut EguiRenderOutput,
+    allocator: &Allocator,
 ) {
-    let Ok(output) = egui_render_output.get_single_mut() else {
-        return;
-    };
     for (texture_id, image_delta) in output
         .textures_delta
         .set
@@ -441,7 +416,7 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
             ..Default::default()
         };
         let image = Image::new_device_image(allocator.clone(), &create_info).unwrap();
-        let image = RenderImage::new(image);
+        let image = GPUBorrowedResource::new(image);
         device_buffers
             .textures
             .insert(texture_id, (image, image_delta.options));
@@ -477,6 +452,10 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
             });
     }
 }
+
+
+/* 
+
 fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
     mut barriers: In<Barriers>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
@@ -584,7 +563,7 @@ fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
     if device_buffers.vertex_buffer.len() < device_buffers.total_vertices_count {
         device_buffers.vertex_buffer = {
-            let mut buf = BufferArray::new_resource(
+            let mut buf = BufferVec::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 1,
@@ -596,7 +575,7 @@ fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
 
     if device_buffers.index_buffer.len() < device_buffers.total_indices_count {
         device_buffers.index_buffer = {
-            let mut buf = BufferArray::new_resource(
+            let mut buf = BufferVec::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 1,
@@ -897,3 +876,4 @@ pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
     assert_eq!(current_indice as usize, device_buffer.total_indices_count);
     drop(pass);
 }
+*/
