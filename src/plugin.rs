@@ -255,7 +255,7 @@ impl Plugin for RhyolitePlugin {
             target_vk_version: self.api_version,
         });
 
-        //app.add_plugins(crate::staging::StagingBeltPlugin);
+        app.add_plugins(crate::buffer::staging::StagingBeltPlugin);
         app.add_plugins(crate::pipeline::PipelineCachePlugin::default());
 
         app.register_type::<bevy::image::Image>()

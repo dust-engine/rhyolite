@@ -55,7 +55,7 @@ impl<'a> BarrierContext<'a> {
         }
     }
 
-    pub fn use_image_resource<I: ImageLike, T: GPUResource + Deref<Target = I>>(
+    pub fn use_image_resource<I: ImageLike + ?Sized, T: GPUResource + Deref<Target = I>>(
         &mut self,
         resource: &mut T,
         stage: vk::PipelineStageFlags2,

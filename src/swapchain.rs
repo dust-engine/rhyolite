@@ -1,4 +1,3 @@
-use ash::vk::Handle;
 use cstr::cstr;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
@@ -17,7 +16,7 @@ use bevy::{
 };
 use smallvec::SmallVec;
 
-use crate::command::{CommandPool, QueueDependency};
+use crate::command::CommandPool;
 use crate::ecs::{IntoRenderSystem, QueueSystemCtx};
 use crate::future::{GPUResource, ResourceState};
 use crate::selectors::Graphics;

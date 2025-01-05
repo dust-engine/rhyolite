@@ -36,6 +36,34 @@ impl<'a, T> GPUOwned<'a, T> {
         Self { inner: item }
     }
 }
+pub struct GPUOwnedResource<'a, T> {
+    item: GPUOwned<'a, T>,
+    state: ResourceState,
+}
+unsafe impl<T> GPUResource for GPUOwnedResource<'_, T> {
+    fn get_resource_state(&self, _state_table: &ResourceStateTable) -> ResourceState {
+        self.state.clone()
+    }
+    fn set_resource_state(&mut self, _state_table: &mut ResourceStateTable, state: ResourceState) {
+        self.state = state;
+    }
+}
+impl<T> Deref for GPUOwnedResource<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.item.inner
+    }
+}
+
+impl<'a, T> GPUOwnedResource<'a, T> {
+    pub fn new(item: GPUOwned<'a, T>) -> Self {
+        Self {
+            item,
+            state: Default::default(),
+        }
+    }
+}
 
 /// GPU borrowed objects bundled with its associated resource states.
 ///

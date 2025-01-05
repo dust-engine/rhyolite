@@ -1,14 +1,17 @@
+pub(crate) mod staging;
+
 use std::{
-    alloc::Layout, cell::{Cell, UnsafeCell}, marker::PhantomData, mem::MaybeUninit, ops::{Deref, DerefMut, Index, IndexMut, RangeBounds}, ptr::NonNull
+    alloc::Layout,
+    cell::UnsafeCell,
+    ops::{Deref, DerefMut, RangeBounds},
+    ptr::NonNull,
 };
 
 use ash::{prelude::VkResult, vk};
 
-use crate::{
-    utils::SharingMode, Allocator, HasDevice, PhysicalDeviceMemoryModel,
-};
+use crate::{Allocator, HasDevice};
+pub use staging::{StagingBelt, StagingBeltSuballocation, UniformBelt};
 use vk_mem::Alloc;
-
 
 pub trait BufferLike {
     fn raw_buffer(&self) -> vk::Buffer;
@@ -51,16 +54,22 @@ impl Buffer {
         allocator: Allocator,
         buffer: vk::Buffer,
         allocation: vk_mem::Allocation,
+        usage: vk::BufferUsageFlags,
     ) -> Self {
         let info = allocator.get_allocation_info(&allocation);
-        let device_address = unsafe {
-            allocator
-                .device()
-                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-                    buffer,
-                    ..Default::default()
-                })
+        let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+            unsafe {
+                allocator
+                    .device()
+                    .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
+                        buffer,
+                        ..Default::default()
+                    })
+            }
+        } else {
+            0
         };
+
         Self {
             allocator,
             buffer,
@@ -70,8 +79,8 @@ impl Buffer {
         }
     }
     /// Create a buffer for small amount of host -> device dataflow.
-    /// On Discrete devices: 
-    /// 
+    /// On Discrete devices:
+    ///
     /// Integrated, ReBar: Create a new buffer with HOST_VISIBLE, preferably DEVICE_LOCAL memory.
     /// Bar: Create a new buffer on the 256MB Bar.
     /// Discrete: Create a new buffer on device memory. Application to use StagingBelt for updates.
@@ -96,28 +105,12 @@ impl Buffer {
                 },
                 alignment,
             )?;
-            let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
-                allocator
-                .device()
-                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-                    buffer,
-                    ..Default::default()
-                })
-            } else {
-                0
-            };
-            Ok(Self {
-                allocator,
-                buffer,
-                allocation,
-                size,
-                device_address,
-            })
+            Ok(Self::from_raw(allocator, buffer, allocation, usage))
         }
     }
     /// Discrete, Bar: Create a new buffer on host memory.
     /// Integrated, ReBar: Not applicable.
-    pub fn new_staging(
+    pub fn new_host(
         allocator: Allocator,
         size: vk::DeviceSize,
         alignment: vk::DeviceSize,
@@ -138,23 +131,7 @@ impl Buffer {
                 },
                 alignment,
             )?;
-            let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
-                allocator
-                    .device()
-                    .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-                        buffer,
-                        ..Default::default()
-                    })
-            } else {
-                0
-            };
-            Ok(Self {
-                allocator,
-                buffer,
-                allocation,
-                size,
-                device_address,
-            })
+            Ok(Self::from_raw(allocator, buffer, allocation, usage))
         }
     }
     /// Create a new buffer with DEVICE_LOCAL memory.
@@ -179,23 +156,7 @@ impl Buffer {
                 },
                 alignment,
             )?;
-            let device_address = if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
-                allocator
-                    .device()
-                    .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-                        buffer,
-                        ..Default::default()
-                    })
-            } else {
-                0
-            };
-            Ok(Self {
-                allocator,
-                buffer,
-                allocation,
-                size,
-                device_address,
-            })
+            Ok(Self::from_raw(allocator, buffer, allocation, usage))
         }
     }
 
@@ -341,17 +302,9 @@ impl BufferLike for Buffer {
         self.size
     }
     fn device_address(&self) -> vk::DeviceAddress {
-        unsafe {
-            self.allocator
-                .device()
-                .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
-                    buffer: self.buffer,
-                    ..Default::default()
-                })
-        }
+        self.device_address
     }
 }
-
 
 /// A special allocator designed to be used for [`BufferVec`].
 /// Holds one allocation at any given time.
@@ -364,18 +317,51 @@ pub struct BufferAllocator {
 unsafe impl std::alloc::Allocator for BufferAllocator {
     fn allocate(&self, layout: Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError> {
         unsafe {
-            let (buffer, allocation) = self.allocator.create_buffer_with_alignment(&vk::BufferCreateInfo {
-                size: layout.size() as u64,
-                usage: self.usage,
-                ..Default::default()
-            }, &self.create_info, layout.align() as u64).map_err(|_| std::alloc::AllocError)?;
+            let (buffer, allocation) = self
+                .allocator
+                .create_buffer_with_alignment(
+                    &vk::BufferCreateInfo {
+                        size: layout.size() as u64,
+                        usage: self.usage,
+                        ..Default::default()
+                    },
+                    &self.create_info,
+                    layout.align() as u64,
+                )
+                .map_err(|_| std::alloc::AllocError)?;
             let info = self.allocator.get_allocation_info(&allocation);
-            let buffer = Buffer::from_raw(self.allocator.clone(), buffer, allocation);
+            let buffer = Buffer::from_raw(self.allocator.clone(), buffer, allocation, self.usage);
             let old_buffer = (&mut *self.buffer.get()).replace(buffer);
             assert!(old_buffer.is_none());
             let ptr = NonNull::new(info.mapped_data as *mut u8).unwrap();
             Ok(NonNull::slice_from_raw_parts(ptr, info.size as usize))
         }
+    }
+
+    unsafe fn grow(
+        &self,
+        ptr: NonNull<u8>,
+        old_layout: Layout,
+        new_layout: Layout,
+    ) -> Result<NonNull<[u8]>, std::alloc::AllocError> {
+        let (buffer, allocation) = self
+            .allocator
+            .create_buffer_with_alignment(
+                &vk::BufferCreateInfo {
+                    size: new_layout.size() as u64,
+                    usage: self.usage,
+                    ..Default::default()
+                },
+                &self.create_info,
+                new_layout.align() as u64,
+            )
+            .map_err(|_| std::alloc::AllocError)?;
+        let info = self.allocator.get_allocation_info(&allocation);
+        let buffer = Buffer::from_raw(self.allocator.clone(), buffer, allocation, self.usage);
+        let old_buffer = (&mut *self.buffer.get()).replace(buffer);
+        drop(old_buffer);
+        let ptr = NonNull::new(info.mapped_data as *mut u8).unwrap();
+        Ok(NonNull::slice_from_raw_parts(ptr, info.size as usize))
     }
 
     unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: Layout) {
@@ -386,25 +372,24 @@ unsafe impl std::alloc::Allocator for BufferAllocator {
 }
 impl<T> BufferLike for BufferVec<T> {
     fn raw_buffer(&self) -> vk::Buffer {
-        unsafe {
-            (&*self.0.allocator().buffer.get()).as_ref().unwrap().buffer
-        }
+        unsafe { (&*self.0.allocator().buffer.get()).as_ref().unwrap().buffer }
     }
     fn size(&self) -> vk::DeviceSize {
-        unsafe {
-            (&*self.0.allocator().buffer.get()).as_ref().unwrap().size
-        }
+        unsafe { (&*self.0.allocator().buffer.get()).as_ref().unwrap().size }
     }
     fn device_address(&self) -> vk::DeviceAddress {
         unsafe {
-            (&*self.0.allocator().buffer.get()).as_ref().unwrap().device_address
+            (&*self.0.allocator().buffer.get())
+                .as_ref()
+                .unwrap()
+                .device_address
         }
     }
 }
 impl<T> BufferVec<T> {
     /// Create a buffer for small amount of host -> device dataflow.
-    /// On Discrete devices: 
-    /// 
+    /// On Discrete devices:
+    ///
     /// Integrated, ReBar: Create a new buffer with HOST_VISIBLE, preferably DEVICE_LOCAL memory.
     /// Bar: Create a new buffer on the 256MB Bar.
     /// Discrete: Create a new buffer on device memory. Application to use StagingBelt for updates.
@@ -444,7 +429,7 @@ impl<T> BufferVec<T> {
             },
         }))
     }
-    pub fn new_staging(
+    pub fn new_host(
         allocator: Allocator,
         alignment: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
@@ -481,14 +466,19 @@ impl<T> BufferVec<T> {
     }
 
     pub fn flush(&mut self) -> VkResult<()> {
-        let allocation = &unsafe{&mut *self.0.allocator().buffer.get()}.as_ref().unwrap().allocation;
-        self.0.allocator().allocator.flush_allocation(allocation, 0, self.0.len() as u64)
+        let Some(buffer) = &unsafe { &mut *self.0.allocator().buffer.get() }.as_ref() else {
+            return Ok(());
+        };
+        self.0
+            .allocator()
+            .allocator
+            .flush_allocation(&buffer.allocation, 0, self.0.len() as u64)
     }
 }
 
 pub struct BufferVec<T>(Vec<T, BufferAllocator>);
-unsafe impl<T: Send> Send for BufferVec<T>{}
-unsafe impl<T: Sync> Sync for BufferVec<T>{}
+unsafe impl<T: Send> Send for BufferVec<T> {}
+unsafe impl<T: Sync> Sync for BufferVec<T> {}
 impl<T> Deref for BufferVec<T> {
     type Target = Vec<T, BufferAllocator>;
 

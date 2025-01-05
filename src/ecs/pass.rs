@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use ash::vk;
-use bevy::ecs::system::ScheduleSystem;
 use bevy::{
     ecs::{
         component::ComponentId,
@@ -9,10 +8,10 @@ use bevy::{
             graph::{DiGraph, Direction},
             NodeId, ScheduleBuildError, ScheduleBuildPass, ScheduleGraph,
         },
-        system::{SystemParam, SystemState, InfallibleSystemWrapper},
+        system::{InfallibleSystemWrapper, SystemState},
         world::World,
     },
-    prelude::{IntoSystem, System, SystemParamFunction},
+    prelude::{IntoSystem, System},
 };
 use petgraph::{
     graphmap::GraphMap,
@@ -50,9 +49,11 @@ impl RenderSystemsPass {
         let mut system: T::System = IntoSystem::into_system(system);
         system.initialize(world);
 
-        graph.systems.push(bevy::ecs::schedule::SystemNode::new(
-            Box::new(InfallibleSystemWrapper::new(IntoSystem::into_system(system))),
-        ));
+        graph
+            .systems
+            .push(bevy::ecs::schedule::SystemNode::new(Box::new(
+                InfallibleSystemWrapper::new(IntoSystem::into_system(system)),
+            )));
         graph.system_conditions.push(Vec::new());
 
         // ignore ambiguities with auto sync points

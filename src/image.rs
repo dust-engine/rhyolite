@@ -1,7 +1,7 @@
 use ash::{prelude::VkResult, vk};
 use bevy::math::{IVec3, UVec3};
 
-use crate::{Allocator, HasDevice};
+use crate::Allocator;
 use vk_mem::Alloc;
 
 pub trait ImageLike: Send + Sync + 'static {

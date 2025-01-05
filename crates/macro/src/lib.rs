@@ -64,7 +64,7 @@ impl GPUFutureTraverser {
                 unsafe {
                     let r = &mut __retained_values.assume_init_mut().#count;
                     Vec::<_>::push(r, #tokens);
-                    GPUOwned::__retain(r.last_mut().unwrap())
+                    rhyolite::future::GPUOwned::__retain(r.last_mut().unwrap())
                 }
             }
         } else if self.is_in_divergent_control_flow {
@@ -73,7 +73,7 @@ impl GPUFutureTraverser {
                     let r = &mut __retained_values.assume_init_mut().#count;
                     let old = std::mem::replace(r, Some(#tokens));
                     assert!(old.is_none());
-                    GPUOwned::__retain(r.as_mut().unwrap())
+                    rhyolite::future::GPUOwned::__retain(r.as_mut().unwrap())
                 }
             }
         } else {
@@ -81,7 +81,7 @@ impl GPUFutureTraverser {
                 unsafe{
                     let r = maybe_uninit_new(&mut __retained_values.assume_init_mut().#count);
                     r.write(#tokens);
-                    GPUOwned::__retain(r.assume_init_mut())
+                    rhyolite::future::GPUOwned::__retain(r.assume_init_mut())
                 }
             }
         }

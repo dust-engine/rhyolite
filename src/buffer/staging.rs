@@ -7,23 +7,26 @@ use std::{
     sync::Arc,
 };
 
+use crate::Device;
 use ash::vk;
 use bevy::{
     app::Plugin,
     ecs::{
-        system::{Local, ResMut, Resource},
+        system::{ResMut, Resource},
         world::FromWorld,
     },
+    reflect::List,
 };
 use bytemuck::{AnyBitPattern, NoUninit};
 
-use crate::{commands::SemaphoreSignalCommands, semaphore::TimelineSemaphore, BufferLike, Device};
+use super::BufferLike;
 
 impl FromWorld for StagingBelt {
     fn from_world(world: &mut bevy::ecs::world::World) -> Self {
         let device = world.resource::<Device>().clone();
         let chunk_size = 64 * 1024 * 1024;
 
+        /*
         let mut requirements = vk::MemoryRequirements2::default();
         unsafe {
             device.get_device_buffer_memory_requirements(
@@ -35,7 +38,8 @@ impl FromWorld for StagingBelt {
                 &mut requirements,
             );
         }
-        assert_eq!(requirements.memory_requirements.size, chunk_size);
+        */
+        //assert_eq!(requirements.memory_requirements.size, chunk_size);
 
         let Some((memory_type_index, _)) = device
             .physical_device()
@@ -48,7 +52,7 @@ impl FromWorld for StagingBelt {
                 memory_type
                     .property_flags
                     .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
-                    && requirements.memory_requirements.memory_type_bits & (1 << index) != 0
+                //&& requirements.memory_requirements.memory_type_bits & (1 << index) != 0
             })
             .max_by_key(|(_, memory_type)| {
                 let mut priority: i32 = 0;
@@ -92,6 +96,10 @@ impl FromWorld for StagingBelt {
     }
 }
 
+struct StagingBeltCleanupFrame {
+    tail: vk::DeviceSize,
+}
+
 #[derive(Resource)]
 pub struct StagingBelt {
     device: Device,
@@ -101,12 +109,13 @@ pub struct StagingBelt {
     used_chunks: VecDeque<StagingBeltChunk>,
     memory_type_index: u32,
     usage: vk::BufferUsageFlags,
-
-    lifetime_marker: Vec<(Arc<TimelineSemaphore>, u64)>,
+    frames: VecDeque<Arc<StagingBeltCleanupFrame>>,
 }
 
 /// Ring allocator for staging buffers.
 /// Good for occasional updates of device-local buffers.
+///
+/// Maintains an allocation count.
 impl StagingBelt {
     pub(crate) fn new_with_memory_type_index(
         device: Device,
@@ -121,106 +130,59 @@ impl StagingBelt {
             tail: 0,
             used_chunks: VecDeque::new(),
             memory_type_index: memory_type_index as u32,
-            lifetime_marker: Vec::new(),
             usage,
+            frames: VecDeque::new(),
         }
     }
-    fn cleanup(&mut self, jobs: &mut VecDeque<StagingBufferCleanupJob>) {
-        'pop_ready_jobs: while let Some(job) = jobs.front() {
-            for (sem, val) in job.lifetime_marker.iter() {
-                if !sem.is_signaled(*val) {
-                    break 'pop_ready_jobs;
-                }
+
+    // Needs to be regularily called. By default, this is called by a system in the Last stage.
+    pub fn cleanup(&mut self) {
+        'pop_ready_jobs: while let Some(frame) = self.frames.front() {
+            if Arc::strong_count(frame) > 1 {
+                break 'pop_ready_jobs;
             }
-            // All semaphores in this job are now marked as ready.
-            let job = jobs.pop_front().unwrap();
-            assert!(self.head < job.tail);
-            self.head = job.tail;
+            // Everything using this segment of the staging belt has now finished execution.
+            let new_frame = self.frames.pop_front().unwrap();
+            assert!(self.head <= new_frame.tail);
+            self.head = new_frame.tail;
         }
 
-        if !self.lifetime_marker.is_empty() {
-            let job = StagingBufferCleanupJob {
-                lifetime_marker: std::mem::take(&mut self.lifetime_marker),
-                tail: self.tail,
-            };
-            jobs.push_back(job);
-        }
+        let frame = StagingBeltCleanupFrame { tail: self.tail };
+        self.frames.push_back(Arc::new(frame));
     }
-    #[must_use]
-    pub fn start(&mut self, commands: &mut impl SemaphoreSignalCommands) -> StagingBeltBatchJob {
-        self.start_aligned(commands, 1)
-    }
-    #[must_use]
-    pub fn start_aligned(
-        &mut self,
-        commands: &mut impl SemaphoreSignalCommands,
-        alignment: u32,
-    ) -> StagingBeltBatchJob {
-        let (sem, val) = commands.signal_semaphore(vk::PipelineStageFlags2KHR::TRANSFER);
-
-        for (curr_sem, curr_val) in self.lifetime_marker.iter_mut() {
-            if Arc::ptr_eq(curr_sem, &sem) {
-                *curr_val = val.max(*curr_val);
-                return StagingBeltBatchJob {
-                    belt: self,
-                    dirty: false,
-                    alignment,
-                };
-            }
-        }
-        self.lifetime_marker.push((sem, val));
-        StagingBeltBatchJob {
-            belt: self,
-            dirty: false,
-            alignment,
-        }
-    }
-}
-struct StagingBeltChunk {
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
-    ptr: NonNull<u8>,
-    device_address: vk::DeviceAddress,
-    start_index: u64,
-    end_index: u64,
-}
-unsafe impl Send for StagingBeltChunk {}
-unsafe impl Sync for StagingBeltChunk {}
-
-pub struct StagingBeltBatchJob<'a> {
-    belt: &'a mut StagingBelt,
-    alignment: u32,
-    dirty: bool,
-}
-
-impl StagingBeltBatchJob<'_> {
-    pub fn push_item<T>(&mut self, item: &T) -> StagingBeltSuballocation<T> {
+    pub fn push_item<T: Copy>(&mut self, item: &T) -> StagingBeltSuballocation<T> {
         let mut x = self.allocate_item::<T>();
         x.write(item);
         x
     }
     pub fn allocate_item<T>(&mut self) -> StagingBeltSuballocation<T> {
-        let allocation = self.allocate_buffer(std::mem::size_of::<T>() as u64);
+        let allocation = self.allocate_buffer(
+            std::mem::size_of::<T>() as u64,
+            std::mem::align_of::<T>() as u64,
+        );
         StagingBeltSuballocation {
             _marker: std::marker::PhantomData,
             ..allocation
         }
     }
-    pub fn allocate_buffer(&mut self, size: vk::DeviceSize) -> StagingBeltSuballocation<[u8]> {
-        self.dirty = true;
-        if size > self.belt.chunk_size {
+    pub fn allocate_buffer(
+        &mut self,
+        size: vk::DeviceSize,
+        alignment: u64,
+    ) -> StagingBeltSuballocation<[u8]> {
+        if size > self.chunk_size {
             unimplemented!()
         }
-        let start = self.belt.tail;
-        let aligned_start = self.belt.tail.next_multiple_of(self.alignment as u64);
+        let start = self.tail;
+        let aligned_start = self.tail.next_multiple_of(alignment as u64);
         let end = aligned_start + size;
 
         let mut current_chunk_end_index = 0;
-        if let Some(current_chunk) = &mut self.belt.used_chunks.back() {
+        if let Some(current_chunk) = &mut self.used_chunks.back() {
             if end <= current_chunk.end_index {
                 // there's enough space
                 let offset = aligned_start - current_chunk.start_index;
-                self.belt.tail = end;
+                self.tail = end;
                 return StagingBeltSuballocation {
                     buffer: current_chunk.buffer,
                     start,
@@ -232,6 +194,7 @@ impl StagingBeltBatchJob<'_> {
                         current_chunk.device_address + offset
                     },
                     ptr: unsafe { current_chunk.ptr.add(offset as usize) },
+                    frame: self.frames.back().unwrap().clone(),
                     _marker: PhantomData,
                 };
             } else {
@@ -239,17 +202,17 @@ impl StagingBeltBatchJob<'_> {
             }
         }
         // not enough space at the back of the belt. try reuse heads of the belt.
-        if let Some(peek) = self.belt.used_chunks.front() {
-            if self.belt.head >= peek.end_index {
+        if let Some(peek) = self.used_chunks.front() {
+            if self.head >= peek.end_index {
                 // has already been freed
-                let mut chunk = self.belt.used_chunks.pop_front().unwrap();
-                chunk.end_index = current_chunk_end_index + self.belt.chunk_size;
+                let mut chunk = self.used_chunks.pop_front().unwrap();
+                chunk.end_index = current_chunk_end_index + self.chunk_size;
                 chunk.start_index = current_chunk_end_index;
                 let ptr = chunk.ptr;
                 let buffer = chunk.buffer;
                 let device_address = chunk.device_address;
-                self.belt.used_chunks.push_back(chunk);
-                self.belt.tail = current_chunk_end_index + size;
+                self.used_chunks.push_back(chunk);
+                self.tail = current_chunk_end_index + size;
                 return StagingBeltSuballocation {
                     buffer,
                     start: current_chunk_end_index,
@@ -257,6 +220,7 @@ impl StagingBeltBatchJob<'_> {
                     size,
                     ptr,
                     device_address,
+                    frame: self.frames.back().unwrap().clone(),
                     _marker: PhantomData,
                 };
             }
@@ -264,12 +228,11 @@ impl StagingBeltBatchJob<'_> {
         // Can't reuse any old chunks, so we need to allocate a new one
         unsafe {
             let buffer = self
-                .belt
                 .device
                 .create_buffer(
                     &vk::BufferCreateInfo {
-                        usage: self.belt.usage,
-                        size: self.belt.chunk_size,
+                        usage: self.usage,
+                        size: self.chunk_size,
                         ..Default::default()
                     },
                     None,
@@ -277,19 +240,17 @@ impl StagingBeltBatchJob<'_> {
                 .unwrap();
             let mut memory_allocate_flags = vk::MemoryAllocateFlags::default();
             if self
-                .belt
                 .usage
                 .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
             {
                 memory_allocate_flags |= vk::MemoryAllocateFlags::DEVICE_ADDRESS;
             }
             let memory = self
-                .belt
                 .device
                 .allocate_memory(
                     &vk::MemoryAllocateInfo {
-                        allocation_size: self.belt.chunk_size,
-                        memory_type_index: self.belt.memory_type_index,
+                        allocation_size: self.chunk_size,
+                        memory_type_index: self.memory_type_index,
                         ..Default::default()
                     }
                     .push_next(&mut vk::MemoryAllocateFlagsInfo {
@@ -299,23 +260,17 @@ impl StagingBeltBatchJob<'_> {
                     None,
                 )
                 .unwrap();
-            self.belt
-                .device
-                .bind_buffer_memory(buffer, memory, 0)
-                .unwrap();
+            self.device.bind_buffer_memory(buffer, memory, 0).unwrap();
             let ptr = self
-                .belt
                 .device
                 .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
                 .unwrap() as *mut u8;
             let ptr = NonNull::new(ptr).unwrap();
             let device_address = if self
-                .belt
                 .usage
                 .contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
             {
-                self.belt
-                    .device
+                self.device
                     .get_buffer_device_address(&vk::BufferDeviceAddressInfo {
                         buffer,
                         ..Default::default()
@@ -327,31 +282,36 @@ impl StagingBeltBatchJob<'_> {
                 buffer,
                 memory,
                 ptr,
-                end_index: self.belt.chunk_size + current_chunk_end_index,
+                end_index: self.chunk_size + current_chunk_end_index,
                 start_index: current_chunk_end_index,
                 device_address,
             };
-            self.belt.used_chunks.push_back(chunk);
-            self.belt.tail = current_chunk_end_index + size;
+            self.used_chunks.push_back(chunk);
+            self.tail = current_chunk_end_index + size;
             return StagingBeltSuballocation {
                 buffer,
                 start: current_chunk_end_index,
                 offset: 0,
                 size,
                 ptr,
+                frame: self.frames.back().unwrap().clone(),
                 device_address,
                 _marker: PhantomData,
             };
         }
     }
 }
-impl Drop for StagingBeltBatchJob<'_> {
-    fn drop(&mut self) {
-        if !self.dirty {
-            self.belt.lifetime_marker.pop();
-        }
-    }
+
+struct StagingBeltChunk {
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    ptr: NonNull<u8>,
+    device_address: vk::DeviceAddress,
+    start_index: u64,
+    end_index: u64,
 }
+unsafe impl Send for StagingBeltChunk {}
+unsafe impl Sync for StagingBeltChunk {}
 
 pub struct StagingBeltSuballocation<T: ?Sized> {
     pub buffer: vk::Buffer,
@@ -361,8 +321,11 @@ pub struct StagingBeltSuballocation<T: ?Sized> {
     pub size: vk::DeviceSize,
     ptr: NonNull<u8>,
     device_address: vk::DeviceAddress,
-    _marker: std::marker::PhantomData<T>,
+    frame: Arc<StagingBeltCleanupFrame>,
+    _marker: std::marker::PhantomData<*mut T>,
 }
+unsafe impl<T: ?Sized> Send for StagingBeltSuballocation<T> {}
+unsafe impl<T: ?Sized> Sync for StagingBeltSuballocation<T> {}
 impl<T: ?Sized> BufferLike for StagingBeltSuballocation<T> {
     fn raw_buffer(&self) -> vk::Buffer {
         self.buffer
@@ -425,25 +388,12 @@ impl DerefMut for StagingBeltSuballocation<[u8]> {
     }
 }
 
-struct StagingBufferCleanupJob {
-    lifetime_marker: Vec<(Arc<TimelineSemaphore>, u64)>,
-    tail: u64,
-}
-fn staging_buffer_cleanup_system(
-    mut staging_belt: ResMut<StagingBelt>,
-    mut uniform_belt: ResMut<UniformBelt>,
-    mut staging_cleanup_jobs: Local<VecDeque<StagingBufferCleanupJob>>,
-    mut uniform_cleanup_jobs: Local<VecDeque<StagingBufferCleanupJob>>,
-) {
-    staging_belt.cleanup(&mut staging_cleanup_jobs);
-    uniform_belt.0.cleanup(&mut uniform_cleanup_jobs);
-}
-
 /// Ring allocator for uniform buffers
 /// This will be created on host-visible and preferably device-local memory.
 #[derive(Resource)]
 pub struct UniformBelt(StagingBelt);
 impl UniformBelt {
+    /*
     #[must_use]
     pub fn start(&mut self, commands: &mut impl SemaphoreSignalCommands) -> StagingBeltBatchJob {
         let alignment = self
@@ -464,6 +414,7 @@ impl UniformBelt {
     ) -> StagingBeltBatchJob {
         self.0.start_aligned(commands, alignment)
     }
+    */
 }
 impl FromWorld for UniformBelt {
     fn from_world(world: &mut bevy::prelude::World) -> Self {
@@ -486,6 +437,7 @@ impl FromWorld for UniformBelt {
         }
         let chunk_size = 1 * 1024 * 1024;
 
+        /*
         let mut requirements = vk::MemoryRequirements2::default();
         unsafe {
             device.get_device_buffer_memory_requirements(
@@ -498,6 +450,7 @@ impl FromWorld for UniformBelt {
             );
         }
         assert_eq!(requirements.memory_requirements.size, chunk_size);
+        */
         let Some((memory_type_index, flags)) = device
             .physical_device()
             .properties()
@@ -509,7 +462,7 @@ impl FromWorld for UniformBelt {
                 memory_type
                     .property_flags
                     .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
-                    && requirements.memory_requirements.memory_type_bits & (1 << index) != 0
+                //&& requirements.memory_requirements.memory_type_bits & (1 << index) != 0
             })
             .max_by_key(|(_, memory_type)| {
                 let mut priority: i32 = 0;
@@ -557,6 +510,13 @@ impl FromWorld for UniformBelt {
     }
 }
 
+fn staging_buffer_cleanup_system(
+    mut staging_belt: ResMut<StagingBelt>,
+    mut uniform_belt: ResMut<UniformBelt>,
+) {
+    staging_belt.cleanup();
+    uniform_belt.0.cleanup();
+}
 pub(crate) struct StagingBeltPlugin;
 impl Plugin for StagingBeltPlugin {
     fn build(&self, app: &mut bevy::prelude::App) {

@@ -1,16 +1,14 @@
 #![feature(maybe_uninit_write_slice)]
 
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::DerefMut;
-use std::os::raw::c_void;
 use std::sync::Arc;
 
-use bevy::asset::{AssetServer, Assets};
+use bevy::asset::AssetServer;
 use bevy::ecs::prelude::*;
-use bevy::ecs::query::QuerySingleError;
 
-use bevy::math::Vec2;
 use bevy::utils::HashMap;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
@@ -20,17 +18,19 @@ use bevy::{
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::ash::khr::{dynamic_rendering, push_descriptor};
+use rhyolite::commands::copy_buffer_to_image;
+use rhyolite::future::{gpu_future, GPUFutureBlock};
 use rhyolite::{
     ash::vk,
+    buffer::{BufferVec, StagingBelt},
+    ecs::IntoRenderSystem,
+    future::{GPUBorrowedResource, GPUFutureBlockExt, GPUOwnedResource},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
         PipelineCache, PipelineLayout,
     },
-    shader::{ShaderModule, SpecializedShader},
-    Allocator, DeferredOperationTaskPool, Device, HasDevice,
-    Image, ImageLike, ImageViewLike, RhyoliteApp, Sampler,
-    future::GPUBorrowedResource,
-    buffer::BufferVec,
+    shader::SpecializedShader,
+    Allocator, Device, HasDevice, Image, ImageLike, RhyoliteApp, Sampler,
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -62,15 +62,15 @@ impl Plugin for EguiBasePlugin {
 impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> {
     fn build(&self, app: &mut App) {
         app.add_plugins((EguiBasePlugin, bevy_egui::EguiPlugin));
-        //app.add_systems(
-        //    PostUpdate,
-        //    (
-                //collect_outputs::<Filter>. after(EguiSet::ProcessOutput),
-                //prepare_image::<Filter>.after(collect_outputs::<Filter>),
-                /*
+        app.add_systems(
+            PostUpdate,
+            (
+                collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
+                prepare_image::<Filter>.after(collect_outputs::<Filter>),
                 transfer_image::<Filter>
-                    .after(prepare_image::<Filter>)
-                    .with_barriers(image_barrier::<Filter>),
+                    .into_render_system::<rhyolite::selectors::DedicatedTransfer>()
+                    .after(prepare_image::<Filter>),
+                /*
                 draw::<Filter>
                     .with_barriers(draw_barriers::<Filter>)
                     .after(collect_outputs::<Filter>)
@@ -78,8 +78,8 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
                     .after(transfer_image::<Filter>)
                     .before(present),
                 */
-        //    ),
-        //);
+            ),
+        );
         app.add_systems(Startup, initialize_pipelines);
         app.add_device_extension::<dynamic_rendering::Meta>()
             .unwrap();
@@ -91,6 +91,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
     }
     fn finish(&self, app: &mut App) {
         app.init_resource::<EguiDeviceBuffer<Filter>>();
+        app.init_resource::<EguiHostBuffer<Filter>>();
         let allocator = app.world().resource::<Allocator>().clone();
 
         /*
@@ -261,17 +262,51 @@ fn initialize_pipelines(
     commands.insert_resource(EguiPipelines { pipeline, layout });
 }
 
+#[derive(Resource)]
 pub struct EguiHostBuffer<Filter: QueryFilter> {
     index_buffer: BufferVec<MaybeUninit<u32>>,
     vertex_buffer: BufferVec<MaybeUninit<egui::epaint::Vertex>>,
     marker: std::marker::PhantomData<Filter>,
 }
+impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiHostBuffer<Filter> {
+    fn from_world(world: &mut World) -> Self {
+        let allocator = world.get_resource::<Allocator>().unwrap();
+        let is_staging = allocator
+            .device()
+            .physical_device()
+            .properties()
+            .memory_model
+            .storage_buffer_should_use_staging();
+        Self {
+            index_buffer: BufferVec::new_upload(
+                allocator.clone(),
+                1,
+                if is_staging {
+                    vk::BufferUsageFlags::TRANSFER_SRC
+                } else {
+                    vk::BufferUsageFlags::INDEX_BUFFER
+                },
+            ),
+            vertex_buffer: BufferVec::new_upload(
+                allocator.clone(),
+                1,
+                if is_staging {
+                    vk::BufferUsageFlags::TRANSFER_SRC
+                } else {
+                    vk::BufferUsageFlags::VERTEX_BUFFER
+                },
+            ),
+            marker: PhantomData,
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct EguiDeviceBuffer<Filter: QueryFilter> {
     total_indices_count: usize,
     total_vertices_count: usize,
-    index_buffer: GPUBorrowedResource<BufferVec<u32>>,
-    vertex_buffer: GPUBorrowedResource<BufferVec<egui::epaint::Vertex>>,
+    index_buffer: GPUBorrowedResource<BufferVec<MaybeUninit<u32>>>,
+    vertex_buffer: GPUBorrowedResource<BufferVec<MaybeUninit<egui::epaint::Vertex>>>,
     textures: BTreeMap<u64, (GPUBorrowedResource<Image>, egui::TextureOptions)>,
     marker: std::marker::PhantomData<Filter>,
     samplers: HashMap<egui::TextureOptions, Sampler>,
@@ -304,16 +339,16 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiDeviceBuffer
     }
 }
 
-
-
-
 /// Collect output from egui and copy it into a host-side buffer
 /// Create textures
 fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
-    mut host_buffers: EguiHostBuffer<Filter>,
-    mut device_buffers: &mut EguiDeviceBuffer<Filter>,
-    mut output: &mut EguiRenderOutput,
+    mut host_buffers: ResMut<EguiHostBuffer<Filter>>,
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+    egui_render_output: Query<&EguiRenderOutput, Filter>,
 ) {
+    let Ok(output) = egui_render_output.get_single() else {
+        return;
+    };
 
     let device_buffers = &mut *device_buffers;
     let mut total_indices_count: usize = 0;
@@ -365,22 +400,20 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
     }
     assert_eq!(total_indices_count, device_buffers.total_indices_count);
     assert_eq!(total_vertices_count, device_buffers.total_vertices_count);
-    host_buffers
-        .vertex_buffer
-        .flush()
-        .unwrap();
-    host_buffers
-        .index_buffer
-        .flush()
-        .unwrap();
+    host_buffers.vertex_buffer.flush().unwrap();
+    host_buffers.index_buffer.flush().unwrap();
 }
 
+/// Create the target images.
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut host_buffers: EguiHostBuffer<Filter>,
-    mut device_buffers: &mut EguiDeviceBuffer<Filter>,
-    mut output: &mut EguiRenderOutput,
-    allocator: &Allocator,
+    host_buffers: ResMut<EguiHostBuffer<Filter>>,
+    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
+    egui_render_output: Query<&EguiRenderOutput, Filter>,
+    allocator: Res<Allocator>,
 ) {
+    let Ok(output) = egui_render_output.get_single() else {
+        return;
+    };
     for (texture_id, image_delta) in output
         .textures_delta
         .set
@@ -453,111 +486,79 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
     }
 }
 
-
-/* 
-
-fn image_barrier<Filter: QueryFilter + Send + Sync + 'static>(
-    mut barriers: In<Barriers>,
-    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
-) {
-    let Ok(output) = egui_render_output.get_single_mut() else {
-        return;
-    };
-    for (texture_id, image_delta) in output
-        .textures_delta
-        .set
-        .iter()
-        .filter(|(_, image_delta)| image_delta.is_whole())
-    {
-        let texture_id = match texture_id {
-            TextureId::Managed(id) => *id,
-            TextureId::User(id) => unimplemented!(),
+fn transfer_image<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
+    mut device_buffers: ResMut<'w, EguiDeviceBuffer<Filter>>,
+    mut egui_render_output: Query<'w, 's, &'w mut EguiRenderOutput, Filter>,
+    mut staging_belt: ResMut<'w, StagingBelt>,
+) -> impl GPUFutureBlock + use<'w, 's, Filter> {
+    gpu_future! { move
+        let Ok(output) = egui_render_output.get_single_mut() else {
+            return;
         };
-        barriers.transition(
-            &mut device_buffers.textures.get_mut(&texture_id).unwrap().0,
-            Access {
-                access: vk::AccessFlags2::TRANSFER_WRITE,
-                stage: vk::PipelineStageFlags2::COPY,
-            },
-            !image_delta.is_whole(),
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        );
-    }
-}
-
-fn transfer_image<Filter: QueryFilter + Send + Sync + 'static>(
-    mut commands: RenderCommands<'t'>,
-    device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<&mut EguiRenderOutput, Filter>,
-    mut staging_belt: ResMut<StagingBelt>,
-) {
-    let Ok(output) = egui_render_output.get_single_mut() else {
-        return;
-    };
-    if output.textures_delta.set.is_empty() {
-        return;
-    }
-    let mut staging_allocator = staging_belt.start(&mut commands);
-    for (texture_id, image_delta) in output.textures_delta.set.iter() {
-        let texture_id = match texture_id {
-            TextureId::Managed(id) => *id,
-            TextureId::User(id) => unimplemented!(),
-        };
-        let (target_image, _) = device_buffers.textures.get(&texture_id).unwrap();
-        let image_offset = image_delta.pos.unwrap_or([0, 0]);
-        let buffer_size_needed = image_delta.image.size().iter().product::<usize>()
-            * image_delta.image.bytes_per_pixel();
-        let mut staging_buffer = staging_allocator.allocate_buffer(buffer_size_needed as u64);
-        match &image_delta.image {
-            egui::epaint::ImageData::Color(image) => {
-                let slice = bytemuck::cast_slice(image.pixels.as_slice());
-                staging_buffer.copy_from_slice(slice);
-            }
-            egui::epaint::ImageData::Font(font_image) => {
-                let pixels = font_image.srgba_pixels(None);
-                let target_slice = staging_buffer.deref_mut();
-                let target_slice: &mut [u32] = bytemuck::cast_slice_mut(target_slice);
-                pixels.zip(target_slice).for_each(|(src, dst)| {
-                    let src: u32 = bytemuck::cast(src);
-                    *dst = src;
-                });
-            }
+        if output.textures_delta.set.is_empty() {
+            return;
         }
-        let update_info = vk::BufferImageCopy {
-            buffer_offset: staging_buffer.offset,
-            buffer_row_length: 0,
-            buffer_image_height: 0,
-            image_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            image_offset: vk::Offset3D {
-                x: image_offset[0] as i32,
-                y: image_offset[1] as i32,
-                z: 0,
-            },
-            image_extent: vk::Extent3D {
-                width: image_delta.image.size()[0] as u32,
-                height: image_delta.image.size()[1] as u32,
-                depth: 1,
-            },
-        };
-        commands.copy_buffer_to_image(
-            staging_buffer.buffer,
-            target_image.raw(),
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            &[update_info],
-        );
+        for (texture_id, image_delta) in output.textures_delta.set.iter() {
+            let texture_id = match texture_id {
+                TextureId::Managed(id) => *id,
+                TextureId::User(id) => unimplemented!(),
+            };
+            // Retrieve the image. Because this system runs after `prepare_image`, the image should already
+            // been prepared.
+            let (target_image, _) = device_buffers.textures.get_mut(&texture_id).unwrap();
+            let image_offset = image_delta.pos.unwrap_or([0, 0]);
+            let buffer_size_needed = image_delta.image.size().iter().product::<usize>()
+                * image_delta.image.bytes_per_pixel();
+            let mut staging_buffer = staging_belt.allocate_buffer(buffer_size_needed as u64, 1);
+            match &image_delta.image {
+                egui::epaint::ImageData::Color(image) => {
+                    let slice = bytemuck::cast_slice(image.pixels.as_slice());
+                    staging_buffer.copy_from_slice(slice);
+                }
+                egui::epaint::ImageData::Font(font_image) => {
+                    let pixels = font_image.srgba_pixels(None);
+                    let target_slice = staging_buffer.deref_mut();
+                    let target_slice: &mut [u32] = bytemuck::cast_slice_mut(target_slice);
+                    pixels.zip(target_slice).for_each(|(src, dst)| {
+                        let src: u32 = bytemuck::cast(src);
+                        *dst = src;
+                    });
+                }
+            }
+            let update_info = vk::BufferImageCopy {
+                buffer_offset: staging_buffer.offset,
+                buffer_row_length: 0,
+                buffer_image_height: 0,
+                image_subresource: vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                image_offset: vk::Offset3D {
+                    x: image_offset[0] as i32,
+                    y: image_offset[1] as i32,
+                    z: 0,
+                },
+                image_extent: vk::Extent3D {
+                    width: image_delta.image.size()[0] as u32,
+                    height: image_delta.image.size()[1] as u32,
+                    depth: 1,
+                },
+            };
+            let staging_buffer = retain!(staging_buffer);
+            let mut staging_buffer = GPUOwnedResource::new(staging_buffer);
+            copy_buffer_to_image(
+                &mut staging_buffer,
+                target_image);
+        }
     }
+    .run_in_parallel()
 }
 
 /// Resize the device buffers if necessary. Only runs on Discrete GPUs.
 fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
-    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-    commands: RenderCommands<'t'>,
+    device_buffers: &mut EguiDeviceBuffer<Filter>,
     allocator: Res<Allocator>,
 ) {
     let device_buffers: &mut EguiDeviceBuffer<Filter> = &mut *device_buffers;
@@ -565,11 +566,11 @@ fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
         device_buffers.vertex_buffer = {
             let mut buf = BufferVec::new_resource(
                 allocator.clone(),
+                4,
                 vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-                1,
             );
-            buf.realloc(device_buffers.total_vertices_count).unwrap();
-            RenderRes::new(buf)
+            buf.resize(device_buffers.total_vertices_count, MaybeUninit::uninit());
+            GPUBorrowedResource::new(buf)
         };
     }
 
@@ -577,43 +578,16 @@ fn resize_device_buffers<Filter: QueryFilter + Send + Sync + 'static>(
         device_buffers.index_buffer = {
             let mut buf = BufferVec::new_resource(
                 allocator.clone(),
+                4,
                 vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-                1,
             );
-            buf.realloc(device_buffers.total_indices_count).unwrap();
-            RenderRes::new(buf)
+            buf.resize(device_buffers.total_indices_count, MaybeUninit::uninit());
+            GPUBorrowedResource::new(buf)
         };
     }
 }
 
-fn copy_buffers_barrier<Filter: QueryFilter + Send + Sync + 'static>(
-    mut barriers: In<Barriers>,
-    mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
-) {
-    if device_buffers.total_vertices_count > 0 {
-        barriers.transition(
-            &mut device_buffers.vertex_buffer,
-            Access {
-                access: vk::AccessFlags2::TRANSFER_WRITE,
-                stage: vk::PipelineStageFlags2::COPY,
-            },
-            false,
-            (),
-        );
-    }
-
-    if device_buffers.total_indices_count > 0 {
-        barriers.transition(
-            &mut device_buffers.index_buffer,
-            Access {
-                access: vk::AccessFlags2::TRANSFER_WRITE,
-                stage: vk::PipelineStageFlags2::COPY,
-            },
-            false,
-            (),
-        );
-    }
-}
+/*
 /// Copy data from the host buffers to the device buffers. Only runs on Discrete GPUs.
 fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,

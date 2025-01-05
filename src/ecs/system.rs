@@ -24,7 +24,7 @@ use bevy::{
         system::{System, SystemMeta, SystemParam},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld},
     },
-    prelude::{In, IntoSystem, Mut, Resource, SystemInput, World},
+    prelude::{IntoSystem, Mut, Resource, SystemInput, World},
 };
 
 #[derive(Clone, Debug)]

@@ -1,10 +1,12 @@
 mod ctx;
 mod exec;
+mod ext;
 mod res;
 use std::{future::Future, mem::MaybeUninit, pin::Pin, task::Poll};
 
 pub use ctx::*;
 pub use exec::*;
+pub use ext::GPUFutureBlockExt;
 pub use res::*;
 
 pub use rhyolite_macros::gpu_future;
