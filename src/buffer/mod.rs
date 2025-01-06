@@ -372,17 +372,30 @@ unsafe impl std::alloc::Allocator for BufferAllocator {
 }
 impl<T> BufferLike for BufferVec<T> {
     fn raw_buffer(&self) -> vk::Buffer {
-        unsafe { (&*self.0.allocator().buffer.get()).as_ref().unwrap().buffer }
+        unsafe {
+            if let Some(x) = (&*self.0.allocator().buffer.get()).as_ref() {
+                x.buffer
+            } else {
+                vk::Buffer::null()
+            }
+        }
     }
     fn size(&self) -> vk::DeviceSize {
-        unsafe { (&*self.0.allocator().buffer.get()).as_ref().unwrap().size }
+        unsafe {
+            if let Some(x) = (&*self.0.allocator().buffer.get()).as_ref() {
+                x.size
+            } else {
+                0
+            }
+        }
     }
     fn device_address(&self) -> vk::DeviceAddress {
         unsafe {
-            (&*self.0.allocator().buffer.get())
-                .as_ref()
-                .unwrap()
-                .device_address
+            if let Some(x) = (&*self.0.allocator().buffer.get()).as_ref() {
+                x.device_address
+            } else {
+                0
+            }
         }
     }
 }

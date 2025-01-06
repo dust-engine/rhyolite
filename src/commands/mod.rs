@@ -1,6 +1,7 @@
 mod closure;
 mod combinator;
 mod image;
+mod render;
 
 pub use closure::*;
 pub use combinator::*;

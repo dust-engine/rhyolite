@@ -10,9 +10,12 @@ use bevy::asset::AssetServer;
 use bevy::ecs::prelude::*;
 
 use bevy::utils::HashMap;
+use bevy::window::WindowResolution;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
-    ecs::query::QueryFilter,
+    asset::Assets,
+    ecs::query::{QueryFilter, QuerySingleError},
+    math::Vec2,
     window::PrimaryWindow,
 };
 use bevy_egui::egui::TextureId;
@@ -20,17 +23,22 @@ pub use bevy_egui::*;
 use rhyolite::ash::khr::{dynamic_rendering, push_descriptor};
 use rhyolite::commands::copy_buffer_to_image;
 use rhyolite::future::{gpu_future, GPUFutureBlock};
+use rhyolite::ImageWithView;
 use rhyolite::{
     ash::vk,
-    buffer::{BufferVec, StagingBelt},
+    buffer::{BufferLike, BufferVec, StagingBelt},
+    commands::record_commands,
     ecs::IntoRenderSystem,
     future::{GPUBorrowedResource, GPUFutureBlockExt, GPUOwnedResource},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
         PipelineCache, PipelineLayout,
     },
+    shader::ShaderModule,
     shader::SpecializedShader,
-    Allocator, Device, HasDevice, Image, ImageLike, RhyoliteApp, Sampler,
+    swapchain::{SwapchainImage, SwapchainSystemSet},
+    Allocator, DeferredOperationTaskPool, Device, HasDevice, Image, ImageExt, ImageLike,
+    ImageViewLike, RhyoliteApp, Sampler,
 };
 
 pub struct EguiPlugin<Filter: QueryFilter = With<PrimaryWindow>> {
@@ -70,14 +78,11 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
                 transfer_image::<Filter>
                     .into_render_system::<rhyolite::selectors::DedicatedTransfer>()
                     .after(prepare_image::<Filter>),
-                /*
                 draw::<Filter>
-                    .with_barriers(draw_barriers::<Filter>)
+                    .into_render_system::<rhyolite::selectors::Graphics>()
                     .after(collect_outputs::<Filter>)
-                    .after(acquire_swapchain_image::<Filter>)
                     .after(transfer_image::<Filter>)
-                    .before(present),
-                */
+                    .in_set(SwapchainSystemSet),
             ),
         );
         app.add_systems(Startup, initialize_pipelines);
@@ -307,7 +312,13 @@ pub struct EguiDeviceBuffer<Filter: QueryFilter> {
     total_vertices_count: usize,
     index_buffer: GPUBorrowedResource<BufferVec<MaybeUninit<u32>>>,
     vertex_buffer: GPUBorrowedResource<BufferVec<MaybeUninit<egui::epaint::Vertex>>>,
-    textures: BTreeMap<u64, (GPUBorrowedResource<Image>, egui::TextureOptions)>,
+    textures: BTreeMap<
+        u64,
+        (
+            GPUBorrowedResource<ImageWithView<Image>>,
+            egui::TextureOptions,
+        ),
+    >,
     marker: std::marker::PhantomData<Filter>,
     samplers: HashMap<egui::TextureOptions, Sampler>,
 }
@@ -448,7 +459,10 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
             initial_layout: vk::ImageLayout::UNDEFINED,
             ..Default::default()
         };
-        let image = Image::new_device_image(allocator.clone(), &create_info).unwrap();
+        let image = Image::new_device_image(allocator.clone(), &create_info)
+            .unwrap()
+            .with_view()
+            .unwrap();
         let image = GPUBorrowedResource::new(image);
         device_buffers
             .textures
@@ -620,234 +634,168 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
         );
     }
 }
-
-fn draw_barriers<Filter: QueryFilter + Send + Sync + 'static>(
-    mut barriers: In<Barriers>,
-    mut device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(&mut EguiRenderOutput, &mut SwapchainImage), Filter>,
-    egui_pipeline: Res<EguiPipelines>,
-) -> bool {
-    let (mut output, swapchain_image) = match egui_render_output.get_single_mut() {
-        Ok(r) => r,
-        Err(QuerySingleError::NoEntities(_)) => return false,
-        Err(QuerySingleError::MultipleEntities(_)) => panic!(),
-    };
-
-    for (texture_id, _) in output
-        .textures_delta
-        .set
-        .iter()
-        .filter(|(_, image_delta)| image_delta.is_whole())
-    {
-        let texture_id = match texture_id {
-            TextureId::Managed(id) => *id,
-            TextureId::User(id) => unimplemented!(),
-        };
-        barriers.transition(
-            &mut device_buffer.textures.get_mut(&texture_id).unwrap().0,
-            Access {
-                access: vk::AccessFlags2::SHADER_SAMPLED_READ,
-                stage: vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            },
-            true,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
-    }
-
-    output.textures_delta.set.clear();
-
-    if output.paint_jobs.is_empty() {
-        return false;
-    }
-    if !egui_pipeline.pipeline.is_ready() {
-        return false;
-    }
-
-    barriers.transition(
-        swapchain_image.into_inner().deref_mut(),
-        Access {
-            stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-        },
-        false,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-    );
-
-    if device_buffer.vertex_buffer.len() > 0 {
-        barriers.transition(
-            &mut device_buffer.vertex_buffer,
-            Access {
-                stage: vk::PipelineStageFlags2::VERTEX_INPUT,
-                access: vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
-            },
-            true,
-            (),
-        );
-    }
-    if device_buffer.index_buffer.len() > 0 {
-        barriers.transition(
-            &mut device_buffer.index_buffer,
-            Access {
-                stage: vk::PipelineStageFlags2::INDEX_INPUT,
-                access: vk::AccessFlags2::INDEX_READ,
-            },
-            true,
-            (),
-        );
-    }
-    true
-}
-/// Issue draw commands for egui.
-pub fn draw<Filter: QueryFilter + Send + Sync + 'static>(
-    BarrierProducerOut(should_draw): BarrierProducerOut<bool>,
-    mut commands: RenderCommands<'g'>,
-    mut host_buffers: ResMut<PerFrame<EguiHostBuffer<Filter>>>,
-    device_buffer: ResMut<EguiDeviceBuffer<Filter>>,
-    mut egui_render_output: Query<(&EguiRenderOutput, &mut SwapchainImage, &WindowSize), Filter>,
-    mut egui_pipeline: ResMut<EguiPipelines>,
-    egui_settings: Res<EguiSettings>,
-    pipeline_cache: Res<PipelineCache>,
-
-    assets: Res<Assets<ShaderModule>>,
-    task_pool: Res<DeferredOperationTaskPool>,
-) {
-    let Some(pipeline) = pipeline_cache.retrieve(&mut egui_pipeline.pipeline, &assets, &task_pool)
-    else {
-        return;
-    };
-    if !should_draw {
-        return;
-    }
-    let (output, swapchain_image, window_size) = match egui_render_output.get_single_mut() {
-        Ok(r) => r,
-        Err(QuerySingleError::NoEntities(_)) => return,
-        Err(QuerySingleError::MultipleEntities(_)) => panic!(),
-    };
-    let host_buffers = host_buffers.on_frame(&commands);
-    let mut pass = commands.begin_rendering(&vk::RenderingInfo {
-        flags: vk::RenderingFlags::empty(),
-        render_area: vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D {
-                width: swapchain_image.extent().x,
-                height: swapchain_image.extent().y,
-            },
-        },
-        layer_count: 1,
-        color_attachment_count: 1,
-        p_color_attachments: &vk::RenderingAttachmentInfo {
-            image_view: swapchain_image.raw_image_view(),
-            image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            resolve_mode: vk::ResolveModeFlags::NONE,
-            resolve_image_view: vk::ImageView::null(),
-            resolve_image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            load_op: vk::AttachmentLoadOp::CLEAR,
-            store_op: vk::AttachmentStoreOp::STORE,
-            clear_value: vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 0.0],
-                },
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    });
-    pass.bind_pipeline(pipeline);
-
-    let mut vertex_buffer = device_buffer.vertex_buffer.raw_buffer();
-    let mut index_buffer = device_buffer.index_buffer.raw_buffer();
-    if vertex_buffer == vk::Buffer::null() || index_buffer == vk::Buffer::null() {
-        vertex_buffer = host_buffers.vertex_buffer.raw_buffer();
-        index_buffer = host_buffers.index_buffer.raw_buffer();
-    }
-    let mut current_vertex = 0;
-    let mut current_indice = 0;
-
-    pass.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
-    pass.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
-    let viewport_physical_size = Vec2::new(
-        swapchain_image.extent().x as f32,
-        swapchain_image.extent().y as f32,
-    );
-    pass.set_viewport(
-        0,
-        &[vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: viewport_physical_size.x,
-            height: viewport_physical_size.y,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        }],
-    );
-    let scale_factor = egui_settings.scale_factor * window_size.scale_factor;
-    let viewport_logical_size = viewport_physical_size / scale_factor;
-    pass.push_constants(
-        egui_pipeline.layout.raw(),
-        vk::ShaderStageFlags::VERTEX,
-        0,
-        &bytemuck::cast_slice(&[viewport_logical_size.x, viewport_logical_size.y]),
-    );
-
-    for egui::epaint::ClippedPrimitive {
-        clip_rect,
-        primitive,
-    } in output.paint_jobs.iter()
-    {
-        let mesh = match primitive {
-            egui::epaint::Primitive::Mesh(mesh) => mesh,
-            egui::epaint::Primitive::Callback(_) => panic!(),
-        };
-        let clip_min = Vec2::new(clip_rect.min.x, clip_rect.min.y) * scale_factor;
-        let clip_max = Vec2::new(clip_rect.max.x, clip_rect.max.y) * scale_factor;
-        let clip_extent = clip_max - clip_min;
-        pass.set_scissor(
-            0,
-            &[vk::Rect2D {
-                extent: vk::Extent2D {
-                    width: clip_extent.x.round() as u32,
-                    height: clip_extent.y.round() as u32,
-                },
-                offset: vk::Offset2D {
-                    x: clip_min.x.round() as i32,
-                    y: clip_min.y.round() as i32,
-                },
-            }],
-        );
-        let texture_id = match mesh.texture_id {
-            TextureId::Managed(id) => id,
-            TextureId::User(id) => unimplemented!(),
-        };
-        let (texture, options) = device_buffer.textures.get(&texture_id).unwrap();
-        let sampler = device_buffer.samplers.get(options).unwrap();
-        pass.push_descriptor_set(
-            egui_pipeline.layout.as_ref(),
-            0,
-            &[vk::WriteDescriptorSet {
-                dst_binding: 0,
-                descriptor_count: 1,
-                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                p_image_info: &vk::DescriptorImageInfo {
-                    image_view: texture.view,
-                    image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    sampler: sampler.raw(),
-                },
-                ..Default::default()
-            }],
-            vk::PipelineBindPoint::GRAPHICS,
-        );
-        pass.draw_indexed(
-            mesh.indices.len() as u32,
-            1,
-            current_indice,
-            current_vertex as i32,
-            0,
-        );
-        current_vertex += mesh.vertices.len() as u32;
-        current_indice += mesh.indices.len() as u32;
-    }
-    assert_eq!(current_vertex as usize, device_buffer.total_vertices_count);
-    assert_eq!(current_indice as usize, device_buffer.total_indices_count);
-    drop(pass);
-}
 */
+/// Issue draw commands for egui.
+pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
+    mut host_buffers: ResMut<'w, EguiHostBuffer<Filter>>,
+    device_buffer: ResMut<'w, EguiDeviceBuffer<Filter>>,
+    mut egui_render_output: Query<
+        'w,
+        's,
+        (
+            &'w EguiRenderOutput,
+            &'w EguiSettings,
+            &'w mut SwapchainImage,
+            &'w mut RenderTargetSize,
+        ),
+        Filter,
+    >,
+    mut egui_pipeline: ResMut<'w, EguiPipelines>,
+    pipeline_cache: Res<'w, PipelineCache>,
+
+    assets: Res<'w, Assets<ShaderModule>>,
+    task_pool: Res<'w, DeferredOperationTaskPool>,
+) -> impl GPUFutureBlock + use<'w, 's, Filter> {
+    let egui_pipeline = egui_pipeline.into_inner();
+    gpu_future! { move
+        let Some(pipeline) = pipeline_cache.retrieve(&mut egui_pipeline.pipeline, &assets, &task_pool)
+        else {
+            return;
+        };
+        let (output, egui_settings, swapchain_image, render_target_size) = match egui_render_output.get_single_mut() {
+            Ok(r) => r,
+            Err(QuerySingleError::NoEntities(_)) => return,
+            Err(QuerySingleError::MultipleEntities(_)) => panic!(),
+        };
+        record_commands(
+            (),
+            |mut ctx, game| unsafe {
+                let mut pass = ctx.begin_rendering(&vk::RenderingInfo {
+                    flags: vk::RenderingFlags::empty(),
+                    render_area: vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: vk::Extent2D {
+                            width: swapchain_image.extent().x,
+                            height: swapchain_image.extent().y,
+                        },
+                    },
+                    layer_count: 1,
+                    ..Default::default()
+                }.color_attachments(&[vk::RenderingAttachmentInfo {
+                    image_view: swapchain_image.raw_image_view(),
+                    image_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    load_op: vk::AttachmentLoadOp::CLEAR,
+                    store_op: vk::AttachmentStoreOp::STORE,
+                    clear_value: vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 0.0],
+                        },
+                    },
+                    ..Default::default()
+                }]));
+                pass.bind_pipeline(pipeline);
+
+                let mut vertex_buffer = device_buffer.vertex_buffer.raw_buffer();
+                let mut index_buffer = device_buffer.index_buffer.raw_buffer();
+                if vertex_buffer == vk::Buffer::null() || index_buffer == vk::Buffer::null() {
+                    vertex_buffer = host_buffers.vertex_buffer.raw_buffer();
+                    index_buffer = host_buffers.index_buffer.raw_buffer();
+                }
+                pass.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+                pass.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
+
+
+                let viewport_physical_size = Vec2::new(
+                    swapchain_image.extent().x as f32,
+                    swapchain_image.extent().y as f32,
+                );
+                pass.set_viewport(
+                    0,
+                    &[vk::Viewport {
+                        x: 0.0,
+                        y: 0.0,
+                        width: viewport_physical_size.x,
+                        height: viewport_physical_size.y,
+                        min_depth: 0.0,
+                        max_depth: 1.0,
+                    }],
+                );
+
+                let scale_factor = egui_settings.scale_factor * render_target_size.scale_factor;
+                let viewport_logical_size = viewport_physical_size / scale_factor;
+                pass.push_constants(
+                    egui_pipeline.layout.raw(),
+                    vk::ShaderStageFlags::VERTEX,
+                    0,
+                    &bytemuck::cast_slice(&[viewport_logical_size.x, viewport_logical_size.y]),
+                );
+
+                let mut current_vertex = 0;
+                let mut current_indice = 0;
+                for egui::epaint::ClippedPrimitive {
+                    clip_rect,
+                    primitive,
+                } in output.paint_jobs.iter()
+                {
+                    let mesh = match primitive {
+                        egui::epaint::Primitive::Mesh(mesh) => mesh,
+                        egui::epaint::Primitive::Callback(_) => panic!(),
+                    };
+                    let clip_min = Vec2::new(clip_rect.min.x, clip_rect.min.y) * scale_factor;
+                    let clip_max = Vec2::new(clip_rect.max.x, clip_rect.max.y) * scale_factor;
+                    let clip_extent = clip_max - clip_min;
+                    pass.set_scissor(
+                        0,
+                        &[vk::Rect2D {
+                            extent: vk::Extent2D {
+                                width: clip_extent.x.round() as u32,
+                                height: clip_extent.y.round() as u32,
+                            },
+                            offset: vk::Offset2D {
+                                x: clip_min.x.round() as i32,
+                                y: clip_min.y.round() as i32,
+                            },
+                        }],
+                    );
+                    let texture_id = match mesh.texture_id {
+                        TextureId::Managed(id) => id,
+                        TextureId::User(id) => unimplemented!(),
+                    };
+                    let (texture, options) = device_buffer.textures.get(&texture_id).unwrap();
+                    let sampler = device_buffer.samplers.get(options).unwrap();
+
+                    pass.push_descriptor_set(
+                        egui_pipeline.layout.as_ref().raw(),
+                        0,
+                        &[vk::WriteDescriptorSet {
+                            dst_binding: 0,
+                            descriptor_count: 1,
+                            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                            p_image_info: &vk::DescriptorImageInfo {
+                                image_view: texture.raw_image_view(),
+                                image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                                sampler: sampler.raw(),
+                            },
+                            ..Default::default()
+                        }],
+                    );
+
+                    pass.draw_indexed(
+                        mesh.indices.len() as u32,
+                        1,
+                        current_indice,
+                        current_vertex as i32,
+                        0,
+                    );
+                    current_vertex += mesh.vertices.len() as u32;
+                    current_indice += mesh.indices.len() as u32;
+                }
+
+                assert_eq!(current_vertex as usize, device_buffer.total_vertices_count);
+                assert_eq!(current_indice as usize, device_buffer.total_indices_count);
+            },
+            |mut ctx, game| unsafe {
+            }
+        ).await;
+    }
+}

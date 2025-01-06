@@ -1,7 +1,9 @@
+use std::mem::offset_of;
+
 use ash::{prelude::VkResult, vk};
 use bevy::math::{IVec3, UVec3};
 
-use crate::Allocator;
+use crate::{Allocator, HasDevice};
 use vk_mem::Alloc;
 
 pub trait ImageLike: Send + Sync + 'static {
@@ -14,11 +16,8 @@ pub trait ImageLike: Send + Sync + 'static {
     fn format(&self) -> vk::Format;
 }
 
-pub trait ImageExt {
-    fn crop(self, extent: UVec3, offset: IVec3) -> ImageSubregion<Self>
-    where
-        Self: ImageLike + Sized,
-    {
+pub trait ImageExt: ImageLike + Sized {
+    fn crop(self, extent: UVec3, offset: IVec3) -> ImageSubregion<Self> {
         let sub_offset = self.offset();
         let sub_extent = self.extent();
 
@@ -29,6 +28,34 @@ pub trait ImageExt {
             extent,
             offset,
         }
+    }
+
+    fn with_view(self) -> VkResult<ImageWithView<Self>>
+    where
+        Self: HasDevice,
+    {
+        let view = ImageWithView {
+            view: unsafe {
+                self.device().create_image_view(
+                    &vk::ImageViewCreateInfo {
+                        image: self.raw_image(),
+                        view_type: vk::ImageViewType::TYPE_2D,
+                        format: self.format(),
+                        components: vk::ComponentMapping {
+                            r: vk::ComponentSwizzle::R,
+                            g: vk::ComponentSwizzle::G,
+                            b: vk::ComponentSwizzle::B,
+                            a: vk::ComponentSwizzle::A,
+                        },
+                        subresource_range: self.subresource_range(),
+                        ..Default::default()
+                    },
+                    None,
+                )?
+            },
+            image: self,
+        };
+        Ok(view)
     }
 }
 impl<T> ImageExt for T where T: ImageLike {}
@@ -83,6 +110,11 @@ impl Drop for Image {
         }
     }
 }
+impl HasDevice for Image {
+    fn device(&self) -> &crate::Device {
+        self.allocator.device()
+    }
+}
 impl Image {
     pub fn new_device_image(allocator: Allocator, info: &vk::ImageCreateInfo) -> VkResult<Self> {
         unsafe {
@@ -126,5 +158,45 @@ impl ImageLike for Image {
     }
     fn format(&self) -> vk::Format {
         vk::Format::R8G8B8A8_UNORM
+    }
+}
+
+pub struct ImageWithView<T: ImageLike + HasDevice> {
+    image: T,
+    view: vk::ImageView,
+}
+
+impl<T: ImageLike + HasDevice> ImageLike for ImageWithView<T> {
+    fn raw_image(&self) -> vk::Image {
+        self.image.raw_image()
+    }
+
+    fn subresource_range(&self) -> vk::ImageSubresourceRange {
+        self.image.subresource_range()
+    }
+
+    fn extent(&self) -> UVec3 {
+        self.image.extent()
+    }
+
+    fn offset(&self) -> IVec3 {
+        self.image.offset()
+    }
+
+    fn format(&self) -> vk::Format {
+        self.image.format()
+    }
+}
+impl<T: ImageLike + HasDevice> ImageViewLike for ImageWithView<T> {
+    fn raw_image_view(&self) -> vk::ImageView {
+        self.view
+    }
+}
+
+impl<T: ImageLike + HasDevice> Drop for ImageWithView<T> {
+    fn drop(&mut self) {
+        unsafe {
+            self.image.device().destroy_image_view(self.view, None);
+        }
     }
 }
