@@ -101,6 +101,7 @@ pub struct Image {
     image: vk::Image,
     allocation: vk_mem::Allocation,
     extent: UVec3,
+    format: vk::Format
 }
 impl Drop for Image {
     fn drop(&mut self) {
@@ -130,6 +131,7 @@ impl Image {
                 allocator,
                 image,
                 allocation,
+                format: info.format,
             })
         }
     }
@@ -157,7 +159,7 @@ impl ImageLike for Image {
         self.extent
     }
     fn format(&self) -> vk::Format {
-        vk::Format::R8G8B8A8_UNORM
+        self.format
     }
 }
 

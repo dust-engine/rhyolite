@@ -668,8 +668,11 @@ pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
             Err(QuerySingleError::MultipleEntities(_)) => panic!(),
         };
         record_commands(
-            (),
-            |mut ctx, game| unsafe {
+            (
+                swapchain_image.into_inner(),
+                device_buffer,
+            ),
+            |mut ctx, (swapchain_image, device_buffer)| unsafe {
                 let mut pass = ctx.begin_rendering(&vk::RenderingInfo {
                     flags: vk::RenderingFlags::empty(),
                     render_area: vk::Rect2D {
@@ -794,7 +797,23 @@ pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
                 assert_eq!(current_vertex as usize, device_buffer.total_vertices_count);
                 assert_eq!(current_indice as usize, device_buffer.total_indices_count);
             },
-            |mut ctx, game| unsafe {
+            |mut ctx, (ref mut swapchain_image, device_buffer)| {
+                ctx.use_image_resource(
+                    swapchain_image,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    false,
+                );
+                for (ref mut texture, _) in device_buffer.textures.values_mut() {
+                    ctx.use_image_resource(
+                        texture,
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                        vk::AccessFlags2::SHADER_READ,
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        false,
+                    );
+                }
             }
         ).await;
     }
