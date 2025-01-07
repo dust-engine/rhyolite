@@ -1,6 +1,7 @@
 use crate::define_future;
 use crate::future::{BarrierContext, GPUFuture, RecordContext};
 
+#[must_use]
 pub fn record_commands<Ctx: Unpin, F: Unpin, B: Unpin, Out>(
     context: Ctx,
     record: F,

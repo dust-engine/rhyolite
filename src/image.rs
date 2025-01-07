@@ -101,7 +101,7 @@ pub struct Image {
     image: vk::Image,
     allocation: vk_mem::Allocation,
     extent: UVec3,
-    format: vk::Format
+    format: vk::Format,
 }
 impl Drop for Image {
     fn drop(&mut self) {

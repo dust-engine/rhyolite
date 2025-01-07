@@ -29,7 +29,7 @@ use rhyolite::{
     buffer::{BufferLike, BufferVec, StagingBelt},
     commands::record_commands,
     ecs::IntoRenderSystem,
-    future::{GPUBorrowedResource, GPUFutureBlockExt, GPUOwnedResource},
+    future::{GPUBorrowedResource, GPUOwnedResource},
     pipeline::{
         CachedPipeline, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineBuildInfo,
         PipelineCache, PipelineLayout,
@@ -76,7 +76,7 @@ impl<Filter: QueryFilter + Send + Sync + 'static> Plugin for EguiPlugin<Filter> 
                 collect_outputs::<Filter>.after(EguiSet::ProcessOutput),
                 prepare_image::<Filter>.after(collect_outputs::<Filter>),
                 transfer_image::<Filter>
-                    .into_render_system::<rhyolite::selectors::DedicatedTransfer>()
+                    .into_render_system::<rhyolite::selectors::Graphics>()
                     .after(prepare_image::<Filter>),
                 draw::<Filter>
                     .into_render_system::<rhyolite::selectors::Graphics>()
@@ -564,10 +564,9 @@ fn transfer_image<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
             let mut staging_buffer = GPUOwnedResource::new(staging_buffer);
             copy_buffer_to_image(
                 &mut staging_buffer,
-                target_image);
+                target_image).await;
         }
     }
-    .run_in_parallel()
 }
 
 /// Resize the device buffers if necessary. Only runs on Discrete GPUs.

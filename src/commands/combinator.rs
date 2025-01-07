@@ -10,6 +10,7 @@ use crate::future::GPUFutureBlockReturnValue;
 
 use crate::future::GPUFutureBlock;
 
+//region Zip
 pub struct Zip<A: GPUFutureBlock, B: GPUFutureBlock>(A, B);
 impl<A: GPUFutureBlock, B: GPUFutureBlock> Zip<A, B> {
     fn a(self: Pin<&mut Self>) -> Pin<&mut A> {
@@ -53,7 +54,11 @@ impl<A: GPUFutureBlock, B: GPUFutureBlock> Future for Zip<A, B> {
 pub fn zip<A: GPUFutureBlock, B: GPUFutureBlock>(a: A, b: B) -> Zip<A, B> {
     Zip(a, b)
 }
+//endregion
 
+
+
+//region ZipMany
 /// A container for dropping items.
 /// It stores the item size, item data, and item drop fn ptr inline in the same buffer.
 /// This allows us to avoid reallocations when running the same pointer multiple times.
@@ -287,3 +292,4 @@ impl Future for ZipMany {
         }
     }
 }
+//endregion

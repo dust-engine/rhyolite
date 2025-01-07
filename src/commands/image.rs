@@ -130,6 +130,8 @@ where
         Default::default()
     }
 }
+
+#[must_use]
 pub fn blit_image<'a, S, T, SI: ImageLike, TI: ImageLike>(
     src_image: &'a mut S,
     dst_image: &'a mut T,
@@ -192,6 +194,8 @@ where
         Default::default()
     }
 }
+
+#[must_use]
 pub fn clear_color_image<'a, T, I: ImageLike>(
     dst_image: &'a mut T,
     clear_color: vk::ClearColorValue,
@@ -216,10 +220,15 @@ pub struct CopyBufferToImageFuture<'a, T, B> {
     dst_image: &'a mut T,
     layout: vk::ImageLayout,
     regions: &'a [vk::BufferImageCopy],
+    discard_contents: bool,
 }
 impl<T, B> CopyBufferToImageFuture<'_, T, B> {
     pub fn with_layout(mut self, layout: vk::ImageLayout) -> Self {
         self.layout = layout;
+        self
+    }
+    pub fn discard_image_contents(mut self) -> Self {
+        self.discard_contents = true;
         self
     }
 }
@@ -237,7 +246,7 @@ where
             vk::PipelineStageFlags2::COPY,
             vk::AccessFlags2::TRANSFER_WRITE,
             self.layout,
-            true,
+            self.discard_contents,
         );
         ctx.use_resource(
             self.src_buffer,
@@ -288,6 +297,8 @@ where
         Default::default()
     }
 }
+
+#[must_use]
 pub fn copy_buffer_to_image<'a, T, B, I: ImageLike + ?Sized, J: BufferLike + ?Sized>(
     src_buffer: &'a mut B,
     dst_image: &'a mut T,
@@ -301,6 +312,7 @@ where
         dst_image,
         layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         regions: &[],
+        discard_contents: false,
     }
 }
 //endregion
