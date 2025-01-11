@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use ash::vk::{self};
 
-use crate::{Device, ImageLike};
+use crate::{Device, HasDevice, ImageLike};
 
 use super::{res::ResourceStateTable, Access, GPUResource};
 

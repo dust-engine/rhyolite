@@ -10,7 +10,6 @@ use bevy::asset::AssetServer;
 use bevy::ecs::prelude::*;
 
 use bevy::utils::HashMap;
-use bevy::window::WindowResolution;
 use bevy::{
     app::{App, Plugin, PostUpdate, Startup},
     asset::Assets,
@@ -21,7 +20,6 @@ use bevy::{
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::ash::khr::{dynamic_rendering, push_descriptor};
-use rhyolite::commands::copy_buffer_to_image;
 use rhyolite::future::{gpu_future, GPUFutureBlock};
 use rhyolite::ImageWithView;
 use rhyolite::{
@@ -273,9 +271,9 @@ pub struct EguiHostBuffer<Filter: QueryFilter> {
     vertex_buffer: BufferVec<MaybeUninit<egui::epaint::Vertex>>,
     marker: std::marker::PhantomData<Filter>,
 }
-impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiHostBuffer<Filter> {
-    fn from_world(world: &mut World) -> Self {
-        let allocator = world.get_resource::<Allocator>().unwrap();
+
+impl<Filter: QueryFilter + Send + Sync + 'static> EguiHostBuffer<Filter> {
+    fn new(allocator: Allocator) -> Self {
         let is_staging = allocator
             .device()
             .physical_device()
@@ -303,6 +301,12 @@ impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiHostBuffer<F
             ),
             marker: PhantomData,
         }
+    }
+}
+impl<Filter: QueryFilter + Send + Sync + 'static> FromWorld for EguiHostBuffer<Filter> {
+    fn from_world(world: &mut World) -> Self {
+        let allocator = world.get_resource::<Allocator>().unwrap();
+        Self::new(allocator.clone())
     }
 }
 
@@ -417,7 +421,6 @@ fn collect_outputs<Filter: QueryFilter + Send + Sync + 'static>(
 
 /// Create the target images.
 fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
-    host_buffers: ResMut<EguiHostBuffer<Filter>>,
     mut device_buffers: ResMut<EguiDeviceBuffer<Filter>>,
     egui_render_output: Query<&EguiRenderOutput, Filter>,
     allocator: Res<Allocator>,
@@ -433,9 +436,9 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
     {
         let texture_id = match texture_id {
             TextureId::Managed(id) => *id,
-            TextureId::User(id) => unimplemented!(),
+            TextureId::User(_) => unimplemented!(),
         };
-        if let Some((existing_img, texture_options)) = device_buffers.textures.get(&texture_id) {
+        if let Some((existing_img, _)) = device_buffers.textures.get(&texture_id) {
             if existing_img.extent().x == image_delta.image.size()[0] as u32
                 && existing_img.extent().y == image_delta.image.size()[1] as u32
             {
@@ -501,7 +504,7 @@ fn prepare_image<Filter: QueryFilter + Send + Sync + 'static>(
 }
 
 fn transfer_image<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
-    mut device_buffers: ResMut<'w, EguiDeviceBuffer<Filter>>,
+    device_buffers: ResMut<'w, EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<'w, 's, &'w mut EguiRenderOutput, Filter>,
     mut staging_belt: ResMut<'w, StagingBelt>,
 ) -> impl GPUFutureBlock + use<'w, 's, Filter> {
@@ -512,26 +515,29 @@ fn transfer_image<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
         if output.textures_delta.set.is_empty() {
             return;
         }
-        for (texture_id, image_delta) in output.textures_delta.set.iter() {
-            let texture_id = match texture_id {
-                TextureId::Managed(id) => *id,
-                TextureId::User(id) => unimplemented!(),
-            };
+        // Calculate buffer total size
+        let buffer_total_size: usize = output.textures_delta.set.iter().map(|(_, image_delta)| {
+            (image_delta.image.size().iter().product::<usize>()
+                * image_delta.image.bytes_per_pixel()).next_multiple_of(4)
+        }).sum();
+        let mut staging_buffer = staging_belt.allocate_buffer(buffer_total_size as u64, 4);
+
+        let mut i = 0;
+        // Copy image delta into the allocated staging buffer
+        for (_, image_delta) in output.textures_delta.set.iter() {
             // Retrieve the image. Because this system runs after `prepare_image`, the image should already
             // been prepared.
-            let (target_image, _) = device_buffers.textures.get_mut(&texture_id).unwrap();
-            let image_offset = image_delta.pos.unwrap_or([0, 0]);
-            let buffer_size_needed = image_delta.image.size().iter().product::<usize>()
-                * image_delta.image.bytes_per_pixel();
-            let mut staging_buffer = staging_belt.allocate_buffer(buffer_size_needed as u64, 1);
+            let buffer_size_needed = (image_delta.image.size().iter().product::<usize>()
+                * image_delta.image.bytes_per_pixel()).next_multiple_of(4);
             match &image_delta.image {
                 egui::epaint::ImageData::Color(image) => {
-                    let slice = bytemuck::cast_slice(image.pixels.as_slice());
-                    staging_buffer.copy_from_slice(slice);
+                    let slice: &[u8] = bytemuck::cast_slice(image.pixels.as_slice());
+                    assert!(buffer_size_needed >= slice.len());
+                    staging_buffer[i .. (i + slice.len())].copy_from_slice(slice);
                 }
                 egui::epaint::ImageData::Font(font_image) => {
                     let pixels = font_image.srgba_pixels(None);
-                    let target_slice = staging_buffer.deref_mut();
+                    let target_slice = &mut staging_buffer.deref_mut()[i..];
                     let target_slice: &mut [u32] = bytemuck::cast_slice_mut(target_slice);
                     pixels.zip(target_slice).for_each(|(src, dst)| {
                         let src: u32 = bytemuck::cast(src);
@@ -539,33 +545,68 @@ fn transfer_image<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
                     });
                 }
             }
-            let update_info = vk::BufferImageCopy {
-                buffer_offset: staging_buffer.offset,
-                buffer_row_length: 0,
-                buffer_image_height: 0,
-                image_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                image_offset: vk::Offset3D {
-                    x: image_offset[0] as i32,
-                    y: image_offset[1] as i32,
-                    z: 0,
-                },
-                image_extent: vk::Extent3D {
-                    width: image_delta.image.size()[0] as u32,
-                    height: image_delta.image.size()[1] as u32,
-                    depth: 1,
-                },
-            };
-            let staging_buffer = retain!(staging_buffer);
-            let mut staging_buffer = GPUOwnedResource::new(staging_buffer);
-            copy_buffer_to_image(
-                &mut staging_buffer,
-                target_image).await;
+            i += buffer_size_needed;
         }
+        let staging_buffer = GPUOwnedResource::new(retain!(staging_buffer));
+        record_commands(
+            device_buffers,
+            |ctx, device_buffers| {
+                let mut i = 0;
+                for (texture_id, image_delta) in output.textures_delta.set.iter() {
+                    let texture_id = match texture_id {
+                        TextureId::Managed(id) => *id,
+                        TextureId::User(_) => unimplemented!(),
+                    };
+                    let (target_image, _) = device_buffers.textures.get(&texture_id).unwrap();
+                    let image_offset = image_delta.pos.unwrap_or([0, 0]);
+                    let buffer_size_needed = (image_delta.image.size().iter().product::<usize>()
+                        * image_delta.image.bytes_per_pixel()).next_multiple_of(4);
+
+                    let update_info = vk::BufferImageCopy {
+                        buffer_offset: staging_buffer.offset + i as u64,
+                        buffer_row_length: 0,
+                        buffer_image_height: 0,
+                        image_subresource: vk::ImageSubresourceLayers {
+                            aspect_mask: vk::ImageAspectFlags::COLOR,
+                            mip_level: 0,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        },
+                        image_offset: vk::Offset3D {
+                            x: image_offset[0] as i32,
+                            y: image_offset[1] as i32,
+                            z: 0,
+                        },
+                        image_extent: vk::Extent3D {
+                            width: image_delta.image.size()[0] as u32,
+                            height: image_delta.image.size()[1] as u32,
+                            depth: 1,
+                        },
+                    };
+                    unsafe {
+                        ctx.device.cmd_copy_buffer_to_image(
+                            ctx.command_buffer,
+                            staging_buffer.raw_buffer(),
+                            target_image.raw_image(),
+                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            &[update_info],
+                        );
+                    }
+                    i += buffer_size_needed;
+                }
+            },
+            |mut ctx, device_buffers| {
+                for (target_image, _) in device_buffers.textures.values_mut() { // assume writes into all textures
+                    ctx.use_image_resource(
+                        target_image,
+                        vk::PipelineStageFlags2::COPY,
+                        vk::AccessFlags2::TRANSFER_WRITE,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        false
+                    );
+                }
+            }
+        ).await;
     }
 }
 
@@ -636,7 +677,7 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
 */
 /// Issue draw commands for egui.
 pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
-    mut host_buffers: ResMut<'w, EguiHostBuffer<Filter>>,
+    host_buffers: ResMut<'w, EguiHostBuffer<Filter>>,
     device_buffer: ResMut<'w, EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<
         'w,
@@ -649,7 +690,7 @@ pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
         ),
         Filter,
     >,
-    mut egui_pipeline: ResMut<'w, EguiPipelines>,
+    egui_pipeline: ResMut<'w, EguiPipelines>,
     pipeline_cache: Res<'w, PipelineCache>,
 
     assets: Res<'w, Assets<ShaderModule>>,
@@ -671,7 +712,7 @@ pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
                 swapchain_image.into_inner(),
                 device_buffer,
             ),
-            |mut ctx, (swapchain_image, device_buffer)| unsafe {
+            |mut ctx, (swapchain_image, device_buffer)| {
                 let mut pass = ctx.begin_rendering(&vk::RenderingInfo {
                     flags: vk::RenderingFlags::empty(),
                     render_area: vk::Rect2D {
@@ -761,7 +802,7 @@ pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
                     );
                     let texture_id = match mesh.texture_id {
                         TextureId::Managed(id) => id,
-                        TextureId::User(id) => unimplemented!(),
+                        TextureId::User(_) => unimplemented!(),
                     };
                     let (texture, options) = device_buffer.textures.get(&texture_id).unwrap();
                     let sampler = device_buffer.samplers.get(options).unwrap();
