@@ -20,6 +20,7 @@ use bevy::{
 use bevy_egui::egui::TextureId;
 pub use bevy_egui::*;
 use rhyolite::ash::khr::{dynamic_rendering, push_descriptor};
+use rhyolite::ecs::RenderSystemCtx;
 use rhyolite::future::{gpu_future, GPUFutureBlock};
 use rhyolite::ImageWithView;
 use rhyolite::{
@@ -677,6 +678,7 @@ fn copy_buffers<Filter: QueryFilter + Send + Sync + 'static>(
 */
 /// Issue draw commands for egui.
 pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
+    mut input: RenderSystemCtx<EguiHostBuffer<Filter>>,
     host_buffers: ResMut<'w, EguiHostBuffer<Filter>>,
     device_buffer: ResMut<'w, EguiDeviceBuffer<Filter>>,
     mut egui_render_output: Query<
@@ -695,16 +697,21 @@ pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
 
     assets: Res<'w, Assets<ShaderModule>>,
     task_pool: Res<'w, DeferredOperationTaskPool>,
-) -> impl GPUFutureBlock + use<'w, 's, Filter> {
+    allocator: Res<'w, Allocator>,
+) -> impl GPUFutureBlock<Returned = EguiHostBuffer<Filter>> + use<'w, 's, Filter> {
     let egui_pipeline = egui_pipeline.into_inner();
+    let reused_host_buffers = input
+        .take()
+        .unwrap_or_else(|| EguiHostBuffer::new(allocator.clone()));
+    let host_buffers = std::mem::replace(host_buffers.into_inner(), reused_host_buffers);
     gpu_future! { move
         let Some(pipeline) = pipeline_cache.retrieve(&mut egui_pipeline.pipeline, &assets, &task_pool)
         else {
-            return;
+            return host_buffers;
         };
         let (output, egui_settings, swapchain_image, render_target_size) = match egui_render_output.get_single_mut() {
             Ok(r) => r,
-            Err(QuerySingleError::NoEntities(_)) => return,
+            Err(QuerySingleError::NoEntities(_)) => return host_buffers,
             Err(QuerySingleError::MultipleEntities(_)) => panic!(),
         };
         record_commands(
@@ -743,6 +750,8 @@ pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
                 if vertex_buffer == vk::Buffer::null() || index_buffer == vk::Buffer::null() {
                     vertex_buffer = host_buffers.vertex_buffer.raw_buffer();
                     index_buffer = host_buffers.index_buffer.raw_buffer();
+                } else {
+                    unimplemented!();
                 }
                 pass.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
                 pass.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
@@ -856,5 +865,6 @@ pub fn draw<'w, 's, Filter: QueryFilter + Send + Sync + 'static>(
                 }
             }
         ).await;
+        host_buffers
     }
 }
