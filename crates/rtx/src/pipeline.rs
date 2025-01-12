@@ -9,11 +9,11 @@ use nonmax::{self, NonMaxU32};
 use rhyolite::{
     ash::{khr::ray_tracing_pipeline::Meta as RayTracingPipelineExt, prelude::VkResult, vk},
     deferred::{DeferredOperationTaskPool, Task},
-    dispose::RenderObject,
     pipeline::{
         CachedPipeline, Pipeline, PipelineBuildInfo, PipelineCache, PipelineInner, PipelineLayout,
     },
     shader::{ShaderModule, SpecializedShader},
+    sync::GPUBorrowed,
     Device, HasDevice,
 };
 
@@ -330,11 +330,11 @@ enum RayTracingPipelineManagerImpl {
 pub struct RayTracingPipelineManager {
     inner: RayTracingPipelineManagerImpl,
     latest_generation: u64,
-    latest_pipeline: Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
+    latest_pipeline: Option<CachedPipeline<RayTracingPipeline>>,
 
     /// The pipeline generation of [`Self::pipeline`]
     pipeline_generation: u64,
-    pipeline: Option<CachedPipeline<RenderObject<RayTracingPipeline>>>,
+    pipeline: Option<CachedPipeline<RayTracingPipeline>>,
 }
 
 impl RayTracingPipelineManager {
@@ -471,7 +471,7 @@ impl RayTracingPipelineManager {
         }
     }
 
-    pub fn get_pipeline(&mut self) -> Option<&mut RenderObject<RayTracingPipeline>> {
+    pub fn get_pipeline(&mut self) -> Option<&mut RayTracingPipeline> {
         self.pipeline.as_mut()?.get_mut()
     }
 }
@@ -525,10 +525,7 @@ impl RayTracingPipelineManagerNative {
         assert!(self.hitgroups[handle as usize].is_some());
         self.hitgroups[handle as usize] = None;
     }
-    fn build(
-        &mut self,
-        pipeline_cache: &PipelineCache,
-    ) -> CachedPipeline<RenderObject<RayTracingPipeline>> {
+    fn build(&mut self, pipeline_cache: &PipelineCache) -> CachedPipeline<RayTracingPipeline> {
         let mut stages = Vec::new();
         let mut groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR<'static>> = Vec::new();
         for (i, shader) in self.base_stages.iter().enumerate() {
@@ -688,7 +685,7 @@ impl RayTracingPipelineManagerPipelineLibrary {
         pipeline_cache: &PipelineCache,
         assets: &Assets<ShaderModule>,
         pool: &DeferredOperationTaskPool,
-    ) -> Option<CachedPipeline<RenderObject<RayTracingPipeline>>> {
+    ) -> Option<CachedPipeline<RayTracingPipeline>> {
         let libraries = std::iter::once(&mut self.base_library)
             .chain(
                 self.hitgroup_libraries

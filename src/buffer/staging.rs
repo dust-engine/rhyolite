@@ -392,29 +392,17 @@ impl DerefMut for StagingBeltSuballocation<[u8]> {
 /// This will be created on host-visible and preferably device-local memory.
 #[derive(Resource)]
 pub struct UniformBelt(StagingBelt);
-impl UniformBelt {
-    /*
-    #[must_use]
-    pub fn start(&mut self, commands: &mut impl SemaphoreSignalCommands) -> StagingBeltBatchJob {
-        let alignment = self
-            .0
-            .device
-            .physical_device()
-            .properties()
-            .limits
-            .min_uniform_buffer_offset_alignment;
-        self.0.start_aligned(commands, alignment as u32)
-    }
+impl Deref for UniformBelt {
+    type Target = StagingBelt;
 
-    #[must_use]
-    pub fn start_aligned(
-        &mut self,
-        commands: &mut impl SemaphoreSignalCommands,
-        alignment: u32,
-    ) -> StagingBeltBatchJob {
-        self.0.start_aligned(commands, alignment)
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
-    */
+}
+impl DerefMut for UniformBelt {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 impl FromWorld for UniformBelt {
     fn from_world(world: &mut bevy::prelude::World) -> Self {

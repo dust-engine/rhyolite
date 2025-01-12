@@ -21,20 +21,13 @@ use bytemuck::NoUninit;
 use itertools::Itertools;
 use rhyolite::{
     ash::{khr::ray_tracing_pipeline::Meta as RayTracingPipelineExt, vk},
-    commands::ComputeCommands,
-    ecs::IntoRenderSystemConfigs,
-    staging::{StagingBeltBatchJob, UniformBelt},
+    buffer::{Buffer, BufferLike, StagingBelt, UniformBelt},
+    commands::record_commands,
+    future::{GPUBorrowedResource, GPUFuture, GPUFutureBlock},
+    sync::GPUBorrowed,
     Allocator, Device, HasDevice,
 };
 use smallvec::SmallVec;
-
-use rhyolite::{
-    buffer::BufferLike,
-    commands::{ResourceTransitionCommands, TransferCommands},
-    ecs::{Barriers, RenderCommands, RenderRes},
-    staging::StagingBelt,
-    Access, Buffer,
-};
 
 use crate::SbtHandles;
 
@@ -131,7 +124,7 @@ pub struct SbtManager<T> {
     hitgroup_layout: HitgroupSbtLayout,
 
     allocator: Allocator,
-    allocation: Option<RenderRes<Buffer>>,
+    allocation: Option<GPUBorrowedResource<Buffer>>,
 
     /// Number of entries in the SBT.
     free_entries: Vec<u32>,
@@ -178,10 +171,10 @@ impl<T> Deref for SbtIndex<T> {
 }
 
 impl<T> SbtManager<T> {
-    pub fn buffer(&self) -> Option<&RenderRes<Buffer>> {
+    pub fn buffer(&self) -> Option<&GPUBorrowedResource<Buffer>> {
         self.allocation.as_ref()
     }
-    pub fn buffer_mut(&mut self) -> Option<&mut RenderRes<Buffer>> {
+    pub fn buffer_mut(&mut self) -> Option<&mut GPUBorrowedResource<Buffer>> {
         self.allocation.as_mut()
     }
     pub(crate) fn pipeline_updated(&mut self, latest_generation: u64) {
@@ -328,7 +321,7 @@ fn resize_buffer<T: Send + Sync + 'static>(mut this: ResMut<SbtManager<T>>, devi
         .physical_device()
         .properties()
         .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-    this.allocation = Some(RenderRes::new(
+    this.allocation = Some(GPUBorrowedResource::new(
         Buffer::new_resource(
             this.allocator.clone(),
             total_size,
@@ -341,18 +334,7 @@ fn resize_buffer<T: Send + Sync + 'static>(mut this: ResMut<SbtManager<T>>, devi
     ));
 }
 
-fn copy_sbt_barrier<T: Send + Sync + 'static>(
-    In(mut barriers): In<Barriers>,
-    mut this: ResMut<SbtManager<T>>,
-) {
-    let full_update_required = this.full_update_required;
-    if let Some(allocation) = this.allocation.as_mut() {
-        barriers.transition(allocation, Access::COPY_WRITE, !full_update_required, ());
-    }
-}
-
 fn copy_sbt<T: SBTBuilder>(
-    mut commands: RenderCommands<'u'>,
     mut this: ResMut<SbtManager<T::SbtIndexType>>,
     mut staging_belt: ResMut<StagingBelt>,
     mut entries: Query<(T::QueryData, &mut SbtIndex<T::SbtIndexType>), T::QueryFilter>,
@@ -416,9 +398,7 @@ fn copy_sbt<T: SBTBuilder>(
         .unwrap()
         .0
         .size() as u64;
-    let mut host_buffer = staging_belt
-        .start(&mut commands)
-        .allocate_buffer(total_size);
+    let mut host_buffer = staging_belt.allocate_buffer(total_size, 1);
 
     for (i, (item, sbt_index)) in changes.iter_mut().enumerate() {
         let hitgroup_handle = T::hitgroup_handle(&mut params, item);
@@ -456,23 +436,19 @@ fn copy_sbt<T: SBTBuilder>(
         .collect::<Vec<_>>();
 
     let device_buffer = this.allocation.as_mut().unwrap();
-    commands.copy_buffer(host_buffer.buffer, device_buffer.raw_buffer(), &regions);
+    // TODO: commands.copy_buffer(host_buffer.buffer, device_buffer.raw_buffer(), &regions);
 }
 
-pub struct TraceRayBuilder<'a, T: ComputeCommands> {
+pub struct TraceRayBuilder<'a> {
     pipeline: &'a RayTracingPipeline,
-    copy_job: StagingBeltBatchJob<'a>,
-    commands: &'a mut T,
+    uniform_belt: &'a mut UniformBelt,
     raygen_shader_binding_tables: SmallVec<[vk::StridedDeviceAddressRegionKHR; 1]>,
     miss_shader_binding_tables: vk::StridedDeviceAddressRegionKHR,
     callable_shader_binding_tables: vk::StridedDeviceAddressRegionKHR,
+    base_alignment: u32,
 }
 impl RayTracingPipeline {
-    pub fn trace_rays<'a, T: ComputeCommands>(
-        &'a self,
-        uniform_belt: &'a mut UniformBelt,
-        commands: &'a mut T,
-    ) -> TraceRayBuilder<'_, T> {
+    pub fn trace_rays<'a>(&'a self, uniform_belt: &'a mut UniformBelt) -> TraceRayBuilder<'a> {
         let properties = self
             .device()
             .physical_device()
@@ -480,29 +456,27 @@ impl RayTracingPipeline {
             .get::<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
         TraceRayBuilder {
             pipeline: self,
-            copy_job: uniform_belt.start_aligned(
-                commands.semaphore_signal(),
-                properties.shader_group_base_alignment,
-            ),
+            uniform_belt,
             raygen_shader_binding_tables: SmallVec::from_elem(
                 vk::StridedDeviceAddressRegionKHR::default(),
                 self.handles().num_raygen() as usize,
             ),
             miss_shader_binding_tables: vk::StridedDeviceAddressRegionKHR::default(),
             callable_shader_binding_tables: vk::StridedDeviceAddressRegionKHR::default(),
-            commands,
+            base_alignment: properties.shader_group_base_alignment,
         }
     }
 }
 
-impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
+impl<'t> TraceRayBuilder<'t> {
     pub fn bind_raygen<D: NoUninit>(&mut self, index: u32, data: &D) -> &mut Self {
         let handle = self.pipeline.handles().rgen(index as usize);
         let data = bytemuck::bytes_of(data);
 
-        let mut allocation = self
-            .copy_job
-            .allocate_buffer(handle.len() as u64 + data.len() as u64);
+        let mut allocation = self.uniform_belt.allocate_buffer(
+            handle.len() as u64 + data.len() as u64,
+            self.base_alignment as u64,
+        );
         allocation[0..handle.len()].copy_from_slice(handle);
         allocation[handle.len()..].copy_from_slice(data);
 
@@ -530,7 +504,9 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
         let stride = (properties.shader_group_handle_size + std::mem::size_of::<D>() as u32)
             .next_multiple_of(properties.shader_group_handle_alignment);
         let total_size = stride as u64 * args.len() as u64;
-        let mut allocation = self.copy_job.allocate_buffer(total_size);
+        let mut allocation = self
+            .uniform_belt
+            .allocate_buffer(total_size, self.base_alignment as u64);
         for (i, arg) in args.enumerate() {
             let handle = (handle_getter)(self.pipeline.handles(), i);
             let arg = bytemuck::bytes_of(arg);
@@ -566,7 +542,12 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
     }
 
     /// Trace the rays using the specified raygen shader.
-    pub fn trace<P>(self, raygen_index: usize, extent: UVec3, hitgroup_sbt: &SbtManager<P>) {
+    pub fn trace<P>(
+        self,
+        raygen_index: usize,
+        extent: UVec3,
+        hitgroup_sbt: &SbtManager<P>,
+    ) -> impl GPUFuture + use<'t, P> {
         assert_ne!(
             self.raygen_shader_binding_tables[raygen_index].device_address, 0,
             "RayGen shader not bound"
@@ -581,43 +562,31 @@ impl<T: ComputeCommands> TraceRayBuilder<'_, T> {
                 "Callable shaders not bound"
             );
         }
-        unsafe {
-            let cmd_buf = self.commands.cmd_buf();
-            self.pipeline.device().cmd_bind_pipeline(
-                cmd_buf,
-                vk::PipelineBindPoint::RAY_TRACING_KHR,
-                self.pipeline.raw(),
-            );
-            self.pipeline
-                .device()
-                .extension::<RayTracingPipelineExt>()
-                .cmd_trace_rays(
-                    cmd_buf,
-                    &self.raygen_shader_binding_tables[raygen_index],
-                    &self.miss_shader_binding_tables,
-                    &hitgroup_sbt.sbt_region(),
-                    &self.callable_shader_binding_tables,
-                    extent.x,
-                    extent.y,
-                    extent.z,
+        let sbt_region = hitgroup_sbt.sbt_region();
+        return record_commands(
+            self,
+            move |ctx, this| unsafe {
+                this.pipeline.device().cmd_bind_pipeline(
+                    ctx.command_buffer,
+                    vk::PipelineBindPoint::RAY_TRACING_KHR,
+                    this.pipeline.raw(),
                 );
-        }
-    }
-
-    pub fn trace_indirect(self, raygen_index: usize, indirect_device_address: vk::DeviceAddress) {
-        unsafe {
-            self.pipeline
-                .device()
-                .extension::<RayTracingPipelineExt>()
-                .cmd_trace_rays_indirect(
-                    self.commands.cmd_buf(),
-                    &self.raygen_shader_binding_tables[raygen_index],
-                    &self.miss_shader_binding_tables,
-                    &vk::StridedDeviceAddressRegionKHR::default(),
-                    &self.callable_shader_binding_tables,
-                    indirect_device_address,
-                );
-        }
+                this.pipeline
+                    .device()
+                    .extension::<RayTracingPipelineExt>()
+                    .cmd_trace_rays(
+                        ctx.command_buffer,
+                        &this.raygen_shader_binding_tables[raygen_index],
+                        &this.miss_shader_binding_tables,
+                        &sbt_region,
+                        &this.callable_shader_binding_tables,
+                        extent.x,
+                        extent.y,
+                        extent.z,
+                    );
+            },
+            |ctx, aaa| {},
+        );
     }
 }
 
@@ -653,7 +622,6 @@ impl<T: SBTBuilder> Plugin for SbtPlugin<T> {
         app.add_systems(
             PostUpdate,
             copy_sbt::<T>
-                .with_barriers(copy_sbt_barrier::<T::SbtIndexType>) // TODO: ensure that there's only one instance of this.
                 .after(resize_buffer::<T::SbtIndexType>)
                 .in_set(CopySBT::of::<T::SbtIndexType>()),
         );

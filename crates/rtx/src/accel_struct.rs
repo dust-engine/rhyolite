@@ -1,9 +1,10 @@
 use rhyolite::{
     ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, prelude::VkResult, vk},
+    buffer::{Buffer, BufferLike},
     cstr,
     debug::DebugObject,
     utils::AsVkHandle,
-    Allocator, Buffer, BufferLike, Device, HasDevice,
+    Allocator, Device, HasDevice,
 };
 
 pub struct AccelStruct {

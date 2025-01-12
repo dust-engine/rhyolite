@@ -23,15 +23,7 @@ use bevy::{
     utils::tracing,
 };
 use rhyolite::{
-    ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk},
-    commands::{
-        BatchCopy, CommonCommands, ComputeCommands, ResourceTransitionCommands, TransferCommands,
-    },
-    cstr,
-    debug::DebugObject,
-    ecs::{Barriers, IntoRenderSystemConfigs, RenderCommands, RenderRes},
-    staging::{StagingBelt, StagingBeltSuballocation},
-    Access, Allocator, Buffer, BufferArray, BufferLike, Device, HasDevice,
+    ash::{khr::acceleration_structure::Meta as AccelerationStructureExt, vk}, buffer::{Buffer, BufferVec, StagingBelt}, cstr, debug::DebugObject, future::GPUBorrowedResource, Allocator, Device, HasDevice
 };
 
 use crate::AccelStruct;
@@ -389,20 +381,20 @@ pub trait TLASBuilder: Send + Sync + 'static {
 
 #[derive(Resource)]
 pub struct TLASDeviceBuildStore<T> {
-    static_buffer: RenderRes<BufferArray<vk::AccelerationStructureInstanceKHR>>,
+    static_buffer: GPUBorrowedResource<BufferVec<vk::AccelerationStructureInstanceKHR>>,
 
     /// We maintain both buffers at the same time because the scene may not be in motion at all times.
     /// When it's not in motion, we can use the static buffer to build the TLAS.
-    motion_buffer: Option<RenderRes<BufferArray<vk::AccelerationStructureMotionInstanceNV>>>,
+    motion_buffer: Option<GPUBorrowedResource<BufferVec<vk::AccelerationStructureMotionInstanceNV>>>,
     has_motion: bool,
     free_entries: Vec<u32>,
     entity_map: BTreeMap<Entity, u32>,
-    scratch_buffer: Option<RenderRes<Buffer>>,
-    accel_struct: Option<RenderRes<AccelStruct>>,
+    scratch_buffer: Option<GPUBorrowedResource<Buffer>>,
+    accel_struct: Option<GPUBorrowedResource<AccelStruct>>,
     _marker: std::marker::PhantomData<T>,
 }
 impl<T> Deref for TLASDeviceBuildStore<T> {
-    type Target = Option<RenderRes<AccelStruct>>;
+    type Target = Option<GPUBorrowedResource<AccelStruct>>;
     fn deref(&self) -> &Self::Target {
         &self.accel_struct
     }
@@ -422,7 +414,7 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
             .map(|f| f.ray_tracing_motion_blur == vk::TRUE)
             .unwrap_or(false)
         {
-            motion_buffer = Some(BufferArray::new_resource(
+            motion_buffer = Some(BufferVec::new_resource(
                 allocator.clone(),
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -432,7 +424,7 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
             ))
         }
         Self {
-            static_buffer: RenderRes::new(BufferArray::new_resource(
+            static_buffer: GPUBorrowedResource::new(BufferVec::new_resource(
                 allocator,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -441,7 +433,7 @@ impl<T> FromWorld for TLASDeviceBuildStore<T> {
                 16,
             )),
             has_motion: false,
-            motion_buffer: motion_buffer.map(RenderRes::new),
+            motion_buffer: motion_buffer.map(GPUBorrowedResource::new),
             entity_map: BTreeMap::new(),
             free_entries: Vec::new(),
             scratch_buffer: None,
@@ -479,7 +471,6 @@ fn assign_index<B: TLASBuilder>(
 }
 
 fn resize_buffer<B: Send + Sync + 'static>(
-    mut commands: RenderCommands<'c'>,
     mut store: ResMut<TLASDeviceBuildStore<B>>,
 ) {
     if store.entity_map.is_empty() {
@@ -490,10 +481,6 @@ fn resize_buffer<B: Send + Sync + 'static>(
         .static_buffer
         .try_swap(|buffer| buffer.realloc(new_capacity as usize).unwrap());
     if let Some(mut old_buffer) = old_buffer {
-        commands
-            .transition_resources()
-            .transition(&mut old_buffer, Access::COPY_READ, true, ())
-            .transition(&mut store.static_buffer, Access::COPY_WRITE, true, ());
         commands.copy_buffer(
             old_buffer.raw_buffer(),
             store.static_buffer.raw_buffer(),
@@ -507,10 +494,6 @@ fn resize_buffer<B: Send + Sync + 'static>(
         tracing::info!("Resizing TLAS motion input buffer to {}", new_capacity);
         let old_buffer = motion.try_swap(|buffer| buffer.realloc(new_capacity as usize).unwrap());
         if let Some(mut old_buffer) = old_buffer {
-            commands
-                .transition_resources()
-                .transition(&mut old_buffer, Access::COPY_READ, true, ())
-                .transition(motion, Access::COPY_WRITE, true, ());
             commands.copy_buffer(
                 old_buffer.raw_buffer(),
                 motion.raw_buffer(),
@@ -651,14 +634,14 @@ fn prepare_tlas<B: Send + Sync + 'static>(
     };
     if let Some(accel_struct) = store.accel_struct.as_mut() {
         if accel_struct.size() < build_size.acceleration_structure_size {
-            *accel_struct = RenderRes::new(
+            *accel_struct = GPUBorrowedResource::new(
                 AccelStruct::new_tlas(allocator.clone(), build_size.acceleration_structure_size)
                     .unwrap()
                     .with_name(CString::new(std::any::type_name::<B>()).unwrap().as_c_str()),
             );
         }
     } else {
-        store.accel_struct = Some(RenderRes::new(
+        store.accel_struct = Some(GPUBorrowedResource::new(
             AccelStruct::new_tlas(allocator.clone(), build_size.acceleration_structure_size)
                 .unwrap()
                 .with_name(CString::new(std::any::type_name::<B>()).unwrap().as_c_str()),
@@ -673,7 +656,7 @@ fn prepare_tlas<B: Send + Sync + 'static>(
 
     if let Some(scratch_buffer) = store.scratch_buffer.as_mut() {
         if scratch_buffer.size() < build_size.build_scratch_size {
-            *scratch_buffer = RenderRes::new(
+            *scratch_buffer = GPUBorrowedResource::new(
                 Buffer::new_resource(
                     allocator.clone(),
                     build_size.build_scratch_size,
@@ -686,7 +669,7 @@ fn prepare_tlas<B: Send + Sync + 'static>(
             );
         }
     } else {
-        store.scratch_buffer = Some(RenderRes::new(
+        store.scratch_buffer = Some(GPUBorrowedResource::new(
             Buffer::new_resource(
                 allocator.clone(),
                 build_size.build_scratch_size,

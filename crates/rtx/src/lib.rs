@@ -6,17 +6,17 @@
 #![feature(generic_const_exprs)]
 
 mod accel_struct;
-mod blas;
+//mod blas;
 mod pipeline;
 mod sbt;
-mod tlas;
+//mod tlas;
 
 pub use accel_struct::*;
-pub use blas::*;
+//pub use blas::*;
 pub use pipeline::*;
 use rhyolite::ash::vk;
 pub use sbt::*;
-pub use tlas::*;
+//pub use tlas::*;
 
 use bevy::{
     app::{App, Plugin, PostUpdate},
@@ -57,13 +57,13 @@ impl Plugin for RtxPlugin {
             tracing::info!("Acceleration structure host commands enabled");
         }
 
-        app.add_systems(
-            PostUpdate,
-            (
-                blas::blas_compaction_system,
-                blas::blas_compaction_system_schedule.after(blas::blas_compaction_system),
-            ),
-        );
-        app.init_resource::<blas::BLASCompactionTask>();
+        //app.add_systems(
+        //    PostUpdate,
+        //    (
+        //        blas::blas_compaction_system,
+        //        blas::blas_compaction_system_schedule.after(blas::blas_compaction_system),
+        //    ),
+        //);
+        //app.init_resource::<blas::BLASCompactionTask>();
     }
 }
