@@ -56,8 +56,6 @@ pub fn zip<A: GPUFutureBlock, B: GPUFutureBlock>(a: A, b: B) -> Zip<A, B> {
 }
 //endregion
 
-
-
 //region ZipMany
 /// A container for dropping items.
 /// It stores the item size, item data, and item drop fn ptr inline in the same buffer.

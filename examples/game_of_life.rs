@@ -5,6 +5,7 @@ use bevy::ecs::schedule::IntoSystemConfigs;
 use bevy::prelude::{Mut, Query};
 use rhyolite::ash::vk;
 use rhyolite::swapchain::SwapchainImage;
+use rhyolite::{ImageExt, ImageViewLike, ImageWithView};
 use std::ops::Deref;
 
 use bevy::app::{PluginGroup, PostUpdate, Startup};
@@ -78,7 +79,7 @@ fn main() {
 struct GameOfLifePipeline {
     run_pipeline: CachedPipeline<ComputePipeline>,
     init_pipeline: CachedPipeline<ComputePipeline>,
-    game: GPUBorrowedResource<Image>,
+    game: GPUBorrowedResource<ImageWithView<Image>>,
     layout: Arc<PipelineLayout>,
 }
 fn initialize_pipeline(
@@ -149,7 +150,10 @@ fn initialize_pipeline(
         init_pipeline,
         run_pipeline,
         game: GPUBorrowedResource::new(
-            Image::new_device_image(allocator.clone(), &game_img_create_info).unwrap(),
+            Image::new_device_image(allocator.clone(), &game_img_create_info)
+                .unwrap()
+                .with_view()
+                .unwrap(),
         ),
         layout,
     });
@@ -192,7 +196,7 @@ fn run_compute_shader<'w, 's>(
                                 descriptor_count: 1,
                                 descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
                                 p_image_info: [vk::DescriptorImageInfo {
-                                    image_view: game.view,
+                                    image_view: game.raw_image_view(),
                                     image_layout: vk::ImageLayout::GENERAL,
                                     ..Default::default()
                                 }]
