@@ -1,0 +1,21 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "rhyolite",
+    aliases = aliases(),
+    srcs = glob([
+        "src/**/*.rs",
+    ]),
+    deps = all_crate_deps(
+        normal = True,
+    ),
+    proc_macro_deps = all_crate_deps(
+        proc_macro = True,
+    ) + [
+        "//crates/macro:rhyolite_macros",
+    ],
+    compile_data = [
+        "Cargo.toml"
+    ]
+)

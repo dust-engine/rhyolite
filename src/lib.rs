@@ -14,6 +14,7 @@
 #![feature(debug_closure_helpers)]
 #![feature(adt_const_params)]
 #![feature(allocator_api)]
+#![feature(noop_waker)]
 
 mod alloc;
 pub mod buffer;

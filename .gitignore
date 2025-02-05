@@ -2,3 +2,5 @@
 /imported_assets
 /crates/**/imported_assets
 Cargo.lock
+
+/bazel-*
